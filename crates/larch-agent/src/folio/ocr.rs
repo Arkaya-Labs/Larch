@@ -3,7 +3,7 @@
 use std::{
     collections::HashMap,
     env, fs,
-    path::Path,
+    path::{Path, PathBuf},
     process::Command,
     sync::{
         LazyLock, Mutex,
@@ -175,11 +175,15 @@ fn engine(pdf: &Path, page: usize, stop: &AtomicBool) -> Result<Vec<Word>, Strin
     let out = if cfg!(target_os = "macos") {
         return vision(pdf, page, "lines", stop);
     } else if cfg!(windows) {
-        // In the environment, as -Command takes the rest of its line as script text.
+        // In the environment, as -Command takes the rest of its line as script text. Its
+        // StorageFile.GetFileFromPathAsync refuses a `/`, which a path joined from "a/b" keeps
+        // (a link's blob, under "agent/docs/blobs"): out of its verbatim form, where a `/` is
+        // no separator, the components rejoin with `\`.
+        let pdf: PathBuf = crate::tool::plain(pdf.to_path_buf()).components().collect();
         let mut cmd = Command::new("powershell.exe");
         no_window(&mut cmd)
             .args(["-NoProfile", "-NonInteractive", "-Command", WINDOWS])
-            .env("LARCH_OCR_PDF", crate::tool::plain(pdf.to_path_buf()))
+            .env("LARCH_OCR_PDF", pdf)
             .env("LARCH_OCR_PAGE", page.to_string())
             .env("LARCH_OCR_SCALE", (DPI / 96.0).to_string());
         output_until(cmd, LIMIT, stop)?
