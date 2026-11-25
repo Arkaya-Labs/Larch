@@ -197,6 +197,21 @@ def notices(folder):
         shutil.copy2(ROOT / name, folder / Path(name).name)
 
 
+def missing_notices(group):
+    """Name each licence file missing from the cli, app and setup packages unpacked in `group`,
+    including the Resources folder of every macOS bundle in them."""
+    missing = []
+    for component in ("cli", "app", "setup"):
+        folder = group / component
+        if not folder.is_dir():
+            continue
+        places = [folder / "Contents/Resources" if (folder / "Contents").is_dir() else folder]
+        places += [bundle / "Contents/Resources" for bundle in sorted(folder.glob("*.app"))]
+        for place in places:
+            missing += [str((place / Path(name).name).relative_to(group)) for name in NOTICES if not (place / Path(name).name).is_file()]
+    return missing
+
+
 def pack(source, dest):
     """Write a canonical component archive and verify its inventory."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -596,6 +611,9 @@ def audit(args, manifest):
             stage = temp / (target + "-" + flavour) / component
             extract_package(path, stage)
         for group in temp.iterdir():
+            missing = missing_notices(group)
+            if missing:
+                raise ValueError("package is missing licence files: " + ", ".join(missing))
             if sys.platform == "darwin" and (group / "app/Contents").is_dir():
                 run("codesign", "-v", group / "app")
             windows = "windows" in group.name
