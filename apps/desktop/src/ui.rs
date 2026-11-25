@@ -2566,10 +2566,9 @@ impl Ecl {
         }
     }
 
-    /// A listed model's name, else its file's.
+    /// A listed model's name (its faster version's too), else its file's.
     fn listed_name(&self, path: &str) -> String {
-        (self.models.iter().find(|m| m.path == path))
-            .map_or(logic::base_name(path).to_owned(), |m| m.name.clone())
+        listing(&self.models, path).map_or(logic::base_name(path).to_owned(), |m| m.name.clone())
     }
 
     /// Starts making the faster version of the model at `path`; its card shows how far it got.
@@ -3193,13 +3192,7 @@ impl Ecl {
 
     /// The running model's name.
     pub fn model_name(&self) -> Option<String> {
-        let p = self.st.model.as_ref()?;
-        Some(
-            self.models
-                .iter()
-                .find(|m| &m.path == p)
-                .map_or(logic::base_name(p).to_owned(), |m| m.name.clone()),
-        )
+        Some(self.listed_name(self.st.model.as_ref()?))
     }
 
     /// Keeps papers for the next message, which attaches them before it goes; `tell`, in an open
@@ -3426,16 +3419,19 @@ pub fn loads(quant: &str) -> bool {
     .any(|p| quant.starts_with(p))
 }
 
+/// The listed model whose file is `path`, or whose faster version is: that version is not listed,
+/// and its original's card stands for it.
+pub fn listing<'a>(models: &'a [ModelEntry], path: &str) -> Option<&'a ModelEntry> {
+    let copy = |m: &ModelEntry| m.faster.as_ref().and_then(|f| f.copy.as_deref()) == Some(path);
+    models.iter().find(|m| m.path == path || copy(m))
+}
+
 /// The model a launch loads again (path, name, expected ms): the last one loaded, while it is still
 /// in a library and runs. The expected time is its last load's, else about 1 GB/s from disk plus
 /// the engine's start.
 pub fn relaunch(prefs: &Prefs, models: &[ModelEntry]) -> Option<(String, String, f64)> {
     let last = prefs.last_model.as_ref()?;
-    // The faster version of a model is not listed: its original's card stands for it.
-    let copy = |m: &ModelEntry| m.faster.as_ref().and_then(|f| f.copy.as_ref()) == Some(last);
-    let m = models
-        .iter()
-        .find(|m| (&m.path == last || copy(m)) && m.supported)?;
+    let m = listing(models, last).filter(|m| m.supported)?;
     let expect = prefs
         .load_ms
         .get(last)
@@ -7477,6 +7473,10 @@ mod tests {
             building: false,
         });
         p.last_model = Some("a.faster.gguf".into());
+        assert_eq!(
+            listing(std::slice::from_ref(&a), "a.faster.gguf").map(|m| &m.path),
+            Some(&a.path)
+        );
         assert_eq!(
             relaunch(&p, &[a]),
             Some(("a.faster.gguf".into(), "a.gguf".into(), 8000.))

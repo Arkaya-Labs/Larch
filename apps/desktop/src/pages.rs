@@ -404,9 +404,10 @@ fn faster_el(s: &Ecl, th: &Theme, m: &ModelEntry, cx: &mut Context<Ecl>) -> Opti
             .child("Faster on this computer"),
     );
     let note = |t: String| div().text_size(u(13.)).text_color(th2.ink2).child(t);
-    let body = if let Some((frac, secs)) = making {
-        let p = path.clone();
-        div()
+    let body =
+        if let Some((frac, secs)) = making {
+            let p = path.clone();
+            div()
             .flex()
             .flex_col()
             .gap(u(8.))
@@ -426,10 +427,10 @@ fn faster_el(s: &Ecl, th: &Theme, m: &ModelEntry, cx: &mut Context<Ecl>) -> Opti
                     .items_center()
                     .justify_between()
                     .gap(u(8.))
-                    .child(note(
+                    .child(div().flex_1().min_w(u(200.)).child(note(
                         "You can keep chatting meanwhile. It switches over when it is ready."
                             .into(),
-                    ))
+                    )))
                     .child(button(
                         th,
                         format!("faster-cancel-{path}"),
@@ -441,62 +442,62 @@ fn faster_el(s: &Ecl, th: &Theme, m: &ModelEntry, cx: &mut Context<Ecl>) -> Opti
                         }),
                     )),
             )
-    } else if f.copy.is_some() {
-        let p = path.clone();
-        div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .justify_between()
-            .gap(u(8.))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(u(4.))
-                    .child(head.child(tag(th, if on { "On" } else { "Off" })))
-                    .child(note(match on {
-                        true => "Running the faster version.".into(),
-                        false => "The faster version is ready.".into(),
-                    })),
-            )
-            .child(button(
-                th,
-                format!("faster-use-{path}"),
-                if on {
-                    "Use the original"
-                } else {
-                    "Use the faster version"
-                },
-                if on { Btn::Outline } else { Btn::Primary },
-                click(cx, move |s, cx| s.use_faster(p.clone(), !on, cx)),
-            ))
-    } else {
-        let p = path.clone();
-        div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .justify_between()
-            .gap(u(8.))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(u(4.))
-                    .flex_1()
-                    .min_w(u(200.))
-                    .child(head.child(tag(th, "Recommended")))
-                    .child(note(logic::FASTER_NOTE.into())),
-            )
-            .child(button(
-                th,
-                format!("faster-make-{path}"),
-                "Make it faster",
-                Btn::Primary,
-                click(cx, move |s, cx| s.make_faster(p.clone(), cx)),
-            ))
-    };
+        } else if f.copy.is_some() {
+            let p = path.clone();
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .gap(u(8.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(u(4.))
+                        .child(head.child(tag(th, if on { "On" } else { "Off" })))
+                        .child(note(match on {
+                            true => "Running the faster version.".into(),
+                            false => "The faster version is ready.".into(),
+                        })),
+                )
+                .child(button(
+                    th,
+                    format!("faster-use-{path}"),
+                    if on {
+                        "Use the original"
+                    } else {
+                        "Use the faster version"
+                    },
+                    if on { Btn::Outline } else { Btn::Primary },
+                    click(cx, move |s, cx| s.use_faster(p.clone(), !on, cx)),
+                ))
+        } else {
+            let p = path.clone();
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .gap(u(8.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(u(4.))
+                        .flex_1()
+                        .min_w(u(200.))
+                        .child(head.child(tag(th, "Recommended")))
+                        .child(note(logic::FASTER_NOTE.into())),
+                )
+                .child(button(
+                    th,
+                    format!("faster-make-{path}"),
+                    "Make it faster",
+                    Btn::Primary,
+                    click(cx, move |s, cx| s.make_faster(p.clone(), cx)),
+                ))
+        };
     Some(
         div()
             .pt(u(12.))
