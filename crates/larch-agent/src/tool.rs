@@ -821,7 +821,9 @@ mod tests {
     use super::*;
 
     /// "/name/a.txt" is the first folder's name/a.txt when the folder has a "name"; a path whose
-    /// top folder it lacks stays as given.
+    /// top folder it lacks stays as given. Not on Windows, where "/name" has no drive and is not
+    /// mapped (`resolve_in`).
+    #[cfg(not(windows))]
     #[test]
     fn an_absolute_path_whose_top_the_project_has_is_the_projects() {
         let tmp = tempfile::tempdir().unwrap();

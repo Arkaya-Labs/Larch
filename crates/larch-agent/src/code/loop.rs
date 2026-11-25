@@ -73,7 +73,8 @@ pub(crate) const MAP_TOKENS: u32 = 2000;
 
 /// A first prompt's tokens beside the repository map: the system prompt's rules, the tools'
 /// schemas and a short request, about 7 kB at the four bytes a token `tool::truncate` counts.
-pub(crate) const PROMPT_TOKENS: u32 = 1800;
+/// Windows' is the longest: its bash tool says it runs cmd.exe.
+pub(crate) const PROMPT_TOKENS: u32 = 1810;
 
 /// The bytes of a folded observation's first line.
 const LINE_BYTES: usize = 120;

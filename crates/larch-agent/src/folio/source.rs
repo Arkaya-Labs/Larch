@@ -798,7 +798,9 @@ pub(crate) mod tests {
                 .iter()
                 .map(|p| p.label.as_deref())
                 .collect::<Vec<_>>(),
-            [Some("ii"), None, Some("3")]
+            [Some("ii"), None, Some("3")],
+            "{:?}",
+            read.text
         );
         assert!(d.text.contains("Appendix A proofs"), "{}", d.text);
         // Its own entry is the one read next.

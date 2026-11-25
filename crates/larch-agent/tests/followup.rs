@@ -1041,17 +1041,20 @@ fn read_adds_a_pages_pictures_and_tables_or_says_this_machine_cannot() {
             );
         }
     }
+    // The room left comes last: after the table, or after the note that says why there is none.
     match table::available() {
         true => {
             let rows = r"| Level | Response | Fix |\n|---|---|---|\n| Severe | 1 hour | 8 hours |";
             assert!(fed.contains(rows), "{fed}");
+            assert!(fed.contains(r"| 10 days |\nRoom left: about"), "{fed}");
         }
-        false => assert!(
-            fed.contains("Tables cannot be read: word boxes need"),
-            "{fed}"
-        ),
+        false => {
+            let note = "Tables cannot be read: word boxes need";
+            assert!(fed.contains(note), "{fed}");
+            let last = r"which is not installed on this machine.\nRoom left: about";
+            assert!(fed.contains(last), "{fed}");
+        }
     }
-    assert!(fed.contains(r"| 10 days |\nRoom left: about"), "{fed}");
 }
 
 #[test]

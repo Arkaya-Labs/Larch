@@ -10,8 +10,7 @@ must stay secret.
 The release repository is named in one place per file: `REPO` in `scripts/release-manifest.py` (which
 `scripts/release-sign` imports) and `repo` at the top of `scripts/install.sh` and
 `scripts/install.ps1`. A rename of the project or the organization changes those three lines and the
-URLs in this file; an organization rename also changes the owner check in
-`.github/workflows/runtime-cpu.yml`.
+URLs in this file.
 
 ## One-time setup (maintainers with admin rights)
 
@@ -39,8 +38,8 @@ Do these once, before the first release. They are repository settings, so a PR c
    (Settings > Advanced Security) and restrict who can push `v*` tags (Settings > Rules > Rulesets).
    Protect `dev` and `main` with a ruleset: one approving review, and these required status checks,
    which are the job names in `ci.yml`: `check (ubuntu-24.04)`, `check (windows-2025)` and
-   `check (macos-15)`. The backend and macOS workflows run only when their paths change, so they
-   are not required checks.
+   `check (macos-15)`. The backend workflow runs only when its paths change, and the macOS workflow
+   skips its Rust steps when only CUDA or HIP kernels change, so they are not required checks.
 
 ## Release steps
 

@@ -1,11 +1,8 @@
-name: runtime CPU (hosted)
+name: runtime crate
 
-# Only code already accepted into dev may run in the secret-bearing job. In
-# particular, pull_request_target must never check out or execute a PR head.
+# larch-task built and tested on its own, with a freshly resolved lock, on every PR. The whole
+# workspace is checked by ci.yml.
 on:
-  push:
-    branches: [dev]
-  workflow_dispatch:
   pull_request:
     branches: [dev]
 
@@ -13,34 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  runtime-cpu:
-    if: github.repository_owner == 'Arkaya-Labs' && github.ref == 'refs/heads/dev'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    env:
-      LARCH_BACKEND: CPU
-      CARGO_TERM_COLOR: always
-      CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - name: Install pinned build tools
-        run: |
-          python3 -m pip install --user --break-system-packages 'cmake==3.31.6' 'ninja==1.11.1.4'
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          rustup toolchain install 1.97 --profile minimal --component rustfmt --component clippy
-      - name: Verify toolchain
-        run: |
-          rustc --version
-          cargo --version
-          cmake --version
-          ninja --version
-      - name: Validate runtime and workspace
-        run: bash scripts/runtime-check
-
   runtime-crate-pr:
-    if: github.event_name == 'pull_request'
     strategy:
       fail-fast: false
       matrix:
@@ -51,7 +21,7 @@ jobs:
       CARGO_TERM_COLOR: never
       TMPDIR: /tmp
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Install Rust 1.97
@@ -72,8 +42,7 @@ jobs:
           # The Windows pipe transport's OS glue; only larch-task is checked below.
           cp -a crates/larch-sys "$stage/larch-sys"
           export RUNTIME_STAGE="$stage"
-          # Preserve workspace package and lint inheritance without importing
-          # the root's private git patches or unrelated workspace members.
+          # Keep the workspace package and lint settings, without the other workspace members.
           python3 - <<'PYWORKSPACE'
           import os, pathlib, re
           root = pathlib.Path('Cargo.toml').read_text()
@@ -88,8 +57,7 @@ jobs:
           PYWORKSPACE
           cp rust-toolchain.toml "$stage/rust-toolchain.toml"
           cd "$stage"
-          # This separate lock is intentionally re-resolved: it is not evidence
-          # that the repository workspace lock or private adapters compile.
+          # This lock is resolved again on purpose: it says nothing about the workspace lock.
           cargo +1.97 generate-lockfile
           echo 'Standalone runtime source and resolved lock checksums:'
           shasum -a 256 Cargo.lock rust-toolchain.toml

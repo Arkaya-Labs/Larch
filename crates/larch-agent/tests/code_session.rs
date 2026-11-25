@@ -2291,6 +2291,10 @@ fn a_done_runs_the_tests_the_model_named() {
     let Some(mut outcome) = ran(code().run(&fake.larch, &task, &data)) else {
         return;
     };
+    // The named run is the first that needs the sandbox; as root it is refused.
+    if sandboxed(&fake, &[]).is_none() {
+        return;
+    }
     let fed = fake.fed();
     assert!(fed.contains("run_tests with tests=[...]"), "{fed}");
     assert!(fed.contains("1 passed, 0 failed"), "{fed}");
