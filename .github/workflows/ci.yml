@@ -23,7 +23,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
+        # macos-26: larch-setup's Metal flavour needs macOS 26, as the Metal workflow's Xcode does.
+        os: [ubuntu-24.04, windows-2025, macos-26]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     env:
@@ -44,6 +45,11 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'apps/desktop/Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
       - run: rustup toolchain install  # the channel in rust-toolchain.toml
+      # The runner's TMPDIR (/var/folders/...) leaves a test's UNIX socket path past macOS's 104
+      # bytes (SUN_LEN): the larch-task host tests could not listen.
+      - name: short TMPDIR
+        if: runner.os == 'macOS'
+        run: echo "TMPDIR=/tmp" >> "$GITHUB_ENV"
       - if: runner.os == 'Linux'
         run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings

@@ -38,7 +38,7 @@ Do these once, before the first release. They are repository settings, so a PR c
    (Settings > Advanced Security) and restrict who can push `v*` tags (Settings > Rules > Rulesets).
    Protect `dev` and `main` with a ruleset: one approving review, and these required status checks,
    which are the job names in `ci.yml`: `check (ubuntu-24.04)`, `check (windows-2025)` and
-   `check (macos-15)`. The backend workflow runs only when its paths change, and the macOS workflow
+   `check (macos-26)`. The backend workflow runs only when its paths change, and the macOS workflow
    skips its Rust steps when only CUDA or HIP kernels change, so they are not required checks.
 
 ## Release steps

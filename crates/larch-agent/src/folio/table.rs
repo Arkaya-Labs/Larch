@@ -8,7 +8,7 @@ use std::{
 
 use regex::Regex;
 
-use super::ocr::{self, LIMIT, installed};
+use super::ocr::{self, LIMIT};
 use crate::{skills::read_papers::output_until, tool::no_window};
 
 /// One word on a page and its box, in points from the page's top-left corner.
@@ -210,14 +210,14 @@ impl Table {
 
 /// Whether `words` can run on this machine: poppler's pdftotext is installed, or it is a Mac.
 pub fn available() -> bool {
-    installed("pdftotext") || cfg!(target_os = "macos")
+    ocr::poppler() || cfg!(target_os = "macos")
 }
 
 /// The words of page `page` (from 0) of `pdf` with their boxes: by poppler's
 /// `pdftotext -bbox-layout` when it is installed, else by Vision on the rendered page on macOS
 /// (`ocr::vision`). `stop` ends either.
 pub fn words(pdf: &Path, page: usize, stop: &AtomicBool) -> Result<Vec<Word>, String> {
-    if installed("pdftotext") {
+    if ocr::poppler() {
         let n = (page + 1).to_string();
         let mut cmd = Command::new("pdftotext");
         no_window(&mut cmd)

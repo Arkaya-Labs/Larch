@@ -258,13 +258,21 @@ fn release_script_produces_a_manifest_accepted_by_rust_and_never_gates_unsigned_
     );
     let manifest = larch_setup::manifest::parse_manifest(&fs::read(&dest).unwrap()).unwrap();
     assert!(manifest.gated.is_empty());
-    assert_eq!(manifest.models.len(), 3);
-    assert!(
-        manifest
-            .models
-            .iter()
-            .all(|m| ["m1", "m3", "m5"].contains(&m.display.as_str()))
-    );
+    // The rows of bench/models.toml whose `use` names "catalog", in file order, and no others.
+    let toml = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/models.toml");
+    let toml = fs::read_to_string(toml).unwrap();
+    let catalog: Vec<&str> = toml
+        .split("\n[")
+        .filter(|row| {
+            row.lines()
+                .any(|l| l.starts_with("use = ") && l.contains("\"catalog\""))
+        })
+        .filter_map(|row| row.lines().find_map(|l| l.strip_prefix("display = ")))
+        .map(|display| display.trim_matches('"'))
+        .collect();
+    assert!(!catalog.is_empty());
+    let displays: Vec<&str> = manifest.models.iter().map(|m| m.display.as_str()).collect();
+    assert_eq!(displays, catalog);
     let a = &manifest.components["cli"]["x86_64-unknown-linux-gnu-cpu"];
     assert_eq!(a.sha256, larch_fetch::sha256_bytes(&bytes));
     assert_eq!(a.size, bytes.len() as u64);

@@ -33,6 +33,9 @@ const DEADLINE: Duration = Duration::from_secs(30);
 /// a fast desktop, over 30 s on the Windows CI laptop.
 const AGENT_DEADLINE: Duration = Duration::from_secs(120);
 static NEXT: AtomicU64 = AtomicU64::new(0);
+/// A projector beside a model turns its images on, except on macOS, where the app reads none
+/// (`mmproj_beside`).
+const READS_IMAGES: bool = !cfg!(target_os = "macos");
 
 struct Temp(PathBuf);
 impl Temp {
@@ -715,7 +718,7 @@ fn a_generic_projector_serves_every_quant_of_its_model() {
     .unwrap();
     let list = app.list_models().unwrap();
     assert_eq!(list.len(), 2);
-    assert!(list.iter().all(|m| m.vision), "{list:?}");
+    assert!(list.iter().all(|m| m.vision == READS_IMAGES), "{list:?}");
     let projector = models.join("mmproj-F16.gguf");
     app.delete_model(&list[0].path).unwrap();
     assert!(projector.exists(), "the other quant still reads with it");
@@ -748,6 +751,7 @@ fn an_image_that_pushes_out_an_older_one_names_it() {
 
 /// A projector beside the model that does not load with it (another model's width): the model loads
 /// alone, the app says why, and the listing stops saying the model reads images.
+#[cfg(not(target_os = "macos"))] // READS_IMAGES
 #[test]
 fn a_projector_that_does_not_load_says_why() {
     let dir = Temp::new();
@@ -801,6 +805,7 @@ fn a_projector_that_does_not_load_says_why() {
 /// Image paste end to end on the CPU: a projector beside the model turns images on; an image is taken
 /// as it is added, goes with its message, stays with the chat (its reference, its bytes), and goes
 /// with the chat. Without a projector, images are refused before any step.
+#[cfg(not(target_os = "macos"))] // READS_IMAGES
 #[test]
 fn images_go_with_a_message_and_stay_with_the_chat() {
     let dir = Temp::new();

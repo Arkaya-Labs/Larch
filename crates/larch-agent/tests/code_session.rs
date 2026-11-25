@@ -2461,8 +2461,8 @@ fn a_check_already_run_on_the_folder_as_it_is_is_not_run_again() {
 
 /// A check killed at a time limit says nothing about the change: the user is told it was not
 /// done, and the done goes on as without it.
-// The fake model's commands are POSIX shell, which cmd.exe does not run.
-#[cfg(not(windows))]
+// GNU `timeout`, which macOS does not ship and cmd.exe does not run.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_timed_out_check_does_not_block_the_done() {
     let fake = Fake::qwen3(32768);

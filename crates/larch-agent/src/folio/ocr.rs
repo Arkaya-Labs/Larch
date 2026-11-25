@@ -153,6 +153,21 @@ pub(super) fn installed(program: &str) -> bool {
     env::var_os("PATH").is_some_and(|path| env::split_paths(&path).any(|d| d.join(&name).is_file()))
 }
 
+/// Whether the `pdftotext` on PATH is poppler's, which the readers here are written for, as its
+/// `-v` says. Another program of that name (the Windows CI runner's) joined a page's lines into
+/// one, so no page label was found, and has no `-bbox-layout`. Asked once in a process.
+pub(crate) fn poppler() -> bool {
+    static POPPLER: LazyLock<bool> = LazyLock::new(|| {
+        let mut cmd = Command::new("pdftotext");
+        no_window(&mut cmd).arg("-v");
+        cmd.output().is_ok_and(|out| {
+            let said = [out.stdout, out.stderr].concat();
+            String::from_utf8_lossy(&said).contains("Poppler")
+        })
+    });
+    *POPPLER
+}
+
 /// Page `page`'s lines by this OS's engine. Every branch is compiled on every OS, so each is
 /// checked wherever the crate builds.
 // ponytail: the file is an absolute path from every caller, so no "-" can start it.

@@ -6,7 +6,11 @@
 //! makes that a failure.
 #![cfg(any(target_os = "linux", target_os = "macos", windows))]
 
-use std::{env, path::Path};
+use std::{
+    env,
+    path::Path,
+    sync::{Mutex, PoisonError},
+};
 #[cfg(unix)]
 use std::{
     fs,
@@ -20,8 +24,14 @@ use std::{
 
 use larch_agent::sandbox::{Limits, Output, SandboxError, run};
 
+/// Held through each run. On macOS the process cap counts every process of our uid
+/// (`sandbox::macos`): another test's processes ending during the fork bomb's run would give it
+/// their places.
+static RUNS: Mutex<()> = Mutex::new(());
+
 /// `cmd`'s result in the sandbox, or None, with the reason printed, when this host cannot sandbox.
 fn sandboxed(cmd: &str, worktree: &Path, limits: &Limits) -> Option<Output> {
+    let _turn = RUNS.lock().unwrap_or_else(PoisonError::into_inner);
     match run(cmd, worktree, limits) {
         Err(SandboxError::Unavailable(why)) => {
             assert!(

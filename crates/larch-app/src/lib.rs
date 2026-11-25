@@ -4575,8 +4575,11 @@ mod tests {
         {
             t.ggml_type = 10;
         }
-        assert!(runnable(&g));
-        assert!(unloadable(&g.tensors).is_empty());
+        // This build's backend decides, as for any file.
+        let here = matches!(larch_kernels::BACKEND, "cuda" | "cpu");
+        assert_eq!(runnable(&g), here);
+        let refused: &[&str] = if here { &[] } else { &["Q2_K"] };
+        assert_eq!(unloadable(&g.tensors), refused);
         let exps = g.tensors.iter().find(|t| t.ggml_type == 10).unwrap();
         for (backend, runs) in [
             ("cuda", true),

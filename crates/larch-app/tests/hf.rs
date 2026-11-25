@@ -27,6 +27,9 @@ use sha2::{Digest, Sha256};
 const DEADLINE: Duration = Duration::from_secs(30);
 const AUTH: &str = "This model needs a Hugging Face account: accept its license on huggingface.co and set HF_TOKEN.";
 static NEXT: AtomicU64 = AtomicU64::new(0);
+/// A projector beside a model turns its images on, except on macOS, where the app reads none
+/// (`mmproj_beside`).
+const READS_IMAGES: bool = !cfg!(target_os = "macos");
 
 struct Temp(PathBuf);
 impl Temp {
@@ -570,7 +573,7 @@ fn a_vision_model_downloads_with_its_projector() {
     assert!(app.hf_files("org/vl").unwrap()[0].downloaded);
     let models = app.list_models().unwrap();
     assert_eq!(models.len(), 1, "a projector is not a model");
-    assert!(models[0].vision);
+    assert_eq!(models[0].vision, READS_IMAGES);
 }
 
 /// A repo's projector of a kind the app does not load (its header is no InternVL projector's) is
@@ -918,7 +921,10 @@ fn a_download_the_cache_cannot_take_goes_to_the_library() {
     let d = done(&rx, &id);
     assert_eq!(
         d.path,
-        dir.0.join("models/model-Q8_0.gguf").to_string_lossy()
+        dir.0
+            .join("models")
+            .join("model-Q8_0.gguf")
+            .to_string_lossy()
     );
     assert!(
         d.note
@@ -932,7 +938,10 @@ fn a_download_the_cache_cannot_take_goes_to_the_library() {
     let d = done(&rx, &id);
     assert_eq!(
         d.path,
-        dir.0.join("models/model-Q8_0.gguf").to_string_lossy()
+        dir.0
+            .join("models")
+            .join("model-Q8_0.gguf")
+            .to_string_lossy()
     );
     assert!(d.note.unwrap().contains("named no commit"));
     assert!(!repo.exists());
@@ -975,7 +984,7 @@ fn a_vision_model_in_the_cache_finds_its_projector() {
     );
     let models = app.list_models().unwrap();
     assert_eq!(models.len(), 1, "a projector is not a model");
-    assert!(models[0].vision);
+    assert_eq!(models[0].vision, READS_IMAGES);
     // Deleting the model takes its projector, links and blobs.
     app.delete_model(&models[0].path).unwrap();
     assert_eq!(fs::read_dir(repo.join("blobs")).unwrap().count(), 0);
@@ -1012,7 +1021,7 @@ fn a_split_vision_model_in_a_snapshot_folder_finds_the_root_projector() {
     done(&rx, &id);
     let models = app.list_models().unwrap();
     assert_eq!(models.len(), 1, "{models:?}");
-    assert!(models[0].vision);
+    assert_eq!(models[0].vision, READS_IMAGES);
     app.delete_model(&models[0].path).unwrap();
     assert_eq!(fs::read_dir(repo.join("blobs")).unwrap().count(), 0);
 }
