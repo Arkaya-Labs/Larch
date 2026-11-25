@@ -25,7 +25,7 @@ getrandom = "0.3"
 jsonschema = { version = "0.58", default-features = false }
 # PDF text when poppler's pdftotext is not installed, so read_papers reads PDFs with nothing else
 # installed; pdftotext stays first, as its text keeps the layout better.
-pdf-extract = "0.10"
+pdf-extract = "0.12"
 # web_search reads the providers' result pages; regex is in the lock already (jsonschema's).
 regex = "1"
 # SQLite with FTS5 compiled in (`bundled`), so the memory index has no system dependency.

@@ -12,11 +12,6 @@ version = 2
 yanked = "deny"
 # Each entry names the advisory, why it cannot be fixed by a compatible update, and when to remove it.
 ignore = [
-    # lopdf: stack overflow on deeply nested PDF objects, which aborts the process. It is reachable: a
-    # fetched web PDF goes to pdf-extract in the agent's process when poppler's pdftotext is missing
-    # (most Macs). pdf-extract 0.10 pins lopdf 0.38; remove when larch-agent moves to a pdf-extract
-    # release whose lopdf has the fix, which is the first dependency upgrade to make.
-    { id = "RUSTSEC-2026-0187", reason = "pinned by pdf-extract 0.10; needs a pdf-extract upgrade" },
     # SQLite before 3.54.0 (bundled by libsqlite3-sys): stale memory from a crafted database and -wal
     # pair. rusqlite 0.40 pins libsqlite3-sys 0.38; remove with the rusqlite upgrade.
     { id = "RUSTSEC-2026-0459", reason = "pinned by rusqlite 0.40; needs a rusqlite upgrade" },
