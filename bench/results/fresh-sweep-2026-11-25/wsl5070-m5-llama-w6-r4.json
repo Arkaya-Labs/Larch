@@ -1,0 +1,80 @@
+{
+ "schema": "larch-bench/1",
+ "engine": "llama.cpp",
+ "driver": "llama-serve-bench",
+ "mode": "fixed",
+ "llama_cpp": {
+  "tag": "b12723",
+  "commit": "abca692"
+ },
+ "build": "d28ab07fd41b63c1023f43614ad4f741c3ae399e7abd0e1cad8df8ec0aaedf85",
+ "system_info": "CUDA : ARCHS = 1200 | USE_GRAPHS = 1 | FA_QUANTS = q4_0-q4_0,q8_0-q8_0,f16-f16,bf16-bf16,f8_e4m3-f8_e4m3 | NATIVE_FP8 = 1 | BLACKWELL_NATIVE_FP4 = 1 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX_VNNI = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | ",
+ "machine": "wsl5070",
+ "started_at": "2026-11-25T08:44:41Z",
+ "model": "m5.gguf",
+ "date_string": "26 Jul 2024",
+ "params": {
+  "n_ctx": 16384,
+  "n_ctx_seq": 1024,
+  "n_seq_max": 16,
+  "n_batch": 2048,
+  "n_ubatch": 1024,
+  "n_gpu_layers": 99,
+  "flash_attn": "enabled",
+  "type_k": "f16",
+  "type_v": "f16",
+  "n_threads": 8,
+  "n_threads_batch": 8,
+  "kv_unified": false
+ },
+ "fixed": [
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 1,
+   "n_kv": 640,
+   "t_pp": 0.096567323,
+   "speed_pp": 5302.000553541285,
+   "t_tg": 0.8540306209999999,
+   "speed_tg": 149.87752997676182,
+   "t": 0.950597944,
+   "speed": 673.2604504770526
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 4,
+   "n_kv": 2560,
+   "t_pp": 0.24553538,
+   "speed_pp": 8340.956810379017,
+   "t_tg": 0.9889638270000001,
+   "speed_tg": 517.7135765957595,
+   "t": 1.234499207,
+   "speed": 2073.7153863558538
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 8,
+   "n_kv": 5120,
+   "t_pp": 0.492412251,
+   "speed_pp": 8318.233333313228,
+   "t_tg": 0.990536597,
+   "speed_tg": 1033.783106148071,
+   "t": 1.482948848,
+   "speed": 3452.580314489715
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 16,
+   "n_kv": 10240,
+   "t_pp": 0.982124988,
+   "speed_pp": 8341.097212771456,
+   "t_tg": 1.1727311260000002,
+   "speed_tg": 1746.3508510986683,
+   "t": 2.154856114,
+   "speed": 4752.057426698328
+  }
+ ]
+}

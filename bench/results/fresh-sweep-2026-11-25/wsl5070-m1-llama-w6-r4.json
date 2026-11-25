@@ -1,0 +1,80 @@
+{
+ "schema": "larch-bench/1",
+ "engine": "llama.cpp",
+ "driver": "llama-serve-bench",
+ "mode": "fixed",
+ "llama_cpp": {
+  "tag": "b12723",
+  "commit": "abca692"
+ },
+ "build": "d28ab07fd41b63c1023f43614ad4f741c3ae399e7abd0e1cad8df8ec0aaedf85",
+ "system_info": "CUDA : ARCHS = 1200 | USE_GRAPHS = 1 | FA_QUANTS = q4_0-q4_0,q8_0-q8_0,f16-f16,bf16-bf16,f8_e4m3-f8_e4m3 | NATIVE_FP8 = 1 | BLACKWELL_NATIVE_FP4 = 1 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX_VNNI = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | ",
+ "machine": "wsl5070",
+ "started_at": "2026-11-25T07:51:19Z",
+ "model": "m1.gguf",
+ "date_string": "26 Jul 2024",
+ "params": {
+  "n_ctx": 16384,
+  "n_ctx_seq": 1024,
+  "n_seq_max": 16,
+  "n_batch": 2048,
+  "n_ubatch": 1024,
+  "n_gpu_layers": 99,
+  "flash_attn": "enabled",
+  "type_k": "f16",
+  "type_v": "f16",
+  "n_threads": 4,
+  "n_threads_batch": 4,
+  "kv_unified": false
+ },
+ "fixed": [
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 1,
+   "n_kv": 640,
+   "t_pp": 0.109121086,
+   "speed_pp": 4692.035414676866,
+   "t_tg": 0.9233104540000001,
+   "speed_tg": 138.63159400554127,
+   "t": 1.0324315400000001,
+   "speed": 619.895823794767
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 4,
+   "n_kv": 2560,
+   "t_pp": 0.269158727,
+   "speed_pp": 7608.893171797473,
+   "t_tg": 1.026693503,
+   "speed_tg": 498.68826334630074,
+   "t": 1.29585223,
+   "speed": 1975.5338924716748
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 8,
+   "n_kv": 5120,
+   "t_pp": 0.5371372139999999,
+   "speed_pp": 7625.612028437859,
+   "t_tg": 1.1484617160000001,
+   "speed_tg": 891.6274576104371,
+   "t": 1.68559893,
+   "speed": 3037.495995562835
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 16,
+   "n_kv": 10240,
+   "t_pp": 1.073827424,
+   "speed_pp": 7628.786355152724,
+   "t_tg": 1.3660254539999999,
+   "speed_tg": 1499.2399987884853,
+   "t": 2.439852878,
+   "speed": 4196.974371829317
+  }
+ ]
+}
