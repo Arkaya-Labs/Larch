@@ -227,6 +227,15 @@ class BlasLibraries(unittest.TestCase):
                 r.blas_libraries(lib, "gfx1102")
 
 
+class Notices(unittest.TestCase):
+    def test_every_package_gets_the_licence_notices_and_the_font_licence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            r.notices(pathlib.Path(temp))
+            self.assertEqual(sorted(p.name for p in pathlib.Path(temp).iterdir()),
+                             ["LICENSE", "NOTICE", "OFL.txt", "THIRD_PARTY_NOTICES"])
+            self.assertIn("SIL Open Font License", (pathlib.Path(temp) / "OFL.txt").read_text())
+
+
 class Retried(unittest.TestCase):
     def test_server_errors_retry_and_client_errors_do_not(self):
         calls = []
