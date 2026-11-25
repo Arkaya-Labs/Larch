@@ -26,7 +26,8 @@ jobs:
         # macos-26: larch-setup's Metal flavour needs macOS 26, as the Metal workflow's Xcode does.
         os: [ubuntu-24.04, windows-2025, macos-26]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    # Windows runs the debug tests slower: there the test step alone took 85 to 100+ minutes.
+    timeout-minutes: ${{ matrix.os == 'windows-2025' && 180 || 120 }}
     env:
       LARCH_BACKEND: CPU
       CARGO_TERM_COLOR: always
