@@ -1075,9 +1075,12 @@ fn a_name_that_cannot_be_saved_is_tried_again_after_the_next_answer() {
     app.agent_send(&id, "hello", None, Some(Intent::Chat), &[])
         .unwrap();
     agent_turn(&rx, &id);
+    let asked = Instant::now();
     let named = until(&rx, &id, |e| {
         matches!(e, ChatEvent::Title { .. } | ChatEvent::TitleFailed { .. })
     });
+    // The quiet retry below names the same message, so it takes about as long.
+    let naming = asked.elapsed();
     assert!(
         matches!(named.last(), Some(ChatEvent::TitleFailed { .. })),
         "{named:?}"
@@ -1085,10 +1088,11 @@ fn a_name_that_cannot_be_saved_is_tried_again_after_the_next_answer() {
     assert!(!saved.exists());
     assert_eq!(app.list_chats().unwrap()[0].title, "hello");
     // The same failure after the next answer is retried quietly: the user was told once. The
-    // tiny model names a chat in well under the wait.
+    // wait covers the retry three times over, and at least 3 s: on a slow runner (hosted
+    // Windows) a fixed 3 s ended first, the folder went, and the retry saved its name.
     (app.agent_send(&id, "still", None, Some(Intent::Chat), &[])).unwrap();
     agent_turn(&rx, &id);
-    let end = Instant::now() + Duration::from_secs(3);
+    let end = Instant::now() + (3 * naming).max(Duration::from_secs(3));
     while let Ok(e) = rx.recv_timeout(end.saturating_duration_since(Instant::now())) {
         assert!(
             !matches!(
