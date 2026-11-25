@@ -41,6 +41,8 @@ pub enum RepackError {
     Plan(String),
     /// Decoding the source experts on the CPU reference.
     Kernel(KError),
+    /// The progress callback asked it to stop.
+    Stopped,
 }
 
 impl std::fmt::Display for RepackError {
@@ -50,6 +52,7 @@ impl std::fmt::Display for RepackError {
             RepackError::Load(e) => write!(f, "{e}"),
             RepackError::Plan(e) => f.write_str(e),
             RepackError::Kernel(e) => write!(f, "CPU decode: {e:?}"),
+            RepackError::Stopped => f.write_str("stopped"),
         }
     }
 }
@@ -93,7 +96,13 @@ pub fn cold_name(layer: u32, p: &str) -> String {
 /// (`<dst>.<pid>.tmp`, removed on any error; an interrupted run leaves it, to delete by hand), then
 /// published only where `dst` does not exist: a repack never replaces a file, its source included.
 pub fn repack(src: &Path, dst: &Path, layers: &[u32]) -> Result<(), RepackError> {
-    write(src, dst, layers, &|_, _, e| Some((0..e).collect()))
+    write(
+        src,
+        dst,
+        layers,
+        &|_, _, e| Some((0..e).collect()),
+        &mut |_, _| true,
+    )
 }
 
 /// [`repack`] of `fraction` of each of `layers`' experts, those `hist` counts least (the lower id
@@ -106,6 +115,19 @@ pub fn repack_cold(
     layers: &[u32],
     fraction: f64,
     hist: &Histogram,
+) -> Result<(), RepackError> {
+    repack_cold_progress(src, dst, layers, fraction, hist, &mut |_, _| true)
+}
+
+/// [`repack_cold`] that reports `progress(written, total)` output bytes after each tensor; a
+/// `false` from it stops the repack ([`RepackError::Stopped`]), with no output left behind.
+pub fn repack_cold_progress(
+    src: &Path,
+    dst: &Path,
+    layers: &[u32],
+    fraction: f64,
+    hist: &Histogram,
+    progress: &mut dyn FnMut(u64, u64) -> bool,
 ) -> Result<(), RepackError> {
     if !(fraction > 0.0 && fraction < 1.0) {
         return Err(RepackError::Plan(format!(
@@ -124,7 +146,7 @@ pub fn repack_cold(
         cold.sort_unstable();
         (n > 0 && hist.file_len == len).then_some(cold)
     };
-    write(src, dst, layers, &pick)
+    write(src, dst, layers, &pick, progress)
 }
 
 /// The planner of [`repack`] and [`repack_cold`]: `cold(layer, src length, experts)` names the
@@ -135,6 +157,7 @@ fn write(
     dst: &Path,
     layers: &[u32],
     cold: &dyn Fn(u32, u64, u64) -> Option<Vec<u64>>,
+    progress: &mut dyn FnMut(u64, u64) -> bool,
 ) -> Result<(), RepackError> {
     // The one check that also catches `dst` naming `src`: a repack is lossy, so it must never replace a model.
     if std::fs::symlink_metadata(dst).is_ok() {
@@ -270,6 +293,7 @@ fn write(
         .collect();
     let mut tmp = dst.as_os_str().to_owned();
     tmp.push(format!(".{}.tmp", std::process::id()));
+    let total: u64 = out.iter().map(|o| o.bytes).sum();
     let mut emit = || -> Result<(), RepackError> {
         let mut w = BufWriter::new(File::create(&tmp)?);
         w.write_all(&gguf::header(&kv, &table))?;
@@ -306,6 +330,10 @@ fn write(
             let pad = at.next_multiple_of(32) - at;
             w.write_all(&vec![0u8; pad as usize])?;
             at += pad;
+            // `at` counts the alignment padding as well, which `total` leaves out.
+            if !progress(at.min(total), total) {
+                return Err(RepackError::Stopped);
+            }
         }
         w.into_inner()
             .map_err(io::IntoInnerError::into_error)?

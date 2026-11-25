@@ -2332,3 +2332,46 @@ fn detaching_a_file_forgets_what_the_chat_read_of_it_and_deleting_the_chat_its_r
     assert!(!source::record_at(&dir.0, &id).exists());
     assert!(real.exists());
 }
+
+/// The faster version of a model: one that fails to load is deleted and the original loaded again;
+/// one that loads replaces it, and the original comes back on request. A file with no faster version
+/// offers none and refuses a build (on the CPU reference no file offers one).
+#[test]
+fn a_faster_version_that_fails_falls_back_to_the_original() {
+    let tmp = Temp::new();
+    let dir = tmp.0.clone();
+    let (app, _rx) = loaded(&dir);
+    let model = dir.join("models").join("tiny.gguf");
+    let model = model.to_str().unwrap();
+    let copy = dir.join("faster").join("tiny.faster.gguf");
+    assert!(app.use_faster(model, true).is_err(), "no copy made yet");
+    assert_eq!(app.faster_for(model), None);
+    assert!(app.build_faster(model).is_err());
+    assert!(!dir.join("faster").exists());
+
+    fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    fs::write(&copy, b"not a model").unwrap();
+    let e = app.use_faster(model, true).unwrap_err();
+    assert!(e.contains("went back to the original"), "{e}");
+    assert!(!copy.exists(), "the copy that failed is deleted");
+    let st = app.app_state();
+    assert_eq!(
+        (st.model.as_deref(), st.health),
+        (Some(model), Health::Ready)
+    );
+
+    fs::copy(model, &copy).unwrap();
+    app.use_faster(model, true).unwrap();
+    assert_eq!(app.app_state().model.as_deref(), copy.to_str());
+    app.use_faster(model, false).unwrap();
+    assert_eq!(app.app_state().model.as_deref(), Some(model));
+    assert!(copy.exists(), "switching back keeps the faster version");
+    // The copy's folder is not a library: the list shows the original only.
+    let listed: Vec<String> = app
+        .list_models()
+        .unwrap()
+        .into_iter()
+        .map(|m| m.path)
+        .collect();
+    assert_eq!(listed, [model]);
+}
