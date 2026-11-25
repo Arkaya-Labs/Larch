@@ -75,9 +75,18 @@ Use `X.Y.Z` for the version. Run the local steps from a checkout of the tagged c
    On Windows: `& ([scriptblock]::Create((irm https://github.com/Arkaya-Labs/Larch/releases/download/vX.Y.Z/install.ps1))) --channel candidate`.
    The gates are listed in `GATES` in `scripts/release-sign`. CI has no GPU, so these are the only
    GPU checks: each GPU parity gate runs the model on the GPU, and the Metal gate also needs
-   `larch info` to name the Metal device. The CPU chat and the three
-   clean-machine install, update and uninstall gates are required. A GPU flavour ships only if its
+   `larch info` to name the Metal device. The CPU chat and the clean-machine install, update and
+   uninstall gate of every target the release builds are required. A GPU flavour ships only if its
    parity gates and the update-with-the-app-open gate pass; otherwise it is left out of this release.
+   Answer no to the gates of targets and flavours the release does not build.
+
+   **Which platforms a release builds.** The `flavours` table in
+   `crates/larch-setup/release/rules.json` lists each target and its flavours. `release.yml` builds
+   only those, the manifest declares only those, and `release-sign` requires only their clean-machine
+   gates. A target left out has no setup in the channel pointer, so its install script says that
+   platform is coming soon. 0.1.0 lists only `aarch64-apple-darwin` (CPU and Metal): the Windows and
+   Linux builds need more work first. To ship them again, add their lines back:
+   `"x86_64-unknown-linux-gnu":["cpu","cuda","hip"]` and `"x86_64-pc-windows-msvc":["cpu","cuda"]`.
 5. **Record the gates.**
 
    ```sh

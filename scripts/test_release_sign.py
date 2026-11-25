@@ -1,6 +1,7 @@
 """Tests for scripts/release-sign: python3 -m unittest scripts/test_release_sign.py -v"""
 
 import argparse
+import contextlib
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -30,15 +31,19 @@ def url(name):
 class FakeGitHub:
     """larch-releases as the release API serves it: the by-tag lookup never returns a draft."""
 
-    def __init__(self):
+    def __init__(self, flavours=None):
+        # The default builds every target, as rules.json declares when all platforms ship.
+        flavours = flavours or {"x86_64-unknown-linux-gnu": ["cpu", "cuda"], "x86_64-pc-windows-msvc": ["cpu"],
+                                "aarch64-apple-darwin": ["cpu"]}
         self.blobs, self.inventory, self.channels, self.ref, self.next = {}, {}, {}, None, 1
         self.release = {"id": 7, "tag_name": "v" + V, "draft": True, "prerelease": False, "assets": [],
                         "upload_url": "https://uploads.github.com/repos/x/releases/7/assets{?name}"}
         components = {"cli": {}, "setup": {}}
-        for flavour in ("cpu", "cuda"):
-            name = f"cli-x86_64-unknown-linux-gnu-{flavour}-{V}.tar.zst"
-            components["cli"]["x86_64-unknown-linux-gnu-" + flavour] = self.archive(name, b"cli " + flavour.encode(), [])
-        for target in r.TARGETS:
+        for target, built in flavours.items():
+            for flavour in built:
+                name = f"cli-{target}-{flavour}-{V}.tar.zst"
+                components["cli"][target + "-" + flavour] = self.archive(name, b"cli " + target.encode() + flavour.encode(), [])
+        for target in flavours:
             exe = "larch-setup" + (".exe" if "windows" in target else "")
             body = b"setup " + target.encode()
             self.add("larch-setup-" + target + (".exe" if "windows" in target else ""), body)
@@ -46,7 +51,7 @@ class FakeGitHub:
             files = [[exe, hashlib.sha256(body).hexdigest(), len(body)], ["larch-installer", "0" * 64, 1]]
             components["setup"][target + "-cpu"] = self.archive(f"setup-{target}-cpu-{V}.tar.zst", b"pack " + body, files)
         manifest = {"schema": 1, "version": V, "channel": "stable", "components": components, "runtimes": {},
-                    "flavours": {"x86_64-unknown-linux-gnu": ["cpu", "cuda"]}, "gated": []}
+                    "flavours": flavours, "gated": []}
         self.add("manifest.json", json.dumps(manifest).encode())
 
     def add(self, name, body, state="uploaded"):
@@ -91,6 +96,54 @@ class FakeGitHub:
             self.ref = body["sha"]
             return {}
         raise AssertionError("unexpected API call " + path)
+
+
+def gate_record(path, confirmed):
+    path.write_text("\n".join(["version=" + V, "channel=stable", ""] + [
+        "- [" + ("x" if name in confirmed else " ") + "] " + name + ": " + label for name, label in rs.GATES.items()]) + "\n")
+    return path
+
+
+def signing(gh):
+    """Every remote call and the key go through the fake; the bytes and records stay real."""
+    stack = contextlib.ExitStack()
+    stack.enter_context(mock.patch.dict(os.environ, {"RELEASES_WRITE": "t"}))
+    stack.enter_context(mock.patch.object(r, "api", gh.api))
+    stack.enter_context(mock.patch.object(r, "upload", lambda release, path, token: gh.add(path.name, path.read_bytes())))
+    stack.enter_context(mock.patch.object(r, "inventory", lambda path: gh.inventory[path.name]))
+    stack.enter_context(mock.patch.object(rs, "download", lambda asset, path, token: path.write_bytes(gh.blobs[asset["id"]])))
+    stack.enter_context(mock.patch.object(rs, "compiled_keys", lambda: ["PRIMARY", "BACKUP"]))
+    stack.enter_context(mock.patch.object(rs, "sign", lambda path, key, comment, primary: pathlib.Path(str(path) + ".minisig").write_text(comment)))
+    return stack
+
+
+class MacOnly(unittest.TestCase):
+    def test_a_release_that_builds_only_macos_needs_only_the_macos_gates_and_says_the_rest_are_coming(self):
+        gh = FakeGitHub({"aarch64-apple-darwin": ["cpu", "metal"]})
+        with tempfile.TemporaryDirectory() as temp, signing(gh):
+            temp = pathlib.Path(temp)
+            key = temp / "primary.key"
+            key.write_text("secret")
+            args = argparse.Namespace(version=V, channel="stable", gate_record=None, secret_key=key)
+            rs.candidate(args)
+            pointer = json.loads(gh.channels["candidate.json"])
+            self.assertEqual(list(pointer["setup"]), ["aarch64-apple-darwin"])
+
+            args.gate_record = gate_record(temp / "missing.md", {"cpu-m8", "metal-m5", "gpu-update-open-app"})
+            with self.assertRaisesRegex(ValueError, "clean-machine gate"):
+                rs.publish(args)
+            args.gate_record = gate_record(temp / "gates.md", {"cpu-m8", "metal-m5", "gpu-update-open-app", "clean-macos"})
+            rs.publish(args)
+            self.assertEqual(json.loads(gh.asset("manifest.json"))["gated"], ["cpu", "metal"])
+            self.assertEqual(list(json.loads(gh.channels["stable.json"])["setup"]), ["aarch64-apple-darwin"])
+            body = gh.release["body"]
+            self.assertIn("macOS (Apple silicon):", body)
+            self.assertIn("install.sh | bash", body)
+            self.assertNotIn("install.ps1 | iex", body)
+            self.assertIn("Linux and Windows builds are coming soon", body)
+            sums = dict(reversed(line.split("  ")) for line in gh.asset("SHA256SUMS").decode().splitlines())
+            self.assertIn("larch-setup-aarch64-apple-darwin", sums)
+            self.assertNotIn("larch-setup-x86_64-pc-windows-msvc.exe", sums)
 
 
 class CandidateThenPublish(unittest.TestCase):

@@ -34,6 +34,13 @@ GATES = {
     "clean-macos":"clean-machine macOS install, update and uninstall",
     "gpu-update-open-app":"GPU acceptance with update while the app is open",
 }
+# The clean-machine gate each target needs; only the targets a release builds (its manifest's
+# `flavours`, from rules.json) must pass theirs.
+CLEAN = {
+    "x86_64-unknown-linux-gnu":"clean-linux",
+    "x86_64-pc-windows-msvc":"clean-windows",
+    "aarch64-apple-darwin":"clean-macos",
+}
 
 
 def record(args):
@@ -48,8 +55,8 @@ def record(args):
     print("Gate record written; unconfirmed flavours will not be gated.")
 
 
-def gates(args):
-    """Reject absent or incomplete evidence and derive allowed flavours."""
+def gates(args, targets):
+    """Reject absent or incomplete evidence and derive allowed flavours for the built targets."""
     if not args.gate_record.is_file():
         raise ValueError("a gate record is required; run release-sign record first")
     body = args.gate_record.read_bytes()
@@ -67,9 +74,9 @@ def gates(args):
             raise ValueError("every gate needs exactly one recorded answer: " + name)
         if choices[0].startswith("- [x]"):
             confirmed.add(name)
-    mandatory = {"cpu-m8", "clean-windows", "clean-linux", "clean-macos"}
+    mandatory = {"cpu-m8"} | {CLEAN[t] for t in targets}
     if not mandatory.issubset(confirmed):
-        raise ValueError("CPU smoke and all clean-machine gates must pass before publication")
+        raise ValueError("CPU smoke and the clean-machine gate of every built target must pass before publication")
     flavours = ["cpu"]
     if {"cuda-5070ti", "cuda-4060", "cuda-3050"}.issubset(confirmed):
         flavours.append("cuda")
@@ -171,7 +178,9 @@ def verified(args, temp, token):
                     raise ValueError("archive inventory differs: " + name)
                 path.unlink()
     setup = {}
-    for target in r.TARGETS:
+    if not manifest["flavours"] or any(t not in r.TARGETS for t in manifest["flavours"]):
+        raise ValueError("draft manifest declares no or unknown targets")
+    for target in manifest["flavours"]:
         name = "larch-setup-" + target + (".exe" if "windows" in target else "")
         path = temp / name
         download(item(release, name), path, token)
@@ -221,24 +230,20 @@ def changes(version):
     return log.strip()
 
 
-def notes(version, gated, primary):
+def notes(version, targets, gated, primary):
     """The release page: how to install, how to verify, which gates passed, what changed."""
     base = f"https://github.com/{r.REPO}/releases/download/v{version}/"
-    text = f"""## Install
-
-Linux and macOS:
-
-```sh
-curl -fsSL {base}install.sh | bash
-```
-
-Windows (PowerShell):
-
-```powershell
-irm {base}install.ps1 | iex
-```
-
-Flavours that passed their hardware gates: {", ".join(gated)}. The installer picks one for this computer.
+    names = {"x86_64-unknown-linux-gnu":"Linux", "aarch64-apple-darwin":"macOS (Apple silicon)", "x86_64-pc-windows-msvc":"Windows"}
+    unix = [names[t] for t in names if t in targets and "windows" not in t]
+    later = [names[t] for t in names if t not in targets]
+    text = "## Install\n\n"
+    if unix:
+        text += f"{' and '.join(unix)}:\n\n```sh\ncurl -fsSL {base}install.sh | bash\n```\n\n"
+    if "x86_64-pc-windows-msvc" in targets:
+        text += f"Windows (PowerShell):\n\n```powershell\nirm {base}install.ps1 | iex\n```\n\n"
+    if later:
+        text += f"{' and '.join(later)} builds are coming soon; this release does not include them.\n\n"
+    text += f"""Flavours that passed their hardware gates: {", ".join(gated)}. The installer picks one for this computer.
 
 ## Verify
 
@@ -285,7 +290,8 @@ def candidate(args):
 
 def publish(args):
     """Verify draft or candidate bytes before signing and publishing the release."""
-    gate_body, gated = gates(args)
+    # Read the record before any remote access; which gates it must hold depends on the manifest.
+    gates(args, ())
     primary, _ = compiled_keys()
     secret(args)
     token = os.environ["RELEASES_WRITE"]
@@ -294,6 +300,7 @@ def publish(args):
         release, manifest, setup = verified(args, temp, token)
         if manifest["channel"] != args.channel:
             raise ValueError("draft manifest identity differs")
+        gate_body, gated = gates(args, manifest["flavours"])
         manifest["gated"] = [f for f in gated if any(f in fs for fs in manifest["flavours"].values())]
         comment = "version=" + args.version + " channel=" + args.channel + " gates=" + hashlib.sha256(gate_body).hexdigest()
         files = signed(args, temp, manifest, setup, "manifest.json", comment, primary)
@@ -304,7 +311,7 @@ def publish(args):
             r.upload(release, path, token)
         installers(release, token)
         channel_commit(args.version, args.channel, {path.name:path.read_bytes() for path in files[2:]} | {"gates/" + args.version + ".md":gate_body}, token)
-        body = notes(args.version, manifest["gated"], primary)
+        body = notes(args.version, manifest["flavours"], manifest["gated"], primary)
         r.api("releases/" + str(release["id"]), token, {"draft":False, "prerelease":False, "body":body}, method="PATCH")
     print("Signed release published with gated flavours: " + ", ".join(manifest["gated"]))
 
