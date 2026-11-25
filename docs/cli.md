@@ -120,6 +120,7 @@ differ in model, workload, concurrency or context size, the command refuses.
 | `larch info` | Lists the devices, the backend and the driver versions |
 | `larch knob list` | Prints the knob registry |
 | `larch parity -m <gguf> --ref <dump.jsonl> --bound <kl> --margin <nats>` | Compares the logits of the engine with a llama.cpp dump. Exit code 0 is a pass, 1 is a missed gate and 2 means that it did not run |
+| `larch faster -m <gguf> [-o <out>]` | Writes the faster copy of a model the GPU holds only in part (the app's **Faster on this computer**), beside the model as `<name>.faster.gguf` by default. Only files Larch carries a routing histogram for are accepted; the source is checked, never changed, and an existing file at the output path is never replaced |
 | `larch tokcheck -m <gguf> --ref <tokens.jsonl>` | Compares the tokenizer with a llama.cpp tokenization dump |
 | `larch supervise -- <command>` | Runs a command and starts it again each time it fails, with a backoff. An engine fault (exit code 3) restarts it at once. An exit with code 0 ends the supervisor |
 
