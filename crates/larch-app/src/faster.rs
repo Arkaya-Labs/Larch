@@ -12,6 +12,7 @@ use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 use larch::faster::{self, Stage};
+use larch_records::knob_id;
 
 use crate::contract::{Faster, FasterDone, FasterFailed, FasterProgress};
 use crate::{App, Event, Inner};
@@ -98,8 +99,8 @@ impl App {
         Ok(())
     }
 
-    /// Loads the faster copy of the model at `path` (`on`) or the original. A copy that fails to
-    /// load is deleted and the original loaded again; the error says so.
+    /// Loads the faster copy of the model at `path` (`on`) or the original. A copy that does not
+    /// run faster here goes back to the original ([`App::switch_or_back`]); the error says why.
     pub fn use_faster(&self, path: &str, on: bool) -> Result<(), String> {
         if !on {
             return self.load_model(path);
@@ -111,26 +112,45 @@ impl App {
         self.switch_or_back(path, &copy)
     }
 
-    /// Loads `copy` in place of the original at `path`, or, when it fails, deletes it and loads
-    /// the original again.
+    /// Loads `copy` in place of the original at `path`, and keeps it only when it runs as it was
+    /// measured faster: loaded whole on the GPU, with its decode graphs on. A copy that fails to
+    /// load is deleted; one that loads short of room (another program holding part of the GPU) is
+    /// kept for later. Either way the original is loaded again and the error says why.
     pub(crate) fn switch_or_back(&self, path: &str, copy: &Path) -> Result<(), String> {
-        let Err(why) = self.load_model(&copy.to_string_lossy()) else {
-            return Ok(());
-        };
-        // A refusal before the old model was unloaded (a reply being written) leaves it running,
-        // and the copy may well load next time.
-        if self.app_state().model.as_deref() == Some(path) {
-            return Err(why);
-        }
-        let _ = std::fs::remove_file(copy);
-        let back = self.load_model(path);
-        Err(match back {
-            Ok(()) => format!(
-                "The faster version did not load, so Larch went back to the original. ({why})"
-            ),
-            Err(e) => {
-                format!("The faster version did not load ({why}), nor did the original ({e}).")
+        let why = match self.load_model(&copy.to_string_lossy()) {
+            Ok(()) if self.runs_faster() => return Ok(()),
+            Ok(()) => {
+                "The faster version had too little free GPU memory to run faster, so Larch went \
+                 back to the original. Close programs using the GPU and try again."
+                    .to_string()
             }
+            // A refusal before the old model was unloaded (a reply being written) leaves it
+            // running, and the copy may well load next time.
+            Err(why) if self.app_state().model.as_deref() == Some(path) => return Err(why),
+            Err(why) => {
+                let _ = std::fs::remove_file(copy);
+                format!(
+                    "The faster version did not load, so Larch went back to the original. ({why})"
+                )
+            }
+        };
+        match self.load_model(path) {
+            Ok(()) => Err(why),
+            Err(e) => Err(format!("{why} The original did not load either ({e}).")),
+        }
+    }
+
+    /// Whether the loaded copy runs as it was measured faster than the original
+    /// (bench/results/35b-vs-llamacpp-2026-11-25.md): every expert layer on the GPU and decode
+    /// graphs on. With 500 MB of the card held by another program, the load kept one expert layer
+    /// in host memory and ran slower than the original, graphs and all; with less room the fit
+    /// turns `decode_graphs` off, and a backend that cannot replay graphs (the CPU reference)
+    /// keeps it at 0.
+    fn runs_faster(&self) -> bool {
+        let st = self.inner.lock();
+        st.larch().is_ok_and(|l| {
+            l.host_expert_layers() == 0
+                && l.knobs().effective().values[knob_id::DECODE_GRAPHS as usize] != 0.0
         })
     }
 }

@@ -2337,7 +2337,7 @@ fn detaching_a_file_forgets_what_the_chat_read_of_it_and_deleting_the_chat_its_r
 /// one that loads replaces it, and the original comes back on request. A file with no faster version
 /// offers none and refuses a build (on the CPU reference no file offers one).
 #[test]
-fn a_faster_version_that_fails_falls_back_to_the_original() {
+fn a_faster_version_that_fails_or_runs_without_graphs_falls_back_to_the_original() {
     let tmp = Temp::new();
     let dir = tmp.0.clone();
     let (app, _rx) = loaded(&dir);
@@ -2360,12 +2360,19 @@ fn a_faster_version_that_fails_falls_back_to_the_original() {
         (Some(model), Health::Ready)
     );
 
+    // A copy that loads but runs without decode graphs (here the CPU reference, which has none;
+    // on a GPU, a load short of room) is not faster: back to the original, the copy kept.
     fs::copy(model, &copy).unwrap();
-    app.use_faster(model, true).unwrap();
-    assert_eq!(app.app_state().model.as_deref(), copy.to_str());
+    let e = app.use_faster(model, true).unwrap_err();
+    assert!(e.contains("too little free GPU memory"), "{e}");
+    assert!(copy.exists(), "a copy that loaded is kept for later");
+    let st = app.app_state();
+    assert_eq!(
+        (st.model.as_deref(), st.health),
+        (Some(model), Health::Ready)
+    );
     app.use_faster(model, false).unwrap();
     assert_eq!(app.app_state().model.as_deref(), Some(model));
-    assert!(copy.exists(), "switching back keeps the faster version");
     // The copy's folder is not a library: the list shows the original only.
     let listed: Vec<String> = app
         .list_models()

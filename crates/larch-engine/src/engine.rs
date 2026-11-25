@@ -1949,7 +1949,7 @@ impl Loaded {
             staging: Staging::default(),
             dims,
             logit_rows: seqs_cap,
-            weights_read: weights.map(|w| w.read_per_step),
+            weights_read: weights.as_ref().map(|w| w.read_per_step),
             kv_token_bytes: plan.kv_block_bytes / BLOCK_TOKENS as u64,
             info: Published {
                 deployment,
@@ -1958,6 +1958,9 @@ impl Loaded {
                 vision: vision.as_ref().map(|v| v.config),
                 state_slots,
                 free_before,
+                host_layers: weights
+                    .as_ref()
+                    .map_or(0, |w| w.host_layers.load(Ordering::Relaxed)),
             },
             draft,
             vision,

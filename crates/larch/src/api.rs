@@ -863,6 +863,12 @@ impl Larch {
         self.runtime.encode_prompt(prompt, &[], thinking)
     }
 
+    /// The routed expert layers the load kept in host memory: 0 when the whole model is on the
+    /// device ([`larch_engine::EngineHandle::host_expert_layers`]).
+    pub fn host_expert_layers(&self) -> u32 {
+        self.runtime.engine.host_expert_layers()
+    }
+
     /// (layers, experts) of the MoE GGUF `load` read; None for a dense model or `from_engine`.
     pub fn moe_shape(&self) -> Option<(u16, u32)> {
         self.runtime.moe

@@ -1159,6 +1159,8 @@ struct Published {
     state_slots: u32,
     /// Device memory free when this load began ([`EngineHandle::free_before`]).
     free_before: u64,
+    /// Expert layers this load keeps in host memory ([`EngineHandle::host_expert_layers`]).
+    host_layers: u32,
 }
 
 /// State the engine publishes to every handle.
@@ -2609,6 +2611,12 @@ impl EngineHandle {
     /// Unstable: may change before 1.0.
     pub fn free_before(&self) -> u64 {
         self.shared.info.read().expect("model info").free_before
+    }
+
+    /// The routed expert layers the loaded model keeps in host memory, as its load placed them: 0
+    /// for a model on the device whole, a dense model or one not loaded from a file.
+    pub fn host_expert_layers(&self) -> u32 {
+        self.shared.info.read().expect("model info").host_layers
     }
 
     /// Sequences of recurrent state the loaded model holds, 0 for a model without recurrent
