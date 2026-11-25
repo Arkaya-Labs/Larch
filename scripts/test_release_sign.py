@@ -227,6 +227,27 @@ class BlasLibraries(unittest.TestCase):
                 r.blas_libraries(lib, "gfx1102")
 
 
+class Notices(unittest.TestCase):
+    def test_every_package_gets_the_licence_notices_and_the_font_licence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            r.notices(pathlib.Path(temp))
+            self.assertEqual(sorted(p.name for p in pathlib.Path(temp).iterdir()),
+                             ["LICENSE", "NOTICE", "OFL.txt", "THIRD_PARTY_NOTICES"])
+            self.assertIn("SIL Open Font License", (pathlib.Path(temp) / "OFL.txt").read_text())
+
+    def test_the_audit_names_a_package_or_bundle_without_them(self):
+        with tempfile.TemporaryDirectory() as temp:
+            group = pathlib.Path(temp)
+            for folder in ("cli", "app/Contents/Resources", "setup", "setup/Larch Setup.app/Contents/Resources"):
+                (group / folder).mkdir(parents=True)
+                r.notices(group / folder)
+            self.assertEqual(r.missing_notices(group), [])
+            (group / "app/Contents/Resources/OFL.txt").unlink()
+            (group / "setup/Larch Setup.app/Contents/Resources/NOTICE").unlink()
+            self.assertEqual(r.missing_notices(group), ["app/Contents/Resources/OFL.txt",
+                                                        "setup/Larch Setup.app/Contents/Resources/NOTICE"])
+
+
 class Retried(unittest.TestCase):
     def test_server_errors_retry_and_client_errors_do_not(self):
         calls = []

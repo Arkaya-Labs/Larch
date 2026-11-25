@@ -186,6 +186,32 @@ def inventory(path):
     return [(name, *files[name]) for name in sorted(files)]
 
 
+# The licence and notices that travel with every packaged binary. The app and the installer window
+# have the OFL fonts compiled in, and the font licence must accompany each copy (THIRD_PARTY_NOTICES).
+NOTICES = ("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES", "apps/desktop/assets/fonts/OFL.txt")
+
+
+def notices(folder):
+    """Copy the licence and notice files into a package or bundle folder."""
+    for name in NOTICES:
+        shutil.copy2(ROOT / name, folder / Path(name).name)
+
+
+def missing_notices(group):
+    """Name each licence file missing from the cli, app and setup packages unpacked in `group`,
+    including the Resources folder of every macOS bundle in them."""
+    missing = []
+    for component in ("cli", "app", "setup"):
+        folder = group / component
+        if not folder.is_dir():
+            continue
+        places = [folder / "Contents/Resources" if (folder / "Contents").is_dir() else folder]
+        places += [bundle / "Contents/Resources" for bundle in sorted(folder.glob("*.app"))]
+        for place in places:
+            missing += [str((place / Path(name).name).relative_to(group)) for name in NOTICES if not (place / Path(name).name).is_file()]
+    return missing
+
+
 def pack(source, dest):
     """Write a canonical component archive and verify its inventory."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -251,6 +277,7 @@ def build(args):
             stage = temp / "setup"
             stage.mkdir()
             shutil.copy2(source, stage / source.name)
+            notices(stage)
             dest.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, dest / ("larch-setup-" + target + suffix))
             window(args, base, temp, stage)
@@ -275,6 +302,7 @@ def build(args):
         cli.mkdir()
         for name in ("larch", "larch-agent"):
             shutil.copy2(bins / (name + suffix), cli / (name + suffix))
+        notices(cli)
         app = temp / "app"
         app.mkdir()
         if "apple" in target:
@@ -284,10 +312,12 @@ def build(args):
             resources = app / "Contents/Resources"
             resources.mkdir()
             shutil.copy2(desktop / "icons/icon.icns", resources / "icon.icns")
+            notices(resources)
             (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable":"larch-desktop", "CFBundleIdentifier":"com.arkaya-labs.larch", "CFBundleName":"Larch", "CFBundlePackageType":"APPL", "CFBundleShortVersionString":args.version, "CFBundleVersion":args.version, "CFBundleIconFile":"icon.icns", "LSMinimumSystemVersion":"26.0"}))
             run("codesign", "--force", "--sign", "-", app)
         else:
             shutil.copy2(bins / ("larch-desktop" + suffix), app / ("larch-desktop" + suffix))
+            notices(app)
         for name, directory in (("cli", cli), ("app", app)):
             pack(directory, dest / f"{name}-{target}-{flavour}-{args.version}.tar.zst")
 
@@ -318,6 +348,7 @@ def window(args, env, temp, stage):
         (app / "Contents/Resources").mkdir()
         shutil.copy2(binary, app / "Contents/MacOS/larch-installer")
         shutil.copy2(ROOT / "apps/desktop/icons/icon.icns", app / "Contents/Resources/icon.icns")
+        notices(app / "Contents/Resources")
         (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable":"larch-installer", "CFBundleIdentifier":"com.arkaya-labs.larch.setup", "CFBundleName":"Larch Setup", "CFBundlePackageType":"APPL", "CFBundleShortVersionString":args.version, "CFBundleVersion":args.version, "CFBundleIconFile":"icon.icns", "LSMinimumSystemVersion":"11.0", "NSHighResolutionCapable":True}))
         run("codesign", "--force", "--sign", "-", app)
         # ditto keeps the bundle's signature and modes; Finder and Safari open the zip in place.
@@ -580,6 +611,9 @@ def audit(args, manifest):
             stage = temp / (target + "-" + flavour) / component
             extract_package(path, stage)
         for group in temp.iterdir():
+            missing = missing_notices(group)
+            if missing:
+                raise ValueError("package is missing licence files: " + ", ".join(missing))
             if sys.platform == "darwin" and (group / "app/Contents").is_dir():
                 run("codesign", "-v", group / "app")
             windows = "windows" in group.name
