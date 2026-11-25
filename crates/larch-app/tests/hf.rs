@@ -218,12 +218,16 @@ fn serve(mut stream: TcpStream, routes: &Mutex<HashMap<String, Route>>, log: &Lo
         body = &body[..cut];
     }
     // The client may hang up (a header read, a cancel); that is not an error here.
-    for chunk in body.chunks(64 << 10) {
+    // A slow route sends 64 KB each 20 ms, kept to a clock: where macOS throttles the process (a
+    // background job, as hosted CI runs tests), a sleep wakes late, and the next chunks make it up.
+    let begun = Instant::now();
+    for (sent, chunk) in (1..).zip(body.chunks(64 << 10)) {
         if stream.write_all(chunk).is_err() {
             return;
         }
         if route.slow {
-            std::thread::sleep(Duration::from_millis(20));
+            let due = begun + Duration::from_millis(20) * sent;
+            std::thread::sleep(due.saturating_duration_since(Instant::now()));
         }
     }
 }
