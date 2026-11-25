@@ -1,0 +1,11 @@
+# A call with a progress token streams progress before its result; one without gets the result only.
+> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.0.0"}}}
+< {"jsonrpc":"2.0","id":1,"result":"*"}
+> {"jsonrpc":"2.0","method":"notifications/initialized"}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"count","arguments":{"n":3},"_meta":{"progressToken":"p1"}}}
+< {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"p1","progress":1.0,"total":3.0,"message":"1 of 3"}}
+< {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"p1","progress":2.0,"total":3.0,"message":"2 of 3"}}
+< {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"p1","progress":3.0,"total":3.0,"message":"3 of 3"}}
+< {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"counted 3"}],"isError":false}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"count","arguments":{"n":2}}}
+< {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"counted 2"}],"isError":false}}

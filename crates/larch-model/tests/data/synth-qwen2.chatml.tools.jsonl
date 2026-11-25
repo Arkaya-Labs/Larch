@@ -1,0 +1,2 @@
+{"messages":2,"add_generation_prompt":true,"prompt":"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nHow warm is it in Paris?<|im_end|>\n<|im_start|>assistant\n"}
+{"messages":4,"add_generation_prompt":true,"prompt":"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nHow warm is it in Paris?<|im_end|>\n<|im_start|>assistant\n<|im_end|>\n<|im_start|>tool\n{\"temperature\": 21,\n \"sky\": \"clear\"}<|im_end|>\n<|im_start|>assistant\n"}

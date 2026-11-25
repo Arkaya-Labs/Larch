@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper docs-doc-page" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.5.2">
+<title data-rh="true">Read replicas | TidewaterDB</title>
+<meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1">
+<meta data-rh="true" property="og:url" content="https://docs.tidewaterdb.io/guides/replication/read-replicas">
+<meta data-rh="true" name="description" content="Scale reads by adding asynchronous replicas.">
+<link data-rh="true" rel="canonical" href="https://docs.tidewaterdb.io/guides/replication/read-replicas">
+<link rel="stylesheet" href="/assets/css/styles.6a1f0d2e.css">
+<script>!function(){var t=localStorage.getItem("theme");document.documentElement.setAttribute("data-theme",t||"light")}()</script>
+<script>var announcement = "<div class=\"announcementBar\"><p>TidewaterDB 4.0 is out!</p></div>";</script>
+<style>.menu__list-item{font-size:.9rem}.theme-doc-markdown h1{margin-top:0}</style>
+</head>
+<body class="navigation-with-keyboard">
+<div id="__docusaurus">
+<div class="announcementBar_mb4j" role="banner">TidewaterDB 4.0 is out! <a href="/blog/release-4-0">Read the announcement</a></div>
+<nav aria-label="Main" class="navbar navbar--fixed-top">
+  <div class="navbar__inner">
+    <div class="navbar__items"><a class="navbar__brand" href="/"><img src="/img/logo.svg" alt="TidewaterDB logo"><b class="navbar__title">TidewaterDB</b></a><a class="navbar__item navbar__link" href="/docs">Docs</a><a class="navbar__item navbar__link" href="/blog">Blog</a></div>
+    <div class="navbar__items navbar__items--right"><a href="https://github.com/tidewaterdb/tidewater" class="navbar__item navbar__link">GitHub</a><button class="clean-btn toggleButton" title="Switch between dark and light mode">Theme</button></div>
+  </div>
+</nav>
+<div class="main-wrapper docsWrapper">
+<div class="docRoot">
+<aside class="theme-doc-sidebar-container">
+  <nav aria-label="Docs sidebar" class="menu thin-scrollbar">
+    <ul class="theme-doc-sidebar-menu menu__list">
+<li class="menu__list-item"><span class="menu__link">Getting started</span><ul class="menu__list">
+<li class="menu__list-item"><a class="menu__link" href="/getting-started/introduction">Introduction</a></li>
+<li class="menu__list-item"><a class="menu__link" href="/getting-started/installation">Installation</a></li>
+<li class="menu__list-item"><a class="menu__link" href="/getting-started/first-cluster">First cluster</a></li>
+</ul></li>
+<li class="menu__list-item"><span class="menu__link">Guides</span><ul class="menu__list">
+<li class="menu__list-item"><a class="menu__link" href="/guides/schema-design">Schema design</a></li>
+<li class="menu__list-item"><a class="menu__link" href="/guides/indexes">Indexes</a></li>
+<li class="menu__list-item"><a class="menu__link" href="/guides/transactions">Transactions</a></li>
+<li class="menu__list-item"><a class="menu__link" href="/guides/backups">Backups</a></li>
+<li class="menu__list-item"><a class="menu__link" href="/guides/point-in-time-recovery">Point-in-time recovery</a></li>
+<li class="menu__list-item"><a class="menu__link menu__link--active" href="/guides/replication/read-replicas">Read replicas</a></li>
+<li class="menu__list-item"><a class="menu__link" href="/guides/replication/sharding">Sharding</a></li>
+<li class="menu__list-item"><a class="menu__link" href="/guides/monitoring">Monitoring</a></li>
+</ul></li>
+<li class="menu__list-item"><span class="menu__link">Operations</span><ul class="menu__list">
+<li class="menu__list-item"><a class="menu__link" href="/operations/kubernetes">Kubernetes</a></li>
+<li class="menu__list-item"><a class="menu__link" href="/operations/bare-metal">Bare metal</a></li>
+</ul></li>
+<li class="menu__list-item"><span class="menu__link">Reference</span><ul class="menu__list">
+<li class="menu__list-item"><a class="menu__link" href="/reference/configuration">Configuration</a></li>
+<li class="menu__list-item"><a class="menu__link" href="/reference/cli">CLI</a></li>
+<li class="menu__list-item"><a class="menu__link" href="/reference/sql-dialect">SQL dialect</a></li>
+<li class="menu__list-item"><a class="menu__link" href="/reference/error-codes">Error codes</a></li>
+</ul></li>
+    </ul>
+  </nav>
+</aside>
+<main class="docMainContainer">
+<div class="container padding-top--md padding-bottom--lg">
+<div class="row">
+<div class="col docItemCol">
+<nav class="theme-doc-breadcrumbs" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a href="/">Home</a></li><li class="breadcrumbs__item"><span>Guides</span></li><li class="breadcrumbs__item breadcrumbs__item--active"><span>Read replicas</span></li></ul></nav>
+<article>
+<div class="theme-doc-markdown markdown">
+<header><h1>Read replicas</h1></header>
+<p>A read replica is a copy of your primary node that receives changes asynchronously and serves read-only queries. Replicas let you scale reads horizontally, keep reporting jobs away from the primary, and place data closer to users in other regions.</p>
+<p>Because replication is asynchronous, a replica can lag behind the primary by a few milliseconds, or by several seconds under heavy write load. Applications that must read their own writes should send those reads to the primary, or use the <code>wait_for_lsn</code> option described below.</p>
+<h2 id="creating-a-replica">Creating a replica<a href="#creating-a-replica" class="hash-link" aria-label="Direct link to Creating a replica">&#8203;</a></h2>
+<p>Start a new node with the <code>--replica-of</code> flag, pointing at the primary&#8217;s replication address. The node copies a snapshot first, and then streams the write-ahead log from the point where the snapshot was taken.</p>
+<div class="language-bash codeBlockContainer"><pre class="prism-code language-bash"><code><span class="token-line">tidewater serve --data /var/lib/tw-replica \</span>
+<span class="token-line">  --replica-of primary.internal:7070</span></code></pre></div>
+<h2 id="monitoring-lag">Monitoring lag<a href="#monitoring-lag" class="hash-link" aria-label="Direct link to Monitoring lag">&#8203;</a></h2>
+<p>Each replica exports a <code>replication_lag_seconds</code> metric. We suggest alerting when lag stays above ten seconds for more than five minutes, since short spikes during bulk loads are normal and usually clear on their own.</p>
+<div class="theme-admonition theme-admonition-tip alert alert--success"><div class="admonitionHeading">tip</div><div class="admonitionContent"><p>Replicas never accept writes, so a misrouted write fails fast with error <code>TW-4031</code> instead of silently diverging.</p></div></div>
+</div>
+<footer class="theme-doc-footer docusaurus-mt-lg"><a href="https://github.com/tidewaterdb/docs/edit/main/guides/replication/read-replicas.md" class="theme-edit-this-page">Edit this page</a></footer>
+</article>
+<nav class="pagination-nav docusaurus-mt-lg" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/guides/point-in-time-recovery"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Point-in-time recovery</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/guides/replication/sharding"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Sharding</div></a></nav>
+</div>
+<div class="col col--3"><div class="tableOfContents"><ul class="table-of-contents"><li><a href="#creating-a-replica" class="table-of-contents__link">Creating a replica</a></li><li><a href="#monitoring-lag" class="table-of-contents__link">Monitoring lag</a></li></ul></div></div>
+</div>
+</div>
+</main>
+</div>
+</div>
+<footer class="footer footer--dark"><div class="container"><div class="footer__links"><a class="footer__link-item" href="/docs">Docs</a> <a class="footer__link-item" href="https://community.tidewaterdb.io">Community</a></div><div class="footer__copyright">Copyright &copy; 2026 TidewaterDB contributors.</div></div></footer>
+</div>
+</body>
+</html>

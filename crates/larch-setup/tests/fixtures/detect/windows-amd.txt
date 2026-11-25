@@ -1,0 +1,1 @@
+{"Name":"AMD GPU", "PNPDeviceID":"PCI\\VEN_1002&DEV_744C", "DriverVersion":"32.0.1.23", "AdapterRAM":4294967295}

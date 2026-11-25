@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""Sign a draft for the candidate channel, record human acceptance, then sign and publish it locally."""
+import argparse
+import base64
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.parse
+
+spec = importlib.util.spec_from_file_location("larch_release", Path(__file__).with_name("release-manifest.py"))
+r = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(r)
+# The channel the install gates run on before a release is signed for its real channel. Its files are a
+# public prerelease; only `--channel candidate` installs them.
+CANDIDATE = "candidate"
+# Shipped as release assets, so `releases/latest/download/install.sh` always names the newest one.
+INSTALLERS = ("install.sh", "install.ps1")
+GATES = {
+    "cpu-m8":"one CPU chat on m8",
+    "cuda-5070ti":"CUDA parity on the 5070 Ti",
+    "cuda-4060":"CUDA parity on the 4060",
+    "cuda-3050":"CUDA parity on the 3050",
+    "metal-m5":"Metal parity on the M5, with larch info naming the Metal device",
+    "hip-gfx1100-plus":"HIP parity on a gfx1100-or-newer card",
+    "clean-windows":"clean-machine Windows install, update and uninstall",
+    "clean-linux":"clean-machine Linux install, update and uninstall",
+    "clean-macos":"clean-machine macOS install, update and uninstall",
+    "gpu-update-open-app":"GPU acceptance with update while the app is open",
+}
+
+
+def record(args):
+    """Record an explicit answer to every human acceptance gate."""
+    lines = ["version=" + args.version, "channel=" + args.channel, ""]
+    for name, label in GATES.items():
+        answer = input(label + " completed successfully? [y/N] ").strip().lower()
+        lines.append("- [" + ("x" if answer in ("y", "yes") else " ") + "] " + name + ": " + label)
+    args.gate_record.parent.mkdir(parents=True, exist_ok=True)
+    with args.gate_record.open("x") as stream:
+        stream.write("\n".join(lines) + "\n")
+    print("Gate record written; unconfirmed flavours will not be gated.")
+
+
+def gates(args):
+    """Reject absent or incomplete evidence and derive allowed flavours."""
+    if not args.gate_record.is_file():
+        raise ValueError("a gate record is required; run release-sign record first")
+    body = args.gate_record.read_bytes()
+    lines = body.decode().splitlines()
+    if lines[:2] != ["version=" + args.version, "channel=" + args.channel]:
+        raise ValueError("gate record version or channel differs")
+    allowed = {"version=" + args.version, "channel=" + args.channel, ""}
+    allowed.update("- [" + mark + "] " + name + ": " + label for name, label in GATES.items() for mark in ("x", " "))
+    if any(line not in allowed for line in lines):
+        raise ValueError("gate record contains unrecognized content")
+    confirmed = set()
+    for name, label in GATES.items():
+        choices = [line for line in lines if line in ("- [x] " + name + ": " + label, "- [ ] " + name + ": " + label)]
+        if len(choices) != 1:
+            raise ValueError("every gate needs exactly one recorded answer: " + name)
+        if choices[0].startswith("- [x]"):
+            confirmed.add(name)
+    mandatory = {"cpu-m8", "clean-windows", "clean-linux", "clean-macos"}
+    if not mandatory.issubset(confirmed):
+        raise ValueError("CPU smoke and all clean-machine gates must pass before publication")
+    flavours = ["cpu"]
+    if {"cuda-5070ti", "cuda-4060", "cuda-3050"}.issubset(confirmed):
+        flavours.append("cuda")
+    if "metal-m5" in confirmed:
+        flavours.append("metal")
+    if "hip-gfx1100-plus" in confirmed:
+        flavours.append("hip")
+    if len(flavours) > 1 and "gpu-update-open-app" not in confirmed:
+        raise ValueError("GPU flavours require the update-with-app-open acceptance gate")
+    return body, flavours
+
+
+download = r.download
+
+
+def item(release, name):
+    """Require an unambiguous release asset."""
+    found = [a for a in release["assets"] if a["name"] == name]
+    if len(found) != 1:
+        raise ValueError("missing or duplicate asset: " + name)
+    return found[0]
+
+
+def compiled_keys():
+    """Refuse publication with invalid or test trust anchors."""
+    text = (r.ROOT / "crates/larch-setup/src/keys.rs").read_text()
+    keys = []
+    for name in ("PRIMARY", "BACKUP"):
+        match = re.search(r"pub const " + name + r': &str = ("(?:[^"\\]|\\.)*");', text)
+        if not match:
+            raise ValueError("cannot read the compiled trust anchors")
+        key = json.loads(match[1])
+        if "TEST ONLY" in key:
+            raise ValueError("replace both TEST ONLY compiled keys offline before the first release")
+        key = key.splitlines()[-1]
+        decoded = base64.b64decode(key, validate=True)
+        if len(decoded) != 42 or decoded[:2] != b"Ed":
+            raise ValueError("invalid compiled minisign public key")
+        keys.append(key)
+    if keys[0] == keys[1]:
+        raise ValueError("primary and backup keys must be distinct")
+    return keys
+
+
+def sign(path, secret, comment, primary):
+    """Bind bytes and acceptance evidence to the offline primary key."""
+    r.run("minisign", "-Sm", path, "-s", secret, "-t", comment)
+    r.run("minisign", "-Vm", path, "-P", primary, "-x", str(path) + ".minisig")
+
+
+def channel_commit(version, channel, files, token):
+    """Commit a channel's pointer, its signature and any gate evidence atomically."""
+    parent = None
+    try:
+        parent = r.api("git/ref/heads/channels", token)["object"]["sha"]
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    tree = {"tree":[{"path":path, "mode":"100644", "type":"blob", "content":body.decode()} for path, body in files.items()]}
+    if parent:
+        tree["base_tree"] = r.api("git/commits/" + parent, token)["tree"]["sha"]
+    created = r.api("git/trees", token, tree, method="POST")
+    commit = r.api("git/commits", token, {"message":"release " + version + " channel " + channel, "tree":created["sha"], "parents":[parent] if parent else []}, method="POST")
+    if parent:
+        r.api("git/refs/heads/channels", token, {"sha":commit["sha"], "force":False}, method="PATCH")
+    else:
+        r.api("git/refs", token, {"ref":"refs/heads/channels", "sha":commit["sha"]}, method="POST")
+
+
+def verified(args, temp, token):
+    """Check every archive and bootstrap of the draft or candidate against its unsigned manifest."""
+    release = r.release_by_tag("v" + args.version, token)
+    if not release or not (release["draft"] or release["prerelease"]):
+        raise ValueError("release must still be a draft or a candidate")
+    manifest_path = temp / "manifest.json"
+    download(item(release, "manifest.json"), manifest_path, token)
+    manifest = json.loads(manifest_path.read_text())
+    if manifest["schema"] != 1 or manifest["version"] != args.version:
+        raise ValueError("draft manifest identity differs")
+    releases = {"v" + args.version:release}
+    for table in ("components", "runtimes"):
+        for artifacts in manifest[table].values():
+            for artifact in artifacts.values():
+                prefix = "https://github.com/" + r.REPO + "/releases/download/"
+                url = artifact["url"]
+                if not url.startswith(prefix):
+                    raise ValueError("archive URL is outside the release repository")
+                pieces = url[len(prefix):].split("/")
+                if len(pieces) != 2 or not re.fullmatch("v" + r.VERSION, pieces[0]) or not r.valid_version(pieces[0][1:]) or not r.ARCHIVE.fullmatch(pieces[1]):
+                    raise ValueError("invalid archive URL")
+                tag, name = pieces
+                if tag not in releases:
+                    releases[tag] = r.api("releases/tags/" + tag, token)
+                path = temp / name
+                download(item(releases[tag], name), path, token)
+                if r.sha(path) != artifact["sha256"] or path.stat().st_size != artifact["size"]:
+                    raise ValueError("archive SHA-256 or size mismatch: " + name)
+                if [list(v) for v in r.inventory(path)] != artifact["files"]:
+                    raise ValueError("archive inventory differs: " + name)
+                path.unlink()
+    setup = {}
+    for target in r.TARGETS:
+        name = "larch-setup-" + target + (".exe" if "windows" in target else "")
+        path = temp / name
+        download(item(release, name), path, token)
+        expected = manifest["components"]["setup"][target + "-cpu"]["files"]
+        binary_name = "larch-setup" + (".exe" if "windows" in target else "")
+        if [binary_name, r.sha(path), path.stat().st_size] not in expected:
+            raise ValueError("bootstrap executable differs from the setup archive")
+        setup[target] = {"url":f"https://github.com/{r.REPO}/releases/download/v{args.version}/{name}", "sha256":r.sha(path), "size":path.stat().st_size}
+    return release, manifest, setup
+
+
+def signed(args, temp, manifest, setup, name, comment, primary):
+    """Sign the manifest as `name` and the channel pointer that names it; return both files and signatures."""
+    manifest_path = temp / name
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    sign(manifest_path, args.secret_key, comment, primary)
+    pointer_path = temp / (manifest["channel"] + ".json")
+    pointer_path.write_text(json.dumps({"schema":1, "channel":manifest["channel"], "version":args.version, "manifest_url":f"https://github.com/{r.REPO}/releases/download/v{args.version}/{name}", "manifest_sha256":r.sha(manifest_path), "setup":setup}, indent=2) + "\n")
+    sign(pointer_path, args.secret_key, comment, primary)
+    return [manifest_path, Path(str(manifest_path) + ".minisig"), pointer_path, Path(str(pointer_path) + ".minisig")]
+
+
+def installers(release, token):
+    """Ship the install scripts beside the release, so every version has a stable install URL."""
+    for name in INSTALLERS:
+        r.upload(release, r.ROOT / "scripts" / name, token)
+
+
+def sums(manifest, setup, files, temp):
+    """SHA256SUMS for every file a user downloads, in `sha256sum -c` form."""
+    lines = {Path(a["url"]).name: a["sha256"] for table in ("components", "runtimes") for t in manifest[table].values() for a in t.values()}
+    lines |= {Path(a["url"]).name: a["sha256"] for a in setup.values()}
+    lines |= {p.name: r.sha(p) for p in files}
+    path = temp / "SHA256SUMS"
+    path.write_text("".join(f"{digest}  {name}\n" for name, digest in sorted(lines.items())))
+    return path
+
+
+def changes(version):
+    """The commit subjects since the previous release tag; empty when git cannot say."""
+    tag = "v" + version
+    try:
+        previous = r.output("git", "-C", str(r.ROOT), "describe", "--tags", "--abbrev=0", "--match", "v*", tag + "^")
+        log = r.output("git", "-C", str(r.ROOT), "log", "--no-merges", "--format=- %s", previous.strip() + ".." + tag)
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    return log.strip()
+
+
+def notes(version, gated, primary):
+    """The release page: how to install, how to verify, which gates passed, what changed."""
+    base = f"https://github.com/{r.REPO}/releases/download/v{version}/"
+    text = f"""## Install
+
+Linux and macOS:
+
+```sh
+curl -fsSL {base}install.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm {base}install.ps1 | iex
+```
+
+Flavours that passed their hardware gates: {", ".join(gated)}. The installer picks one for this computer.
+
+## Verify
+
+The installer checks every file it downloads against `manifest.json`, which is signed with the release key.
+To check by hand, download the files with `SHA256SUMS` and `SHA256SUMS.minisig`, then check the signature
+before the sums (a sum list is only as good as its signature):
+
+```sh
+minisign -Vm SHA256SUMS -P {primary} && sha256sum -c SHA256SUMS --ignore-missing
+```
+
+Acceptance gates for this version: https://github.com/{r.REPO}/blob/channels/gates/{version}.md
+"""
+    log = changes(version)
+    return text + ("\n## Changes\n\n" + log + "\n" if log else "")
+
+
+def secret(args):
+    """Require the offline signing key before any remote access."""
+    if not args.secret_key or not args.secret_key.is_file():
+        raise ValueError("an offline minisign secret-key file is required")
+
+
+def candidate(args):
+    """Sign the verified draft for the candidate channel as a public prerelease, so the install gates run on these bytes."""
+    primary, _ = compiled_keys()
+    secret(args)
+    token = os.environ["RELEASES_WRITE"]
+    with tempfile.TemporaryDirectory() as temp:
+        temp = Path(temp)
+        release, manifest, setup = verified(args, temp, token)
+        manifest["channel"] = CANDIDATE
+        # Every built flavour installs here: this channel is where its gates run.
+        manifest["gated"] = sorted({f for fs in manifest["flavours"].values() for f in fs})
+        files = signed(args, temp, manifest, setup, "manifest-" + CANDIDATE + ".json", "version=" + args.version + " channel=" + CANDIDATE, primary)
+        for path in files[:2]:
+            r.upload(release, path, token)
+        installers(release, token)
+        channel_commit(args.version, CANDIDATE, {path.name:path.read_bytes() for path in files[2:]}, token)
+        # A prerelease, not a draft: installs look assets up by tag, which finds published releases only.
+        r.api("releases/" + str(release["id"]), token, {"draft":False, "prerelease":True}, method="PATCH")
+    print("Candidate signed; testers install it with --channel " + CANDIDATE + ": " + ", ".join(manifest["gated"]))
+
+
+def publish(args):
+    """Verify draft or candidate bytes before signing and publishing the release."""
+    gate_body, gated = gates(args)
+    primary, _ = compiled_keys()
+    secret(args)
+    token = os.environ["RELEASES_WRITE"]
+    with tempfile.TemporaryDirectory() as temp:
+        temp = Path(temp)
+        release, manifest, setup = verified(args, temp, token)
+        if manifest["channel"] != args.channel:
+            raise ValueError("draft manifest identity differs")
+        manifest["gated"] = [f for f in gated if any(f in fs for fs in manifest["flavours"].values())]
+        comment = "version=" + args.version + " channel=" + args.channel + " gates=" + hashlib.sha256(gate_body).hexdigest()
+        files = signed(args, temp, manifest, setup, "manifest.json", comment, primary)
+        # The list is signed too: an unsigned list would let anyone who can replace an asset replace its sum.
+        checksums = sums(manifest, setup, files[:1] + [r.ROOT / "scripts" / n for n in INSTALLERS], temp)
+        sign(checksums, args.secret_key, comment, primary)
+        for path in files + [args.gate_record, checksums, Path(str(checksums) + ".minisig")]:
+            r.upload(release, path, token)
+        installers(release, token)
+        channel_commit(args.version, args.channel, {path.name:path.read_bytes() for path in files[2:]} | {"gates/" + args.version + ".md":gate_body}, token)
+        body = notes(args.version, manifest["gated"], primary)
+        r.api("releases/" + str(release["id"]), token, {"draft":False, "prerelease":False, "body":body}, method="PATCH")
+    print("Signed release published with gated flavours: " + ", ".join(manifest["gated"]))
+
+def main():
+    """Separate candidate signing and gate recording from publication."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("candidate", "record", "publish"))
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--channel", default="stable")
+    parser.add_argument("--gate-record", type=Path)
+    parser.add_argument("--secret-key", type=Path)
+    args = parser.parse_args()
+    if not r.valid_version(args.version) or not re.fullmatch(r"[A-Za-z0-9_-]+", args.channel) or args.channel == CANDIDATE:
+        parser.error("invalid version or channel")
+    if args.command != "candidate" and not args.gate_record:
+        parser.error("--gate-record is required for " + args.command)
+    {"candidate":candidate, "record":record, "publish":publish}[args.command](args)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, KeyError, r.tarfile.TarError, subprocess.CalledProcessError) as error:
+        print("release signing refused: " + str(error).replace("\n", " ")[:1024], file=sys.stderr)
+        sys.exit(1)

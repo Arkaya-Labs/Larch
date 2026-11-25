@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/Arkaya-Labs/Larch/security/advisories/new
+    about: Report it privately. Please don't open a public issue.
+  - name: Question
+    url: https://discord.gg/DxXXmEWbyy
+    about: Ask questions and share what you built on the Arkaya Labs Discord.

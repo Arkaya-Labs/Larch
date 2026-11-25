@@ -1,0 +1,37 @@
+name: deny
+
+# cargo-deny over both Cargo workspaces (deny.toml): dependency licenses, crate sources and known
+# vulnerabilities. It runs when a pull request changes dependencies, on every push to dev, and weekly,
+# so an advisory published against an unchanged lock shows up without blocking unrelated pull requests.
+on:
+  pull_request:
+    branches: [dev]
+    paths: ['**/Cargo.toml', '**/Cargo.lock', deny.toml, .github/workflows/deny.yml]
+  push:
+    branches: [dev]
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    name: deny (${{ matrix.workspace }})
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: [., apps/desktop]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
+        with:
+          tool: cargo-deny@0.22.1
+      - name: cargo deny check
+        working-directory: ${{ matrix.workspace }}
+        run: cargo deny --locked check

@@ -1,0 +1,1100 @@
+{"prompt": ""}
+{"prompt": " "}
+{"prompt": "  "}
+{"prompt": "   "}
+{"prompt": "\n"}
+{"prompt": "\n\n"}
+{"prompt": "\n\n\n"}
+{"prompt": "\t"}
+{"prompt": "\r\n"}
+{"prompt": "\r\n\r\n"}
+{"prompt": " \n"}
+{"prompt": "\n "}
+{"prompt": "\n \n"}
+{"prompt": "\t\n\t"}
+{"prompt": "Hello world"}
+{"prompt": " Hello world"}
+{"prompt": "Hello World!"}
+{"prompt": "HELLO"}
+{"prompt": "hello\nworld"}
+{"prompt": "   leading"}
+{"prompt": "trailing   "}
+{"prompt": "a  b   c    d"}
+{"prompt": "a                    b"}
+{"prompt": "line one\n\nline two\r\nline three\n"}
+{"prompt": "123"}
+{"prompt": "1234567"}
+{"prompt": "3.14159"}
+{"prompt": "1,000,000"}
+{"prompt": "x = 42 + 7*1999;"}
+{"prompt": "0.5x10^-3"}
+{"prompt": "007 and 1000000000"}
+{"prompt": "I'm here"}
+{"prompt": "you'RE"}
+{"prompt": "it's"}
+{"prompt": "don't"}
+{"prompt": "we'll"}
+{"prompt": "they've"}
+{"prompt": "she'd"}
+{"prompt": "'s"}
+{"prompt": "''"}
+{"prompt": "'"}
+{"prompt": "'S'LL'D"}
+{"prompt": "rock'n'roll"}
+{"prompt": "''s"}
+{"prompt": "Ünïcödé façade naïve"}
+{"prompt": "日本語のテキストです。"}
+{"prompt": "中文测试，标点符号！"}
+{"prompt": "한국어 문장"}
+{"prompt": "Привет, мир!"}
+{"prompt": "مرحبا بالعالم"}
+{"prompt": "עברית"}
+{"prompt": "हिन्दी भाषा"}
+{"prompt": "ไทย ภาษา"}
+{"prompt": "Ελληνικά"}
+{"prompt": "é vs é"}
+{"prompt": "٣٤٥ ١٢"}
+{"prompt": "①②③ x² ½"}
+{"prompt": "∑∫√∞ ≠ ≤"}
+{"prompt": "🦙🔥👍🏽"}
+{"prompt": "👨‍👩‍👧 family"}
+{"prompt": "nbsp here"}
+{"prompt": "ideo　space"}
+{"prompt": "nelchar"}
+{"prompt": "zw​sp"}
+{"prompt": "Ᲊ𐗀 new letters"}
+{"prompt": "▁already▁escaped"}
+{"prompt": "tab\tseparated\tvalues"}
+{"prompt": "def f(x):\n    return x ** 2\n"}
+{"prompt": "fn main() {\n\tprintln!(\"hi\");\n}\n"}
+{"prompt": "{\"key\": [1, 2, {\"a\": null}]}"}
+{"prompt": "https://example.com/path?q=1&r=two#frag"}
+{"prompt": "<div class=\"x\">&amp;</div>"}
+{"prompt": "#!/bin/sh\necho $HOME | tr a-z A-Z"}
+{"prompt": "<|begin_of_text|>Hello"}
+{"prompt": "<|start_header_id|>user<|end_header_id|>\n\nhi<|eot_id|>"}
+{"prompt": "<|eot_id|><|eot_id|>"}
+{"prompt": "<|eot_id"}
+{"prompt": "eot_id|>"}
+{"prompt": "x<|end_of_text|>y"}
+{"prompt": "<|im_start|>user\nhi<|im_end|>\n"}
+{"prompt": "<|im_start|>assistant\n"}
+{"prompt": "<|endoftext|>"}
+{"prompt": "<tool_call>\n{}\n</tool_call>"}
+{"prompt": "<s>[INST] hi [/INST]"}
+{"prompt": "</s>"}
+{"prompt": "<|im"}
+{"prompt": "<|im_start"}
+{"prompt": "<<|im_end|>>"}
+{"prompt": "a<|fim_pad|>b"}
+{"prompt": "<|unknown_tok|>"}
+{"prompt": "D<|im_start|>gpe🦙>~i;4;}0,1"}
+{"prompt": "󸁔Ma's\t①"}
+{"prompt": "%궭{м"}
+{"prompt": "J\r7\n"}
+{"prompt": ".c"}
+{"prompt": "=2🔥("}
+{"prompt": "🔥;  7S-\\　^)kZ "}
+{"prompt": "<|丐"}
+{"prompt": "k <|eot_id|>么 X🩯"}
+{"prompt": "g"}
+{"prompt": "{\nU<|im_start|>B~q92w中²# "}
+{"prompt": "s  ;　 󹬬"}
+{"prompt": "d<|eot_id|>)R"}
+{"prompt": "4"}
+{"prompt": "'re2겪񺟞?　 s3"}
+{"prompt": "R ="}
+{"prompt": "37丣"}
+{"prompt": "!\t'tn<X"}
+{"prompt": "s　OW︖"}
+{"prompt": ";Gm丂'LLT乊y1кt"}
+{"prompt": " _²Лд8N\n 乤丛3_9𐫆3"}
+{"prompt": "1f\nY4ED어 􍐑u$仴"}
+{"prompt": "M𕿴①\re򳈵　/"}
+{"prompt": "𜹬"}
+{"prompt": "  CिH1"}
+{"prompt": "9b$"}
+{"prompt": "Inb;i\r'　/👍"}
+{"prompt": "v{9\t"}
+{"prompt": "一9"}
+{"prompt": "MNt"}
+{"prompt": "=sB򐁉^@ 4ш@!╀'"}
+{"prompt": "dт‍W㛲"}
+{"prompt": "HM丮\r[8у\n,=L丠"}
+{"prompt": "2Q①ЦS𜏤6r\r/GБ👍н"}
+{"prompt": "丗y.2С "}
+{"prompt": "5$VS恰o \tЩ'reMze"}
+{"prompt": "Кr%٤　y}l2 "}
+{"prompt": "О<|im_start|>Nั/<|eot_id|>&&7</s>窥%ि"}
+{"prompt": "0\\z"}
+{"prompt": "𦪹𶛁\t( "}
+{"prompt": " !"}
+{"prompt": "во語g<<|im_end|>𠒴\n&v"}
+{"prompt": "rЪ"}
+{"prompt": "\n1t;e𥟍?(̈]6j"}
+{"prompt": "①TUT<tool_call>j0r4eQTzD"}
+{"prompt": "7üuス"}
+{"prompt": "丟L̈　=cAp①<|im_end|>"}
+{"prompt": "̈擼"}
+{"prompt": "u$6л [INST]B i࢙٣jn𞞻业Z"}
+{"prompt": "5Em丞9乡 %^i:1s"}
+{"prompt": "p(uSP𧯽7́CtN̈ト両"}
+{"prompt": ">0乴T )&qe:"}
+{"prompt": "</s>4E²򡮌"}
+{"prompt": "x't 󙉻"}
+{"prompt": "KA%①举6"}
+{"prompt": ":🏽🔥(R&"}
+{"prompt": "3Y`O_🇟<\tLQ+　\""}
+{"prompt": "#g<|im_end|>"}
+{"prompt": "<|eot_id|>A👍乎 7W@乍98|>F"}
+{"prompt": "0w丅6FÜ"}
+{"prompt": "2's"}
+{"prompt": "᧎7@T `"}
+{"prompt": " 2'reO \nц"}
+{"prompt": "-&𪲕6"}
+{"prompt": "8J\tmkMX\rø/'t🦙+\t"}
+{"prompt": "bI<tool_call>7Оm"}
+{"prompt": "4񖋫z8 ^"}
+{"prompt": "q٥e"}
+{"prompt": "4Nि7\\çC"}
+{"prompt": "<|8T<tool_call>ZKZl5Ot乽U'rev]"}
+{"prompt": "?4엛"}
+{"prompt": "之E`Q<|im_start|>ि./\"\tlQ"}
+{"prompt": "$R\rWꅕ٤FZs="}
+{"prompt": "R<|eot_id|> 　Gs▁셾ัA.乻"}
+{"prompt": "ि$Р٤bЩ"}
+{"prompt": "Пr並(9[INST]語é ъ\n)\"𞵟N👍"}
+{"prompt": "з{"}
+{"prompt": "4<&4л?业򍾺\t<"}
+{"prompt": "1's\r"}
+{"prompt": "𙁎"}
+{"prompt": "2𘵫/1%~主1 v"}
+{"prompt": " )p▁htd𦮓"}
+{"prompt": "　丞　@spГ٥\r R F򟣻"}
+{"prompt": "\n}"}
+{"prompt": "<s>O 𨑿И語=dlUL"}
+{"prompt": "\"'LL"}
+{"prompt": "Зmx{٥G👍-F𩢫n~"}
+{"prompt": "'reB+K|𧎩t"}
+{"prompt": "П57́̈9Т[H"}
+{"prompt": "П`\r Х*u ٤V \r"}
+{"prompt": "Х$Zn( *\\\r3g🔥Ъ"}
+{"prompt": "|٥65\r7YQ0æA񌷥丳\r1"}
+{"prompt": "撯U{"}
+{"prompt": "?̈p+19²어E/ 乑"}
+{"prompt": "5"}
+{"prompt": "ч𡃲\"&oп\\D　GQ_87"}
+{"prompt": "G@<tool_call>B2WR)D"}
+{"prompt": "乞"}
+{"prompt": "yl7Kt%乕i\\中\n👍|>²"}
+{"prompt": ",o-O 乬"}
+{"prompt": "{ļe<|.w.ф　丽"}
+{"prompt": "V54\r6|Z乐习d"}
+{"prompt": "乩#Y-^٥  丸<"}
+{"prompt": "{ス"}
+{"prompt": "'t且l1👍 丟fq\"丱U"}
+{"prompt": "ス义B0's~m(7f^񳛪:7"}
+{"prompt": "{8g　①👍　['E"}
+{"prompt": "񾫞\rF_\n\n丿f=᣶i^{-²"}
+{"prompt": ":@ஷ乂0e"}
+{"prompt": "𜋉"}
+{"prompt": "-_　Z𨂐̈m"}
+{"prompt": "乗٣<|im_start|>U𳁪ЧัU丵"}
+{"prompt": "kz3\r9G👍Mh\r乂M"}
+{"prompt": "👍29с,▁乛`\t٣"}
+{"prompt": "IE/ि𯃘%U𕸁👍락"}
+{"prompt": "́7'LL;"}
+{"prompt": "ащ　𬖿乙é3‍а9t\nM2d"}
+{"prompt": "6乛́8񔃸W0<|im_start|>٣DL "}
+{"prompt": "7٣3p/1"}
+{"prompt": " "}
+{"prompt": "_Z乓{BX"}
+{"prompt": "<٥Уv"}
+{"prompt": "'\"G东\tixI].@"}
+{"prompt": "ั\rÉЭ"}
+{"prompt": "ne乴dVyh"}
+{"prompt": " 　\nc5O|R[INST]s4"}
+{"prompt": "\\`EvuXy (0D"}
+{"prompt": "ि "}
+{"prompt": "S{."}
+{"prompt": "|5"}
+{"prompt": "&/g(q"}
+{"prompt": "\\Vm"}
+{"prompt": "‍i\\~ "}
+{"prompt": "сxx𑔍񡝫3J"}
+{"prompt": "𩭽q"}
+{"prompt": "lVuिQLpᑑml=\\g👍"}
+{"prompt": "s𧷻𜧩　𓟪"}
+{"prompt": "󄼳)"}
+{"prompt": "乬Д<|im_end|>Ы6<9𗲈<́　 Z"}
+{"prompt": "@Aсн́.\r/a书m{丶DD6"}
+{"prompt": ";‍"}
+{"prompt": "J"}
+{"prompt": "🔥"}
+{"prompt": "긨"}
+{"prompt": "乻E("}
+{"prompt": "<tool_call>񴋑𚥻>9(*C, ü\r"}
+{"prompt": "o( éM񌩥"}
+{"prompt": "乛"}
+{"prompt": "\r8"}
+{"prompt": "ыs<G̈🏽𕨹丼 ि꾶\n"}
+{"prompt": "-q丶O\n?lL𢒡²👍"}
+{"prompt": "#V乯 &y"}
+{"prompt": "uks乡<tool_call>2^3"}
+{"prompt": "щ L[▁X "}
+{"prompt": "y􁐮d䝴"}
+{"prompt": "2q;л+ %̈`E\" I٣"}
+{"prompt": "A<s>J;Tx*\t>M丿_"}
+{"prompt": "𕡏l"}
+{"prompt": "<?~"}
+{"prompt": "^H+12uz丽\r8"}
+{"prompt": "ÉA >Yl<tool_call>üGå𬄛<5́Q👍"}
+{"prompt": "JU멵`чs̈"}
+{"prompt": "T𕞡丆\rV 🏽.n"}
+{"prompt": "e𨪩1ku<|eot_id|>t"}
+{"prompt": "0 $/"}
+{"prompt": "З}̈丠\t乲乪8👍Y👍丐5z"}
+{"prompt": "AP\\> дj@ั$\tU²aR$"}
+{"prompt": "0O)6<|im_start|>٤①　"}
+{"prompt": "xW\n!}2у‍𖥷qF/"}
+{"prompt": ""}
+{"prompt": "#;𔲟"}
+{"prompt": "乻;gHа"}
+{"prompt": "\nk򻅀э<́6"}
+{"prompt": "<|im_end|>DO"}
+{"prompt": "'reгT4q举L{+ㆰZ̈ h"}
+{"prompt": "　񂴔"}
+{"prompt": "mNu٤)⥋🦙G \tHНРW`"}
+{"prompt": "6\"ñg<s>6|ANj<|im_start|>ю"}
+{"prompt": "о6-qx　"}
+{"prompt": "r\nvV7Q5 8Qc4テZ о"}
+{"prompt": "莔"}
+{"prompt": "g"}
+{"prompt": "𔐪эkT:"}
+{"prompt": "5+乨7乼1٥蜂Sh&7"}
+{"prompt": "k"}
+{"prompt": "J　"}
+{"prompt": "久у　<|eot_id|>Bt8L义X\r乂 "}
+{"prompt": "Z1</s>v𐠏cP　>@ `𣋙Ja"}
+{"prompt": "n 82D>$<tool_call>R$Sмp8"}
+{"prompt": "@<|im_start|>_?1i ²٣O5g"}
+{"prompt": "　;~vL惟丰ि\"\tX(z"}
+{"prompt": " !"}
+{"prompt": "\r &|>𕦋КW\n<|eot_id|>丌 🔥HD,"}
+{"prompt": "#%N乍ั"}
+{"prompt": "{　٥\tй\"𑴰ス𦈘`𨾨の5^"}
+{"prompt": "串yWГk٣L)!B东|>٣之"}
+{"prompt": "0."}
+{"prompt": ";7\"<s>٣5A٣{ V<|im_start|>"}
+{"prompt": "🦙"}
+{"prompt": " ]{</s>"}
+{"prompt": "!R乶i8"}
+{"prompt": "O\t▁Ngg3\t中丳/🔥ั>;"}
+{"prompt": "63t"}
+{"prompt": "业'LĹRdåL78  🏽!,1)"}
+{"prompt": "3O"}
+{"prompt": "0A٥\"G"}
+{"prompt": "Q<🦙X٥Я\t \n丹6rd᯴_M"}
+{"prompt": " CН$トЭ\"96"}
+{"prompt": " X& y|"}
+{"prompt": "k"}
+{"prompt": "&ß7Т$J)丒6"}
+{"prompt": "O"}
+{"prompt": " 𞓿e]юyQ`􂞁'\"󝭛N🦙"}
+{"prompt": "4(<|́д𓑡한 x🏽 7;󲳯𥁠"}
+{"prompt": "'s R<s>1\tI\ny{"}
+{"prompt": ")9K#<s>44Fz<|im_end|>6"}
+{"prompt": "8"}
+{"prompt": "𣧑‍𗔍4>"}
+{"prompt": "lq[INST]"}
+{"prompt": "񡛫dy~`[@c"}
+{"prompt": "　"}
+{"prompt": ";z6@ 8F$#㧷<|im_end|>a"}
+{"prompt": "🏽٤Y~"}
+{"prompt": "Mf;jл乱f a"}
+{"prompt": "\n\t　# 3🦙:'re<|*\n乥T²P"}
+{"prompt": "①<|im_start|> 乒ny v"}
+{"prompt": "丗OL丢':4Q\n"}
+{"prompt": "еs WyM ①"}
+{"prompt": "p𪧬一乷щ乪 "}
+{"prompt": "ℵ"}
+{"prompt": "vü !d3v<"}
+{"prompt": "O焵R丢8  W>fh"}
+{"prompt": "乢①"}
+{"prompt": "\t</s>/🖃0NЮ9<s>٤丹乌 万4"}
+{"prompt": "P①<tool_call>@!丿RS+𼖓$①r"}
+{"prompt": "\\gGJ<🏽\tि𦷥f't󩬍𓲺mN"}
+{"prompt": "щ"}
+{"prompt": "_rY{ b𩧐t"}
+{"prompt": "7}乚5YM之dц8① "}
+{"prompt": "𖪋򼖨19٣+)<|im_end|>́M"}
+{"prompt": "丈US]rFuB't "}
+{"prompt": "3w@🏽k_Su①7#򲄭u"}
+{"prompt": "\t٥́丕4^P}𫙩f\\2gೞ"}
+{"prompt": "!j 　"}
+{"prompt": "򡅃z"}
+{"prompt": " T󝑊:丁><|im_end|>乇𦛖3🦙[INST]򽆰f "}
+{"prompt": "и're6g{'LL1xдq"}
+{"prompt": "NN　d6M6_ {'B8乵о"}
+{"prompt": "𮏄MKМ7"}
+{"prompt": " \tc　́7\nbcФ"}
+{"prompt": "Рn~"}
+{"prompt": "DjHn/$3 🏽"}
+{"prompt": "j{a񘑳p𣵿HRiц x[i"}
+{"prompt": "1\r?🛟O6n`东①"}
+{"prompt": "^'re8)"}
+{"prompt": "3M|"}
+{"prompt": "\"乶o|>٥S'𓔼テ𒖯"}
+{"prompt": "𖚼27|[8c\t 01[(🔥\\"}
+{"prompt": "𚹜T①𔽠́kj"}
+{"prompt": "\n딀\""}
+{"prompt": " :<|im_end|>]"}
+{"prompt": "̈򈭬N1,"}
+{"prompt": "v#F "}
+{"prompt": "7't  𞼹Vn['^w"}
+{"prompt": "#RT 󇪣 2#乀v%}Q　٣0"}
+{"prompt": "CI\r5]]9r\rs\\88L8"}
+{"prompt": "'s󣚊`H\r世J2"}
+{"prompt": "0+-U^62KZ<"}
+{"prompt": ")m;丢乻 6F"}
+{"prompt": "2;Eb ;"}
+{"prompt": "g^2 \td"}
+{"prompt": " r𾬁'𗵗^丰-\r6c"}
+{"prompt": "七 1D0Ó"}
+{"prompt": "GsIKO퉢ꙴ\\1七F򇸀J"}
+{"prompt": "<|im_end|>p1Ь 乛5Ig<#🔥"}
+{"prompt": "@ 骋\"f𩳏J92ス;Q\rUD"}
+{"prompt": "95Оd9<|im_end|>W<|e"}
+{"prompt": ".ZUñ三KGx]<|im_start|>🗢严"}
+{"prompt": "О`P"}
+{"prompt": "i Z丯<v中 TО"}
+{"prompt": "XA丱\r8本e4a ]Y@; 乽"}
+{"prompt": "W𙙘6٣乁[B"}
+{"prompt": " MU8ыь're2H'rebjl٣𢑣"}
+{"prompt": "z"}
+{"prompt": "𠯤٥󈗶^,𣢉 8B   5,䒊 "}
+{"prompt": "M(Y[0 7a(z:<|im_start|>k1U"}
+{"prompt": "3乺𦭚九"}
+{"prompt": "t8;[INST]1の乗a𔫦ш乍G l"}
+{"prompt": "Z2^٥\rKf🦙i\"#"}
+{"prompt": "Z죾"}
+{"prompt": "@STе|>🏽o▁tG٤丨B٣)'LL"}
+{"prompt": " H9٤٥<tool_call>У"}
+{"prompt": "yX 0M4j65Y丕m乻pC"}
+{"prompt": "丟N"}
+{"prompt": "</s>y󆦑𮌾𙄘}A<|8"}
+{"prompt": "x𫅛фбN٣٥乤D뉫HLV🦙"}
+{"prompt": "བ:Il,㣛6"}
+{"prompt": "丂①rf9P乛4𲦜ц<|im_start|>t"}
+{"prompt": "\t@u$丈</s>也y8x"}
+{"prompt": ":"}
+{"prompt": "1ﺃ"}
+{"prompt": "ัi6‍　L "}
+{"prompt": "0B'reM丿%% ДL􁱘Ula `"}
+{"prompt": "g)+乔96s</s>qawि\t"}
+{"prompt": "𗇮F"}
+{"prompt": ")🔥T\\世33٣"}
+{"prompt": "\"v"}
+{"prompt": "5 1-①G乗"}
+{"prompt": "\nХ"}
+{"prompt": "5J'ス \n!\t"}
+{"prompt": "0Ч①"}
+{"prompt": "f买</s><tool_call>ikæ+"}
+{"prompt": "== Y@"}
+{"prompt": ">C[𔡱"}
+{"prompt": "[æ^٥b鹤"}
+{"prompt": "r\nl\\丗U𭮎"}
+{"prompt": "|4 Dv́"}
+{"prompt": "<|6BХ乴٣+"}
+{"prompt": "Ll𖆋Z ^p1hI丣𬿖"}
+{"prompt": "ⵦ0? \\侍"}
+{"prompt": "٥ü\t"}
+{"prompt": "27@񦤋M]a丞<|im_end|>'t\r"}
+{"prompt": "𚁫"}
+{"prompt": "?"}
+{"prompt": "両举٥Gv▁+n'"}
+{"prompt": "爟𨦮"}
+{"prompt": "'re국X"}
+{"prompt": "^$T<|im_start|>[INST]"}
+{"prompt": "0æ[INST]٣\r"}
+{"prompt": "Е>3\nE🝋Se٥ ` 0f"}
+{"prompt": "ACwE87f"}
+{"prompt": "р're🗀キgж𞶅>LF&िbf"}
+{"prompt": "  👍乩\t򷬷"}
+{"prompt": "Г̈<tool_call>С7%K's?3"}
+{"prompt": "L٤hx\né"}
+{"prompt": "НЭ"}
+{"prompt": "s9\\ั,l"}
+{"prompt": " 񇳬　2'"}
+{"prompt": "ж<|im_end|>&ⅿ　"}
+{"prompt": "D\tю"}
+{"prompt": "2<|eot_id|>X5[iD🜚_‍"}
+{"prompt": "k/\\8乖0乜R\n<|𨲹"}
+{"prompt": "-Ш乍"}
+{"prompt": "tkWX@b "}
+{"prompt": "D$T,󷶑\t"}
+{"prompt": "z49⢄c:/L-j𯙻ัt"}
+{"prompt": "EсIX3B"}
+{"prompt": "̈$"}
+{"prompt": "vyB乥\tm85koG"}
+{"prompt": "3テm9<|im_start|>2*э/👍两f\t8"}
+{"prompt": "\\d"}
+{"prompt": "x) P"}
+{"prompt": " g不 "}
+{"prompt": "6|Ф'LLЯø"}
+{"prompt": " 2_g<|im_end|>a乡D'LL7xの24"}
+{"prompt": "0٤+c're"}
+{"prompt": "#vy①𫡚1 🦙헹"}
+{"prompt": "Ú_J𫑽ि2<("}
+{"prompt": " "}
+{"prompt": "xF8]$1국"}
+{"prompt": "3𖀡!"}
+{"prompt": "3①[INST]`og7*"}
+{"prompt": "Ь   "}
+{"prompt": "a5 <tool_call>𙖴땻Б\""}
+{"prompt": "3ck9[INST]x (K"}
+{"prompt": "blB}çs"}
+{"prompt": "乣 C󗘉本<J:+𭮫<tool_call>\r\rв"}
+{"prompt": "٣'LL0<tool_call>[~　?"}
+{"prompt": "]Д٤м9U</s>0d7и'LL"}
+{"prompt": "<V["}
+{"prompt": "٤QЧИ7/󵂞"}
+{"prompt": "5v2|어"}
+{"prompt": "<|im_end|>U'F٣hQ?"}
+{"prompt": "𣟡丈xW'-上K92^Bi^W"}
+{"prompt": " 　九C乤w<|im_start|>_丈$åト"}
+{"prompt": "mY󿒆/"}
+{"prompt": "󯔹Zc𘚙-5\rE͘񘫁"}
+{"prompt": "9n</s>j k\r乩6٣R4>Ze"}
+{"prompt": "ak8👍A<s>🦙"}
+{"prompt": "\ẗ'LL▁l 3"}
+{"prompt": "򃄊!어6К^򧒱{_Fัั①"}
+{"prompt": "‍}٥"}
+{"prompt": "\"'LL🔥ве=2's乓Е/\"　@▁"}
+{"prompt": "u𨞤z3c8𯳎"}
+{"prompt": " 𧲦g𩆳‍l 　竦Ш丁"}
+{"prompt": " y▁"}
+{"prompt": "7 </s>N乑①1👍D"}
+{"prompt": "ч👍u丹 为DVb횫\\2"}
+{"prompt": "В>$!'LL's g"}
+{"prompt": "K"}
+{"prompt": "D"}
+{"prompt": "ka²B乪<|im_end|>s丸O\r\\Rk/ "}
+{"prompt": "%@X\n"}
+{"prompt": "тX5񣃎6i8PP8p:N"}
+{"prompt": "х#f"}
+{"prompt": "N襻.. 🤾m鲩F乌　А"}
+{"prompt": "м"}
+{"prompt": "A ัvHY3 "}
+{"prompt": "8#٥o'xb"}
+{"prompt": "0ZrI²"}
+{"prompt": "٤𞅪D\\① Q\"U𫀄)5dDk"}
+{"prompt": "L8.^I丗²ш"}
+{"prompt": "'LL٣"}
+{"prompt": "l 󣁶nw٥~4'"}
+{"prompt": " 51久V举　're"}
+{"prompt": "u8r\nAoßИ!fW"}
+{"prompt": "+!4👍<|im_start|>٤乣 <²~Ц񥟰u0"}
+{"prompt": "b\n}不6ัd乨å_bZ'R2"}
+{"prompt": ">5"}
+{"prompt": "|>vIpx's举C:Р🏽²"}
+{"prompt": ";5zs6<|28́Atr'8"}
+{"prompt": "ov"}
+{"prompt": "</s>4919⮑󜬯W"}
+{"prompt": "7`𙴌 8䛾%"}
+{"prompt": "Oz本ç,b👍IР_"}
+{"prompt": "8_O@'LL .|>"}
+{"prompt": "l(ü6\r"}
+{"prompt": "oY 5三mbJ~д@"}
+{"prompt": "\r\tЫ"}
+{"prompt": "Kh#1v1　3>乄乒=򛼦"}
+{"prompt": "上m?rC(‍j@"}
+{"prompt": "y丸乧;🦙Mu4I18"}
+{"prompt": "J8‍𥮦bv"}
+{"prompt": "4Q[INST]с²S丣-𯃊　V󫣪 "}
+{"prompt": "A\\𓜿6c2 b<tool_call>"}
+{"prompt": "n8乴丅e.Dm\n"}
+{"prompt": "6Mз👍P W>Ü) ü"}
+{"prompt": ">丷􅓪🔥\""}
+{"prompt": "̈лeН󗮥.>{2 -i"}
+{"prompt": "乙5Vñ7 nNG 􅯺 \rbг"}
+{"prompt": "ц٤🔥ि 丬xf𒞖󹭠"}
+{"prompt": "MIX0V7|>‍\n"}
+{"prompt": "h▁M*q"}
+{"prompt": "*~Ü٥厕乶p8hi語UNd"}
+{"prompt": "j~shBne,11w<| x丞're"}
+{"prompt": "<|Zi"}
+{"prompt": "3<|eot_id|>́k 어1"}
+{"prompt": "É:"}
+{"prompt": "?ED𣛘К\r4T^5</s>́f"}
+{"prompt": "<|🏽　  8 िि٤丱𹝾 丠Г"}
+{"prompt": "Z‍𯊖,7d<s>p𯼫\\("}
+{"prompt": "^👍81́"}
+{"prompt": "otX9^Ẅ　8 \t"}
+{"prompt": "􁣀\rWa^²K󗪪SX²🏽"}
+{"prompt": "üf"}
+{"prompt": "o5E乾c#1"}
+{"prompt": "г0丧h丮~DvÜ𓎲　▁Ю"}
+{"prompt": "p$́Q"}
+{"prompt": "٣٣2👍丱"}
+{"prompt": "E　RW<s>2'LL٥"}
+{"prompt": "\r"}
+{"prompt": "Ymi🔥р7𝱝<|im_end|>² О𛫲'"}
+{"prompt": "िࢠe𮦒٣3"}
+{"prompt": "Aч н~x7"}
+{"prompt": "A+"}
+{"prompt": "0"}
+{"prompt": "5mBi/Eø义qa< x"}
+{"prompt": "Dfj[INST]gц6٣"}
+{"prompt": "v\nß\r<|im_start|>у"}
+{"prompt": "Q\nQ"}
+{"prompt": "Qr6𩶒"}
+{"prompt": "RA8[INST]DẄ 乀٥👍i't"}
+{"prompt": "한3,R丗𔈱\r5"}
+{"prompt": "ш٥_"}
+{"prompt": "‍/　'LL👍\tQ"}
+{"prompt": "乶n٣'t"}
+{"prompt": "L专OtlwfD 󌤳5*^6+"}
+{"prompt": "٤wmf*\n<tool_call>g\te"}
+{"prompt": "0(Jw|v8B<|аF're@"}
+{"prompt": "🔥mk\\\r\"\n丁H𥠀񂥝z"}
+{"prompt": "g?<s>   ОH7 乨,٣ 0)"}
+{"prompt": "C`"}
+{"prompt": "🦙 丷/乙О6v;l)l𛀓🔟6"}
+{"prompt": " T\rXg<|举 `2 \\"}
+{"prompt": "<tool_call>\t"}
+{"prompt": "l\tE丢🦙Z'&丕(6Vg"}
+{"prompt": "①ि_iqwn"}
+{"prompt": "'s}r东I^語"}
+{"prompt": "V-6ЭEm8٣4"}
+{"prompt": "=C$乢?"}
+{"prompt": "\n]👍,29򢛚㵴/\r 6𣵉 f"}
+{"prompt": "[INST]𙪀K|🔥s乶Kr;s²乐щ*"}
+{"prompt": "𨗡"}
+{"prompt": "`5n2"}
+{"prompt": "|+<|daSA;t 2ПO`"}
+{"prompt": "́%ั7"}
+{"prompt": "ꗷY4V,O j𜼇　#3\t"}
+{"prompt": "xqJ\rM𞱄ew"}
+{"prompt": "qVFg i*𦹃́ "}
+{"prompt": "‍"}
+{"prompt": "󠾛🏽ि㗘.7󢲥%乻p"}
+{"prompt": "u𦈵𓍢Н"}
+{"prompt": "1S🔥\rф󗵟\"I)3*s񹨄E<tool_call>;"}
+{"prompt": "{\t"}
+{"prompt": "gZ"}
+{"prompt": "z~5w乷乎 丳h|4𙇞o"}
+{"prompt": "٣\\g<)å_本\t\t<|im_start|>"}
+{"prompt": "丘0"}
+{"prompt": "]򧤛𛶯r8r7S"}
+{"prompt": "СУViัjV"}
+{"prompt": "p'LL乤Z\rхRJ٥3ZG\t<s>8"}
+{"prompt": "k　٤ "}
+{"prompt": "W٤eß ^򳇺𗫀_̈"}
+{"prompt": "񽓯5aั乗 4"}
+{"prompt": "g"}
+{"prompt": "\t𒀀"}
+{"prompt": "fQtR-乡"}
+{"prompt": "Я,𠽄)#‍NmYS7"}
+{"prompt": "Wn;<|乇85丮‍+"}
+{"prompt": "6 ?b >U0(٣]"}
+{"prompt": "I　ि　"}
+{"prompt": "y` .b's5"}
+{"prompt": "D)B丘rя~\t"}
+{"prompt": "ji丼ЮPQ0*Wq|\r'sN"}
+{"prompt": "yW 丣ж語 Y²²"}
+{"prompt": "🫐👍(\"󤮱)"}
+{"prompt": "["}
+{"prompt": "o67|么&н4Y"}
+{"prompt": "2丆①👍j"}
+{"prompt": "y7𭊇Цm𬏢3BС7　j"}
+{"prompt": "В<s>u丆НWl^?G_򀂙G"}
+{"prompt": "W𩫦C🦙\nqL²] 🏽<|"}
+{"prompt": "\nัщ\r 78 >"}
+{"prompt": "@Z 8乼8丱G$4к"}
+{"prompt": "hZ p񦿕七96a"}
+{"prompt": "ьÜ^]dB66gcc"}
+{"prompt": "٣"}
+{"prompt": "u🏽4"}
+{"prompt": "　XP緰\rpтС🦙"}
+{"prompt": "I乬>🏽i\""}
+{"prompt": "𐼞乞̈"}
+{"prompt": "5awнeBJ 󊻾乽i2"}
+{"prompt": "NQ"}
+{"prompt": ".s久X²4"}
+{"prompt": "畺П5qu'sG"}
+{"prompt": "X٣/Фå"}
+{"prompt": "03٣б[\t1lr\n\nю"}
+{"prompt": "日s丝5BB0乆;rI"}
+{"prompt": "s'reG"}
+{"prompt": "8J乺"}
+{"prompt": "²𬖸2ĺ／"}
+{"prompt": "2Wb6"}
+{"prompt": "6<s>𣍲 'tテy't <|im_start|>"}
+{"prompt": "<|im_start|>QaRr\r"}
+{"prompt": "🦙7"}
+{"prompt": "qq\"tx丞\t3􏨰"}
+{"prompt": "𑰥🦙't\n:jI2i丄550<|eot_id|>"}
+{"prompt": "[INST]t`<|im_start|>Éeж{̈ }"}
+{"prompt": "94r丏l6I\\3Х0{,jN"}
+{"prompt": "_G["}
+{"prompt": "m!q 之4"}
+{"prompt": "󶝴2,8dM~[INST]"}
+{"prompt": "̈T't🔥r5|丝Z5;"}
+{"prompt": "　𐹎2I0▁^dk𫴑3乱s  "}
+{"prompt": "q,𓗜<&1̈̈$'_Ы"}
+{"prompt": "SvJwZ<|Е1Nа<Y"}
+{"prompt": "[INST]B "}
+{"prompt": "Nпs<s>F!d1 (BN@PEC"}
+{"prompt": "<|im_end|>;乥N"}
+{"prompt": "乽́h"}
+{"prompt": " T "}
+{"prompt": "дr𠃆 ٥<|im_start|>оd^<👍'tu.~"}
+{"prompt": "²bщ|>e~'^;,扝8xั"}
+{"prompt": "鵔6丣٥ 4в丬8lЙWS7O#"}
+{"prompt": "𚲧å6⻺乪\""}
+{"prompt": "eJ8q"}
+{"prompt": "\t🏽🦙26!²9`el;\t<|"}
+{"prompt": "X"}
+{"prompt": "nA밢󃉒<|im_start|>'tL> 񽪟严}y乽ि"}
+{"prompt": "\"[　🔥D<|eot_id|><|im_end|>٣ั%t"}
+{"prompt": "Г*🔥٣ि_S|੽oL🏽"}
+{"prompt": "\rIg①XW_x/K한'LL𯬕V"}
+{"prompt": "E\"e专"}
+{"prompt": "\rt "}
+{"prompt": "9v🔥 )1"}
+{"prompt": "<|зF'LLั"}
+{"prompt": "О񮖈s٥v>1盦^]䧮 Gъz"}
+{"prompt": "3yОc*2́$4m"}
+{"prompt": "٣6'LL\tF٥F+👍}𞳵j"}
+{"prompt": "N𯵉9‍>`}"}
+{"prompt": "\rN\\0b5-@i$n ,*𠄁"}
+{"prompt": "2!\"&Gy‍QЧ𘼩b2🏽"}
+{"prompt": "mJch乶E&丱̈[W　\t|>🔥"}
+{"prompt": "o,Еи#r"}
+{"prompt": "gि]75@;"}
+{"prompt": "٣ 9X也𤇐:5iM\rU7 т"}
+{"prompt": "|"}
+{"prompt": "٥m)`٥Д乜's4G1󗾷"}
+{"prompt": ";X①> zn0 Nc　𔄯"}
+{"prompt": "\na </s>n08\nि<s>"}
+{"prompt": "3٤h𒥠1X@ 丕٤　Uั"}
+{"prompt": "1.<|_РУ🔥B3<s>э"}
+{"prompt": "/东3y5n7v٥\n　"}
+{"prompt": "Y▁乺🏽_/7"}
+{"prompt": "]7j三5乭U0Qq中"}
+{"prompt": "-Л2 5ßćJ"}
+{"prompt": "　么=밷 국"}
+{"prompt": "LE‍乒𚿞'<tool_call>к|👍Сv𔝆"}
+{"prompt": "fIъ1%B07 Iś "}
+{"prompt": "乬H4両73ि~<|im_start|>pa{{乨日"}
+{"prompt": "1　Рัf2"}
+{"prompt": "丠٤𪤝0𖚫z临Т60\\9>PqT"}
+{"prompt": "5't"}
+{"prompt": "語q🔥"}
+{"prompt": "f2l0①mX񟽧R'LLl3"}
+{"prompt": "sж"}
+{"prompt": "wp　U<|im_start|>٤i3JG万丼al/"}
+{"prompt": "W8"}
+{"prompt": "𧕅qUI丵Q^O"}
+{"prompt": "McN/"}
+{"prompt": " <|eot_id|>p^G٥9h\r1🔥8<tool_call>( "}
+{"prompt": "c(Q$ "}
+{"prompt": "N 򀜯🏽乣_٤𧉱"}
+{"prompt": "</s>W"}
+{"prompt": "Ц🏽2b"}
+{"prompt": "Mv 𝇋$w^'LL.é"}
+{"prompt": "串W1Ж5✧"}
+{"prompt": "-u掱 "}
+{"prompt": "4kD2𤏍EьС|> eH"}
+{"prompt": "üÜ▁k٤йc"}
+{"prompt": "au'LLv`٣乒J] <Ф 8"}
+{"prompt": "́1①万G:K*!] s业"}
+{"prompt": "g&r"}
+{"prompt": "👍uSa乨N6 7я^0́乪丞"}
+{"prompt": "'re"}
+{"prompt": "1-丆\\\":=%"}
+{"prompt": "~𨖯3乽৊M8%9乤1<|im_start|>'tE"}
+{"prompt": "{٤ M5]g>R<g+'reR"}
+{"prompt": "d"}
+{"prompt": "OVУ‍G</s>W٣9"}
+{"prompt": ">%"}
+{"prompt": "🦙f31N 6n0S"}
+{"prompt": "V 𐽬𘢂4𛔼"}
+{"prompt": "GQ7C7<T(　"}
+{"prompt": "4́5]D"}
+{"prompt": "7Q٤|"}
+{"prompt": "'s乺E#k'st~\"٣4"}
+{"prompt": "'~a①FSф蕏\"乢I"}
+{"prompt": "F]х²^s:丧k乔"}
+{"prompt": "Т𗢱0<|im_start|>["}
+{"prompt": "m<s>8ั"}
+{"prompt": "Z5't串h"}
+{"prompt": "乯"}
+{"prompt": "<|eot_id|>/"}
+{"prompt": "1\n"}
+{"prompt": "r"}
+{"prompt": "'LL'reG4书G2э𡓠09ัO"}
+{"prompt": "} 𥤣0[INST]丧p#j6"}
+{"prompt": "T񁴹乂7s"}
+{"prompt": "\nx're8B <|im_start|>Z"}
+{"prompt": "çLkh𢇏ф² xj@"}
+{"prompt": "e並3e.)k"}
+{"prompt": "n4𒜧j\n򺍩N9両y\nB"}
+{"prompt": "m\rัि<|T"}
+{"prompt": "$乤!Q58oQш"}
+{"prompt": "f"}
+{"prompt": "K8٤\\"}
+{"prompt": "Zbu一RัD𔭯"}
+{"prompt": "*vZ2H䋞>1i^@主"}
+{"prompt": "Т:0𨙒\\乖*<|im_end|>U|>𓤖"}
+{"prompt": "яj"}
+{"prompt": "}𭩺nB-"}
+{"prompt": "-󵯧テ6"}
+{"prompt": "j٤ mъu4🔥y𔰆0u①K4"}
+{"prompt": "I(*/j:\nT\n8Jk"}
+{"prompt": "٤бmั  4٥U;"}
+{"prompt": "乫　쾣 乯򔆗"}
+{"prompt": "𚺾j18p "}
+{"prompt": "`"}
+{"prompt": " "}
+{"prompt": ",\n_m[f1\nпr"}
+{"prompt": "=𒥎ि's𿽀S٥*R;ç qx乃"}
+{"prompt": "𑘕3g|>$z5KSэBv٣ 3ั"}
+{"prompt": "r"}
+{"prompt": "𶠺6s\ne"}
+{"prompt": "[INST]٣日<|im_end|>6G𨖢Uz05𗣆g1Н:"}
+{"prompt": "]1٤Q9丮ั1D~56V "}
+{"prompt": "6х🔥²^👍ि\tц 𛟢vh'LL"}
+{"prompt": " Qх1C 6"}
+{"prompt": "𝸍\t久~Д٣вN4Z~y4𜤂٤]"}
+{"prompt": "i</s>'LL'LL<|eot_id|>1𣷳y`򷡾ДUL?"}
+{"prompt": "\t<"}
+{"prompt": "g~g𦺹d "}
+{"prompt": "<|\tX<tool_call>맡٤8i]!SV　𚹐"}
+{"prompt": "W\r5's̈ "}
+{"prompt": ")у"}
+{"prompt": "Q<|im_start|>5'sJ0"}
+{"prompt": "<tool_call>𝴹2 N\rY s/乿"}
+{"prompt": " ~"}
+{"prompt": "𮤪9&+l"}
+{"prompt": "}́H"}
+{"prompt": "dtNS5E=%!"}
+{"prompt": "𗛰 [INST]Ф"}
+{"prompt": "8 +2𭧋<|어🔥不,*Y,|>0'"}
+{"prompt": ",ZR'LL\n²7N\"m "}
+{"prompt": "Dat</s>dBि"}
+{"prompt": "<s> >Ф=%~9,r!<丏"}
+{"prompt": "?)_²8乣X? D*5"}
+{"prompt": "²👍hQ)п#　;v‍^^"}
+{"prompt": " ㈕k٥7's-[7Q①🦙gN𤤮"}
+{"prompt": "ꪉ|>T{|[INST]̈']h6"}
+{"prompt": "①"}
+{"prompt": "与尃H义RW \\"}
+{"prompt": "~①9▁UЩ́b=V①j‍ "}
+{"prompt": "p2-9"}
+{"prompt": "( w"}
+{"prompt": "g世丛 J=2𬒦{"}
+{"prompt": "O(Z丽　Л"}
+{"prompt": "?7m8丙6R\r"}
+{"prompt": "жf4"}
+{"prompt": "不7　 j乂Mr#"}
+{"prompt": "Y𝞑-8!́=Зz乴'sั①-S"}
+{"prompt": "5🔥w&'9"}
+{"prompt": "QЬ'?0`A?4ั's!"}
+{"prompt": "▁<𕃴񪡾V2 ²d4uЬ𦽳Cn "}
+{"prompt": "o"}
+{"prompt": ":丟н"}
+{"prompt": "Jy9)1丅8;両²0 |>4фy"}
+{"prompt": ")8)-O丬8　不"}
+{"prompt": " eXf7ñ"}
+{"prompt": "8're"}
+{"prompt": "X=👍у乕ЬnХv/"}
+{"prompt": "s}上么4ü `&T　 煢"}
+{"prompt": "  3&#"}
+{"prompt": " "}
+{"prompt": "F򷕸b3́dัu dw𠢂👍0"}
+{"prompt": " 't%>"}
+{"prompt": "CS |>t{|𖖑\"n乓's@$"}
+{"prompt": "kAy6"}
+{"prompt": "5P5<|im_start|>tA"}
+{"prompt": "]"}
+{"prompt": "\n+N're9r𯵫\\ D"}
+{"prompt": "<|im_end|>b}D,|><tool_call>f٣\nn"}
+{"prompt": "T t "}
+{"prompt": "_"}
+{"prompt": " キ\""}
+{"prompt": ")lt\rr"}
+{"prompt": "о "}
+{"prompt": "d;\n j}굠2"}
+{"prompt": "Hr[<驑\r8"}
+{"prompt": "ч𚶤"}
+{"prompt": "k1𝡱ั񐒠i䁮"}
+{"prompt": "xх 51>F9丐乌\r"}
+{"prompt": "] }7²2K<|im_end|>"}
+{"prompt": "'𡍾p_'LLS%_\t)‍񨖳U\rЧ🦙"}
+{"prompt": "'reVS𪨒[INST]🦙hs[　8乓叔"}
+{"prompt": "@ 丢Ty \n#䮊𹔎 щq'\r且"}
+{"prompt": "n&dg𙸇ᱵ"}
+{"prompt": "\n٤)r乲"}
+{"prompt": "*为fDDЫ ٥򪛑%O"}
+{"prompt": "z\tå<c \rE 6%5\n专"}
+{"prompt": "①|>od"}
+{"prompt": "7캼!,`乨👍т5v\\>"}
+{"prompt": "S"}
+{"prompt": "T\nG ;[ j"}
+{"prompt": "Ь"}
+{"prompt": "t2🏽TМ 7٥D򷁵:i"}
+{"prompt": "?٥zD\reВh</s>_f"}
+{"prompt": "t٣[INST]\n▁фъqtb𯏇 W)"}
+{"prompt": "ि;,　*x<²󦍅<|#f"}
+{"prompt": "<s>V"}
+{"prompt": "~g\\5m\nд2乹D0w"}
+{"prompt": "n[INST]"}
+{"prompt": "h Bm@2"}
+{"prompt": "丕▁2 KU鸉"}
+{"prompt": "i򥈜're'[1*;1R3 "}
+{"prompt": "ि.dh]I?5\r5\n4Mz"}
+{"prompt": "²W"}
+{"prompt": "<|im_end|>>丰𫿩ス"}
+{"prompt": "국A3IU7줢"}
+{"prompt": "-"}
+{"prompt": "& e]Л)"}
+{"prompt": "丸ШZ4u\"k ^pd?👍r"}
+{"prompt": "Gिj&Oku丿0𪔍C:'re8"}
+{"prompt": "!:Н"}
+{"prompt": "( Lिn<|　 5"}
+{"prompt": "0N\n1"}
+{"prompt": "<|h"}
+{"prompt": "F=Q28一73"}
+{"prompt": "9R@1h<tool_call><8\nis0J!"}
+{"prompt": "`!7"}
+{"prompt": "ꝺmMоv0\tDЛ'sGs!👍^"}
+{"prompt": "^#?V7"}
+{"prompt": "j 0p6́rF`t8𝣊l9 </s>"}
+{"prompt": "1'򛻏8²2乺-4一}r"}
+{"prompt": "n,\r!  丨"}
+{"prompt": "b%Ib<tool_call>>"}
+{"prompt": ") A* e\\АВ ю}'tr^"}
+{"prompt": " @񾼶63Yw 𖝁𥨻\nH'YI"}
+{"prompt": "%6　"}
+{"prompt": "e(Qa٤M_40"}
+{"prompt": "乐q▁D~2"}
+{"prompt": "7\\?&丙:乵🦙K"}
+{"prompt": "Нि𧽟jV٥"}
+{"prompt": "乄\nq:<|im_end|><|im_end|>簶APXRj"}
+{"prompt": "v\tL"}
+{"prompt": ";i%丛p8B в"}
+{"prompt": "k44\n2̈"}
+{"prompt": "x語f\r 󁈎xc\t‍٤X"}
+{"prompt": "я\"!t6^E²&2hD\r1 "}
+{"prompt": "'t@죢乃8"}
+{"prompt": "٥H丧勱<tool_call><|eot_id|>²乎\n  "}
+{"prompt": "S丑е35　z*"}
+{"prompt": "3h{'s"}
+{"prompt": "▁S丩дZ򊀈/:Zzv`٤"}
+{"prompt": "乲 𛘍𧲡乙pqV+㊠ V"}
+{"prompt": "　 o"}
+{"prompt": "㼆<v</s><s>S0丠2<|w 㪥"}
+{"prompt": "'re:{<|im_end|>‍񓓢K[INST]<s> \tЩe :"}
+{"prompt": "🦙"}
+{"prompt": " @\ns0pF𭗉с5|y?"}
+{"prompt": "rGAzыv:} 0/乑| y"}
+{"prompt": "𥤶\"8<|eot_id|>V7  ‍8\r2<%dH"}
+{"prompt": "󆷀"}
+{"prompt": "!\"乚郱 н 丌"}
+{"prompt": " \t\"िe丸"}
+{"prompt": "递J'sT‍ [k乤\t't"}
+{"prompt": "hq\\&X@?2lн!:𐕚7<|eot_id|>"}
+{"prompt": "Yि!bpC?▁\r"}
+{"prompt": "3kัJ𪔢<丱"}
+{"prompt": "8"}
+{"prompt": "w?厬'сhSV"}
+{"prompt": "\\ัiJ"}
+{"prompt": "SÍ(=A~B^=hbфя"}
+{"prompt": "𢌽 "}
+{"prompt": "</s><|im_start|>"}
+{"prompt": "\nEV𒿙4й@Кк@"}
+{"prompt": "󧇇fl²𕵃#aキ严М)W􅀄%7"}
+{"prompt": "<|eot_id|>l|>у<|eot_id|>乓\rDB"}
+{"prompt": "9"}
+{"prompt": "i²{Y"}
+{"prompt": "Hl乗цัР丷􊌎\n　 tEf2"}
+{"prompt": "L8нE8\té'LL \rH🏽 o"}
+{"prompt": "のMS2Б`J k乜"}
+{"prompt": "①3L7S&F-"}
+{"prompt": "\tB▁о@𚞺]G ÜH́"}
+{"prompt": "И\r39👍\tDJ中83C𕣑u"}
+{"prompt": "0丟's乿乃　,٣鵢V"}
+{"prompt": " Z\r"}
+{"prompt": "²丙9?<٣M`丢q򜖊vf"}
+{"prompt": "HЧ<|im_end|>з)　　a"}
+{"prompt": "z<tool_call>↻="}
+{"prompt": "pa,乑cмd[&L七𯄤Te%c"}
+{"prompt": "c479乓W\"{D6%l٤"}
+{"prompt": "0m 𔯸񆦳>y|D<|im_start|>T\\"}
+{"prompt": "uЖ9m𕆍\t🏽'reю<üM"}
+{"prompt": "D3R𛟱日h34r"}
+{"prompt": "bm!/𑝈/mx </s>%　🏽 "}
+{"prompt": "+7🦙I1 еwR7ТD"}
+{"prompt": "g're/𬩡PЪ,Zy 5"}
+{"prompt": "|l'LL🔥_ S▁①𯹡c[INST]<s>1"}
+{"prompt": "/<|шwз4|>tL\\🔥tQL-"}
+{"prompt": "_'-v乖\\s,1<|im_end|>vB"}
+{"prompt": "r乞6|>\r񐹭'FСU𨄆ю"}
+{"prompt": "u󘽝乊31严åj'I8㘼"}
+{"prompt": "쇩F'sि[uL乢_𓶻}p0"}
+{"prompt": " +́;[INST]"}
+{"prompt": "tY\rЫ"}
+{"prompt": "|"}
+{"prompt": "\rГd KG"}
+{"prompt": "1 Vñ٥.tv2)ý"}
+{"prompt": "]乂̈6乎X\" ill2"}
+{"prompt": ">?ъ@2👍𭹍丹æ7\n'LL丬語"}
+{"prompt": "XP丩;楨i乥/丣"}
+{"prompt": "񦵷stkB"}
+{"prompt": "p"}
+{"prompt": "}6\\万ез𨿊LЗ6 \n$Lw"}
+{"prompt": "'res1r‍(OG0"}
+{"prompt": "?"}
+{"prompt": "①乎[#_4٤"}
+{"prompt": "7iV"}
+{"prompt": "H' _𦟑43H🔥́$"}
+{"prompt": "!\r󈤂j]Kि<|im_end|>　6tbq+񌔄*"}
+{"prompt": "@"}
+{"prompt": "𖟩Р‍丿're𢣎Зn"}
+{"prompt": "丿H:ั_И92"}
+{"prompt": "𗤡[;kma 乃3u3-4*"}
+{"prompt": "7　"}
+{"prompt": "#①买👍P"}
+{"prompt": "8l𥿣P ́🠸ัuB"}
+{"prompt": "𝒧٥👍Rup̈򔂩[DЪ"}
+{"prompt": "ew27kPo 2K丁 "}
+{"prompt": "乲𛫼zัf"}
+{"prompt": "Qp乖么д+\nЛO"}
+{"prompt": "ñJ▁s"}
+{"prompt": "'re_ 丼"}
+{"prompt": " 4~^<tool_call>H] 0bXt"}
+{"prompt": ",XC?>ᳳ4tb "}
+{"prompt": "  𛥂jбvU"}
+{"prompt": "D\r\tre#"}
+{"prompt": "<"}
+{"prompt": "l 🔥q1`4 S"}
+{"prompt": "Q~48i𒠥&I一$²"}
+{"prompt": "Rス\t"}
+{"prompt": "KH"}
+{"prompt": "5)　4 乃򌺮H'LLmB1"}
+{"prompt": "ДD7也т~}🦙乜x𠟾P"}
+{"prompt": "m乘V"}
+{"prompt": "丣𕞗h𪁋@𓟄't"}
+{"prompt": "'"}
+{"prompt": "8𨬇t<|u\r٣>Ng{* ²]$"}
+{"prompt": "\"S"}
+{"prompt": "eoPA骝=̈<"}
+{"prompt": " b?YyFJn🦙{"}
+{"prompt": "𗫬[INST]8٣$1*rHQ"}
+{"prompt": "</s>шpaL+👍3H"}
+{"prompt": "K \tøl1ั.丯並 Ujb"}
+{"prompt": "7ьNB\n흁"}
+{"prompt": "丁;}/'LL될𫢍{J乍ि²"}
+{"prompt": "　<s>业+oUs𪓕²9ัY\"N"}
+{"prompt": "iR*</s>񌎒٤NV v"}
+{"prompt": "i丙3丮pv"}
+{"prompt": "🔥)3E "}
+{"prompt": "a"}
+{"prompt": "G"}
+{"prompt": "КNスC&7 ‍\nH?9"}
+{"prompt": "\n6\t'th2Ugx<tool_call>5\\FО①"}
+{"prompt": "(V&Yм⟕`@g26jP与①󩌡"}
+{"prompt": "ั乚Rтo-\n 6"}
+{"prompt": "🏽YtН􉒸H٥(m1W$"}
+{"prompt": "Х[GР8艶"}
+{"prompt": "\nK7xJ't7%wh0J>丨"}
+{"prompt": "x)丯/<s>{ 9\r\\- "}
+{"prompt": "&6I]▁7‍7"}
+{"prompt": ",xÜ>6ڄ<XR6[H▁"}
+{"prompt": "_</s>%丰乱乏󀇉\rg²fз"}
+{"prompt": "+Z\\!ि"}
+{"prompt": "<|im_end|>q专 *8٥S0ш٣\rJ<|im_start|>̈"}
+{"prompt": "🏽*sэ<|im_start|>\n8𠙋"}
+{"prompt": ")%4f +$lQwz&"}
+{"prompt": "/丙h\n<|\" 󟴁i</s>ि0'sPd"}
+{"prompt": "　2m5M"}
+{"prompt": "mZ񀨩"}
+{"prompt": "0񠺺<s>7>s ;𕽝z‍%5c)"}
+{"prompt": "ÉxжSf 🔥+: ~z z"}
+{"prompt": "yмd72٣9b}Ey乆专\r"}
+{"prompt": "ั²‍)𒛣<|im_end|>狦У3ト"}
+{"prompt": "𤱚tc"}
+{"prompt": " U主ि|z溓"}
+{"prompt": "ъM‍²'sq "}
+{"prompt": "J|<|eot_id|>c}"}
+{"prompt": "Q42/7٥>٤H<|im_end|>-"}
+{"prompt": ")_# 乡Aou1\\‍"}
+{"prompt": ",m~@　-&t\tFv]<}𛷤"}
+{"prompt": "uo 乙3G👍81 "}
+{"prompt": "vF‍ø"}
+{"prompt": "V<|im_end|>\t=　^8'LLru乇YlY👍б"}
+{"prompt": " 1乛a"}
+{"prompt": "-中;m<|im_end|>@Щ[乡:G\t]6"}
+{"prompt": "[\"y▁|> EJ ̈г@e"}
+{"prompt": "|>C8[INST]n业,'tbХ:\r."}
+{"prompt": "296Ф𯬇ि"}
+{"prompt": "\n9٤и"}
+{"prompt": "M<|im_end|>"}
+{"prompt": "ш󆻤+2kS AัtO乓丩%<tool_call>"}
+{"prompt": "=󩦿СHkJि\r#"}
+{"prompt": "Pr4"}
+{"prompt": "q:@"}
+{"prompt": "́ "}
+{"prompt": "~\r.6𚯺're𮊌Q日:"}
+{"prompt": "t🔥 𧎱^8pk.iq󏖮tY: "}
+{"prompt": "['sСaC\rQoि "}
+{"prompt": "a丐 v<|im_end|>2 1&  ТV"}
+{"prompt": "٤$i"}
+{"prompt": "́oj$乹#N_乩{u𛤣tu4A"}
+{"prompt": "①N4丹"}
+{"prompt": "̈9bх6 Ve"}
+{"prompt": "7 Qo`b<tool_call>M5I0 d丷"}
+{"prompt": "i'LL3$①Vb񗏣"}
+{"prompt": "5-Gz"}
+{"prompt": "\n`义.P􀫙;Wि"}
+{"prompt": "𪴨<|eot_id|>}3N𬐳L"}
+{"prompt": "Xæ6h乊[INST]5󷵷!^ "}
+{"prompt": "#l٤xM|>J23ç[R٣eO"}
+{"prompt": "|У&'t"}
+{"prompt": "'séa򩑰\"ЬoD;\r ]🏽񋯓不"}
+{"prompt": "Q🏽d"}
+{"prompt": " dDBo"}
+{"prompt": "В𙀋 \tt𨚲G48BÉp"}
+{"prompt": "Ь,EM|>\rф琤7  m\\①"}
+{"prompt": "и 4 丢　　"}
+{"prompt": "ыc)h潂ou :>oKि󭔜d"}
+{"prompt": "~j{s!2ꀮ"}
+{"prompt": "r乂%"}
+{"prompt": "D"}
+{"prompt": "丒fARu𚲕两Q乪²'re<٣16$"}
+{"prompt": "yŹw \n1</s>"}
+{"prompt": "丝D+"}
+{"prompt": "s 8l𑱊8👍丛nि𙗡v"}
+{"prompt": "Q4MT&\t🏽<o J:>F+"}
+{"prompt": " 2不{𘚥甛3L=　𡖌8<s>W"}
+{"prompt": "{iS ̈"}
+{"prompt": "]'réA"}
+{"prompt": "‍乙𧱈5"}
+{"prompt": "乜　ኖ乓 C<|<|🦙+九0}"}
+{"prompt": "a丐a"}
+{"prompt": "򪲿"}
+{"prompt": "Ü񧧿🦙<|eot_id|>P ́"}
+{"prompt": "_LyO"}
+{"prompt": "a&чꭥю"}
+{"prompt": "<think>\nLet me check.\n</think>\n\nThe answer is 42."}
+{"prompt": "<tool_response>\n{\"temp\": 21}\n</tool_response>"}
+{"prompt": "<|python_tag|>search.call(query=\"x\")<|eom_id|>"}
+{"prompt": "<|finetune_right_pad_id|><|reserved_special_token_247|><|reserved_special_token_0|>"}
+{"prompt": "<|vision_start|><|image_pad|><|video_pad|><|vision_end|> describe"}
+{"prompt": "<|object_ref_start|>cat<|object_ref_end|><|box_start|>(1,2)<|box_end|><|quad_start|><|quad_end|>"}
+{"prompt": "<|fim_prefix|>def f(<|fim_suffix|>):<|fim_middle|>"}
+{"prompt": "x<think>y</think>z <think></think>"}
+{"prompt": "</s> and <s> inside text"}
+{"prompt": "<|start_header_id|>ipython<|end_header_id|>\n\n{\"ok\": true}<|eot_id|>"}

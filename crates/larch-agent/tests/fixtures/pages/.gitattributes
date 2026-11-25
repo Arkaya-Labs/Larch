@@ -1,0 +1,2 @@
+# A PDF is bytes: a line-ending conversion on checkout moves its xref offsets.
+*.pdf binary

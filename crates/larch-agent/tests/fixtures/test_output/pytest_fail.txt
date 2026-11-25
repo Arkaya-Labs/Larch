@@ -1,0 +1,40 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.17, pytest-9.1.1, pluggy-1.6.0
+rootdir: /work/py
+configfile: pyproject.toml
+collected 8 items
+
+tests/test_math.py ...sFF.E                                              [100%]
+
+==================================== ERRORS ====================================
+_____________________ ERROR at setup of test_uses_fixture ______________________
+file /work/py/tests/test_math.py, line 27
+  def test_uses_fixture(nope):
+E       fixture 'nope' not found
+>       available fixtures: capfd, capfdbinary, caplog, capsys, capsysbinary, capteesys, doctest_namespace, monkeypatch, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, subtests, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+/work/py/tests/test_math.py:27
+=================================== FAILURES ===================================
+___________________________________ test_sub ___________________________________
+
+    def test_sub():
+>       assert 3 - 1 == 1
+E       assert (3 - 1) == 1
+
+tests/test_math.py:19: AssertionError
+_________________________________ test_half[0] _________________________________
+
+n = 0
+
+    @pytest.mark.parametrize("n", [0, 4])
+    def test_half(n):
+>       assert n / 2 == 2
+E       assert (0 / 2) == 2
+
+tests/test_math.py:24: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_math.py::test_sub - assert (3 - 1) == 1
+FAILED tests/test_math.py::test_half[0] - assert (0 / 2) == 2
+ERROR tests/test_math.py::test_uses_fixture
+=============== 2 failed, 4 passed, 1 skipped, 1 error in 0.03s ================

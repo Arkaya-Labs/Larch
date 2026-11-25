@@ -1,0 +1,24 @@
+Home internet: router setup notes
+
+Provider: Riverlink Fibre. Account number RF-448812. Support 555-0166.
+Router: the white box in the hall cupboard.
+
+Wi-Fi network name: Alder3B-Home
+Wi-Fi password: maple-otter-58
+Guest network: Alder3B-Guest, password on the fridge card
+
+Router admin page: http://192.168.1.1 (user admin, password on the sticker under the router).
+
+If the internet drops:
+1. Check the light on the fibre box. Green is fine; red means a line fault, call support.
+2. Restart the router: switch it off for 30 seconds and on again.
+3. If one device cannot connect, forget the network on that device and join again.
+
+Speed: 500 Mbps down, 100 Mbps up. Measured 470 down on 1 October 2026.
+The printer and the smart speaker are on the 2.4 GHz band; everything else uses 5 GHz.
+
+Devices on the network: two laptops, two phones, the printer in the study, the smart speaker in
+the kitchen and the television. The router updates itself at 3:00 on Sundays.
+
+Contract: 24 months from 1 September 2025 at $45 a month, then $60 a month unless renewed. The
+router stays with Riverlink; return it in its box when the contract ends.

@@ -1,0 +1,15 @@
+{
+ "synthetic": true,
+ "hits": [
+  {
+   "title": "Recreational Flyers and Community-Based Organizations | FAA",
+   "url": "https://www.faa.example/uas/recreational_flyers",
+   "snippet": "Recreational flyers in the United States must pass TRUST."
+  },
+  {
+   "title": "Flyer ID and Operator ID | UK Civil Aviation Authority",
+   "url": "https://www.caa.example/drones/flyer-id",
+   "snippet": "In the UK you need a Flyer ID to fly a drone of 100 g or more."
+  }
+ ]
+}

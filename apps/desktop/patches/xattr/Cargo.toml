@@ -1,0 +1,10 @@
+[package]
+name = "xattr"
+version = "0.2.3"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+[features]
+default = ["unsupported"]
+unsupported = []

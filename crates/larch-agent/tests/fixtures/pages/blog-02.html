@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Why we moved our nightly jobs off cron</title>
+    <meta name="HandheldFriendly" content="True">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/assets/built/screen.css?v=8c2d1e">
+    <link rel="icon" href="https://engineering.loomfield.io/favicon.png" type="image/png">
+    <link rel="canonical" href="https://engineering.loomfield.io/why-we-moved-off-cron/">
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    <meta property="og:site_name" content="Loomfield Engineering">
+    <meta property="og:type" content="article">
+    <meta property="article:published_time" content="2026-10-07T08:00:00.000Z">
+    <meta name="generator" content="Ghost 5.96">
+    <script defer src="https://cdn.jsdelivr.net/ghost/portal@~2.44/umd/portal.min.js" data-ghost="https://engineering.loomfield.io/"></script>
+    <script>
+        var footnote = "<p class='fn'>See part 2.</p></div>";
+    </script>
+    <style id="gh-members-styles">.gh-post-upgrade-cta{display:flex}</style>
+</head>
+<body class="post-template tag-infrastructure">
+<div class="viewport">
+    <header id="gh-head" class="gh-head outer">
+        <div class="gh-head-inner inner">
+            <div class="gh-head-brand"><a class="gh-head-logo" href="https://engineering.loomfield.io">Loomfield Engineering</a></div>
+            <nav class="gh-head-menu"><ul class="nav"><li class="nav-home"><a href="https://engineering.loomfield.io/">Home</a></li><li class="nav-infrastructure"><a href="https://engineering.loomfield.io/tag/infrastructure/">Infrastructure</a></li><li class="nav-careers"><a href="https://loomfield.io/careers">Careers</a></li></ul></nav>
+            <div class="gh-head-actions"><a class="gh-head-button" href="#/portal/signup" data-portal="signup">Subscribe</a></div>
+        </div>
+    </header>
+    <div class="site-content">
+        <header class="article-header gh-canvas">
+            <div class="article-tag post-card-tags"><span class="post-card-primary-tag"><a href="/tag/infrastructure/">Infrastructure</a></span></div>
+            <h1 class="article-title">Why we moved our nightly jobs off cron</h1>
+            <p class="article-excerpt">Forty scheduled jobs, one overloaded box, and the boring queue that replaced them.</p>
+            <div class="article-byline"><a href="/author/hana/">Hana Kowalczyk</a> <time datetime="2026-10-07">Oct 7, 2026</time> &mdash; 6 min read</div>
+        </header>
+        <section class="gh-content gh-canvas post-content">
+            <p>For six years, every nightly job at Loomfield ran from a single crontab on a machine we called <code>batch-01</code>. Billing exports, search reindexing, and the customer usage reports all started at 2 a.m., and for a long time that was fine.</p>
+            <p>By this spring the crontab had grown to forty entries, and the jobs had started to overlap. When reindexing ran long, billing exports would start on a box with no free memory, fail halfway through, and leave partial files for the finance team to clean up by hand.</p>
+            <h2 id="what-we-tried-first">What we tried first</h2>
+            <p>Our first fix was to spread the start times out, which helped for about a month. Then a large customer doubled their data, reindexing took twice as long, and we were back where we started. Staggering start times only works if you know how long every job takes, and we didn&#8217;t.</p>
+            <h2 id="the-queue">The queue</h2>
+            <p>We replaced cron with a small job queue on top of our existing Postgres database. A scheduler inserts one row per job each night, and a pool of workers claims rows with <code>SELECT &hellip; FOR UPDATE SKIP LOCKED</code>, so no job runs twice and no worker sits idle while others are busy.</p>
+            <pre><code>INSERT INTO jobs (name, run_after)
+SELECT name, date_trunc('day', now()) + start_offset
+FROM schedules
+ON CONFLICT (name, run_after) DO NOTHING;</code></pre>
+            <p>Failed jobs are retried with a delay, and after three failures they are parked and a message is posted to the on-call channel. The whole system is about four hundred lines of Go, and we have not had a partial billing export since June.</p>
+            <p>If you want to read more about the pattern, the <a href="https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE">Postgres documentation on row locking</a> is a good place to start.</p>
+        </section>
+        <section class="article-comments gh-canvas comments"><h3>Comments</h3><p>Sign in or become a member to join the conversation.</p></section>
+        <aside class="read-more-wrap outer"><h2>Read more</h2><ul><li><a href="/postgres-upgrade-in-place/">Upgrading Postgres in place without downtime</a></li><li><a href="/on-call-handbook/">Our on-call handbook, two years later</a></li></ul></aside>
+    </div>
+    <footer class="site-footer outer"><div class="inner"><section class="copyright"><a href="https://engineering.loomfield.io">Loomfield Engineering</a> &copy; 2026</section><nav class="site-footer-nav"><a href="https://ghost.org/" target="_blank" rel="noopener">Powered by Ghost</a></nav></div></footer>
+</div>
+</body>
+</html>

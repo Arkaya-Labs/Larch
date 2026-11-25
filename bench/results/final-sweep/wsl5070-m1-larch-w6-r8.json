@@ -1,0 +1,87 @@
+{
+  "schema": "larch-bench/1",
+  "engine": "larch",
+  "driver": "larch bench",
+  "mode": "fixed",
+  "llama_cpp": null,
+  "system_info": "Cuda NVIDIA GeForce RTX 5070 Ti",
+  "machine": "wsl5070",
+  "started_at": "2026-10-17T08:00:41Z",
+  "build": "0d7480186d2fc025aceabd315f8573f8e7202acd12e52ccafcc65a5aa57e6ced",
+  "model": "m1.gguf",
+  "date_string": "26 Jul 2024",
+  "params": {
+    "n_ctx": null,
+    "n_ctx_seq": 8192,
+    "n_seq_max": 16.0,
+    "n_batch": null,
+    "n_ubatch": null,
+    "n_gpu_layers": null,
+    "flash_attn": null,
+    "type_k": null,
+    "type_v": null,
+    "n_threads": null,
+    "n_threads_batch": null,
+    "kv_unified": null,
+    "telemetry": "t1"
+  },
+  "routes": {
+    "quant_i8": null,
+    "prefill_tc": false,
+    "mixed_graphs": false
+  },
+  "fixed": [
+    {
+      "pp": 512,
+      "tg": 128,
+      "pl": 1,
+      "n_kv": 640,
+      "t_pp": 0.10391108,
+      "speed_pp": 4927.289755818148,
+      "t_tg": 0.929370526,
+      "speed_tg": 137.7276300668911,
+      "t": 1.033281606,
+      "speed": 619.3858443658388,
+      "cached_tokens": 512
+    },
+    {
+      "pp": 512,
+      "tg": 128,
+      "pl": 4,
+      "n_kv": 2560,
+      "t_pp": 0.416545884,
+      "speed_pp": 4916.625223453175,
+      "t_tg": 1.228325837,
+      "speed_tg": 416.82750991421176,
+      "t": 1.6448717210000001,
+      "speed": 1556.352369194874,
+      "cached_tokens": 2048
+    },
+    {
+      "pp": 512,
+      "tg": 128,
+      "pl": 8,
+      "n_kv": 5120,
+      "t_pp": 0.834847272,
+      "speed_pp": 4906.286619572256,
+      "t_tg": 1.269978936,
+      "speed_tg": 806.3125859592997,
+      "t": 2.104826208,
+      "speed": 2432.50486930463,
+      "cached_tokens": 4096
+    },
+    {
+      "pp": 512,
+      "tg": 128,
+      "pl": 16,
+      "n_kv": 10240,
+      "t_pp": 1.6693195140000001,
+      "speed_pp": 4907.3888679168695,
+      "t_tg": 1.5818923219999999,
+      "speed_tg": 1294.651963043032,
+      "t": 3.251211836,
+      "speed": 3149.5948331064087,
+      "cached_tokens": 8192
+    }
+  ]
+}

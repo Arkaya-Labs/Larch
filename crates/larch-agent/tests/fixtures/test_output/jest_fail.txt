@@ -1,0 +1,44 @@
+
+> toy@0.0.0 test
+> jest
+
+FAIL ./neg.test.js
+  ● adds negatives
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: -3
+
+      2 |
+      3 | test('adds negatives', () => {
+    > 4 |   expect(sum(-1, -2)).toBe(3);
+        |                       ^
+      5 | });
+      6 |
+
+      at Object.toBe (neg.test.js:4:23)
+
+FAIL ./sum.test.js
+  ● sum › adds 2 + 2
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 5
+    Received: 4
+
+      10 | describe('sum', () => {
+      11 |   test('adds 2 + 2', () => {
+    > 12 |     expect(sum(2, 2)).toBe(5);
+         |                       ^
+      13 |   });
+      14 | });
+      15 |
+
+      at Object.toBe (sum.test.js:12:23)
+
+Test Suites: 2 failed, 2 total
+Tests:       2 failed, 1 skipped, 1 passed, 4 total
+Snapshots:   0 total
+Time:        0.402 s, estimated 1 s
+Ran all test suites.

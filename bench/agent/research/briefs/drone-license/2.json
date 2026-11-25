@@ -1,0 +1,11 @@
+{
+ "url": "https://www.caa.example/drones/flyer-id",
+ "final_url": "https://www.caa.example/drones/flyer-id",
+ "fetched_at": "2026-10-30T15:00:00Z",
+ "sha256": "a9d8d05c790ce0b8a9e5fec2136d812597d3a1c6bc4b625774bc984e32b31573",
+ "title": "Flyer ID and Operator ID | UK Civil Aviation Authority",
+ "text": "# Flyer ID and Operator ID\n\nIn the UK you must pass a free online theory test to get a Flyer ID before you fly a drone or model aircraft weighing 100 g or more.\n\nYou need an Operator ID for a drone of 250 g or more, or one with a camera.\n",
+ "bytes": 238,
+ "truncated": false,
+ "published": null
+}

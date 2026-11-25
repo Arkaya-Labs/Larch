@@ -1,0 +1,113 @@
+{
+  "cache_prompt": false,
+  "cancel_rate": 0.0,
+  "concurrency": 1,
+  "date_string": "26 Jul 2024",
+  "driver": "larch bench",
+  "engine": "larch",
+  "knob_timeline": [],
+  "llama_cpp": null,
+  "machine": "wsl5070",
+  "mode": "run",
+  "model": "m1.gguf",
+  "params": {
+    "flash_attn": null,
+    "kv_unified": null,
+    "n_batch": null,
+    "n_ctx": null,
+    "n_ctx_seq": 8192,
+    "n_gpu_layers": null,
+    "n_seq_max": 16.0,
+    "n_threads": null,
+    "n_threads_batch": null,
+    "n_ubatch": null,
+    "telemetry": "t1",
+    "type_k": null,
+    "type_v": null
+  },
+  "replay": "scripted",
+  "requests": [
+    {
+      "cached_tokens": 0,
+      "client": 0,
+      "conv": "w5-2048",
+      "e2e_ms": 14576.298372,
+      "error": null,
+      "evaluated_tokens": 2083,
+      "gen_tokens": 128,
+      "max_tokens": 128,
+      "prompt_sha256": "d8cfc8187dc8605488b76dfe50c31f1ca7be3e88067d7864b74d51dce2c0de6b",
+      "prompt_tokens": 2083,
+      "slot": 0,
+      "t_done_ms": 14576.753281,
+      "t_first_ms": 1725.416501,
+      "t_submit_ms": 0.45490899999999995,
+      "tpot_ms": 101.19162818897638,
+      "ttft_ms": 1724.9615919999999,
+      "turn": 0
+    },
+    {
+      "cached_tokens": 0,
+      "client": 0,
+      "conv": "w5-4096",
+      "e2e_ms": 20051.174550999996,
+      "error": null,
+      "evaluated_tokens": 4131,
+      "gen_tokens": 128,
+      "max_tokens": 128,
+      "prompt_sha256": "1c7669efa60adc5cafdf0f03ce5860da7dcbbcf91e65a2b84c5d4919a021a625",
+      "prompt_tokens": 4131,
+      "slot": 0,
+      "t_done_ms": 34627.989569,
+      "t_first_ms": 19289.898505,
+      "t_submit_ms": 14576.815018,
+      "tpot_ms": 120.77237058267714,
+      "ttft_ms": 4713.083487000002,
+      "turn": 0
+    }
+  ],
+  "schema": "larch-bench/1",
+  "started_at": "2026-10-09T06:01:55Z",
+  "summary": {
+    "agg_tok_s": 7.3929606168503375,
+    "cached_tokens": 0,
+    "cancelled": 0,
+    "e2e_ms": {
+      "max": 20051.174550999996,
+      "mean": 17313.736461499997,
+      "p50": 14576.298372,
+      "p99": 20051.174550999996
+    },
+    "evaluated_tokens": 6214,
+    "failures": 0,
+    "gen_tokens": 256,
+    "prompt_tokens": 6214,
+    "requests": 2,
+    "tpot_ms": {
+      "max": 120.77237058267714,
+      "mean": 110.98199938582675,
+      "p50": 101.19162818897638,
+      "p99": 120.77237058267714
+    },
+    "ttft_ms": {
+      "max": 4713.083487000002,
+      "mean": 3219.0225395000007,
+      "p50": 1724.9615919999999,
+      "p99": 4713.083487000002
+    },
+    "wall_s": 34.627534659999995
+  },
+  "system_info": "Cuda NVIDIA GeForce RTX 5070 Ti",
+  "telemetry": {
+    "achieved_gbps": 45.651169784425754,
+    "dropped": 0,
+    "engine_samples": 268,
+    "guardrail_trips": 0,
+    "revisions": []
+  },
+  "workload": {
+    "conversations": 2,
+    "file": "w5-longprompt.jsonl",
+    "sha256": "fa8030c67a0c4a5968354b7605b919558292a9818ec77da442fbb1cf509cfec1"
+  }
+}

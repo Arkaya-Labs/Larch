@@ -1,0 +1,8 @@
+# A cancelled call stops and is never answered; the server keeps answering.
+> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.0.0"}}}
+< {"jsonrpc":"2.0","id":1,"result":"*"}
+> {"jsonrpc":"2.0","method":"notifications/initialized"}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"slow","arguments":{}}}
+> {"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2,"reason":"the user pressed Esc"}}
+> {"jsonrpc":"2.0","id":3,"method":"ping"}
+< {"jsonrpc":"2.0","id":3,"result":{}}

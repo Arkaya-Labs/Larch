@@ -1,0 +1,5 @@
+gen_term_cargo_tr
+gen_term_npm_tr
+gen_term_git_tr
+gen_term_pytest_tr
+gen_buildlog_ci_tr

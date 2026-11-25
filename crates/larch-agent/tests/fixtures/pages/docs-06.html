@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tallyf(1) &mdash; Arch manual pages</title>
+<meta name="description" content="tallyf - count and summarize delimited fields">
+<link rel="stylesheet" type="text/css" href="/static/archlinux-common/archweb.css">
+<link rel="stylesheet" type="text/css" href="/static/man_page.css">
+<link rel="icon" type="image/png" href="/static/archlinux-common/favicon.png">
+<link rel="search" type="application/opensearchdescription+xml" href="/opensearch.xml" title="Arch manual pages">
+<script>
+  function copyPermalink(){ navigator.clipboard.writeText(location.href); }
+  var hint = '<div class="hint"><p>Press / to search</p></div>';
+</script>
+<style>
+  .man-page pre{margin-left:2em}
+  #archnavbar{height:40px}
+</style>
+</head>
+<body>
+<header id="archnavbar">
+  <div id="logo"><a href="https://archlinux.org" title="Return to the main page">Arch Linux</a></div>
+  <nav id="archnavbarmenu">
+    <ul id="archnavbarlist">
+      <li id="anb-home"><a href="https://archlinux.org" title="Arch news, packages, projects and more">Home</a></li>
+      <li id="anb-packages"><a href="https://archlinux.org/packages/" title="Arch Package Database">Packages</a></li>
+      <li id="anb-forums"><a href="https://bbs.archlinux.org/" title="Community forums">Forums</a></li>
+      <li id="anb-wiki"><a href="https://wiki.archlinux.org/" title="Community documentation">Wiki</a></li>
+      <li id="anb-man" class="anb-selected"><a href="/" title="Manual pages">Manual Pages</a></li>
+    </ul>
+  </nav>
+</header>
+<div id="content-left-wrapper">
+<div id="content-left">
+<h1 class="page-title">tallyf(1) &mdash; Linux manual page</h1>
+<div class="content man-page" id="manpage">
+<h2 id="NAME">NAME</h2>
+<p>tallyf - count and summarize delimited fields</p>
+<h2 id="SYNOPSIS">SYNOPSIS</h2>
+<pre><b>tallyf</b> [<b>-d</b> <i>delim</i>] [<b>-f</b> <i>list</i>] [<b>--json</b>] [<i>file</i> ...]</pre>
+<h2 id="DESCRIPTION">DESCRIPTION</h2>
+<p><b>tallyf</b> reads lines from each <i>file</i>, or from standard input when no file is given, and splits every line on a delimiter. It then counts how often each distinct value appears in the selected fields, and prints the counts in descending order.</p>
+<p>Unlike a pipeline of <b>cut</b>, <b>sort</b> and <b>uniq</b>, tallyf keeps only one table of counts in memory, so it handles very large inputs without temporary files. Lines with fewer fields than requested are skipped, and a warning is printed once per file.</p>
+<p>Output is plain text by default, with one value per line, followed by a tab and its count. With <b>--json</b>, a single JSON object is printed instead, which is easier to feed into other programs.</p>
+<h2 id="OPTIONS">OPTIONS</h2>
+<dl>
+<dt><b>-d</b> <i>delim</i></dt><dd>Use <i>delim</i> as the field separator. The default is a tab character.</dd>
+<dt><b>-f</b> <i>list</i></dt><dd>Select fields by number, starting at 1. Ranges such as <b>2-4</b> and lists such as <b>1,3</b> are accepted.</dd>
+<dt><b>--json</b></dt><dd>Print the result as JSON.</dd>
+</dl>
+<h2 id="EXIT_STATUS">EXIT STATUS</h2>
+<p>Exit status is 0 on success, 1 if any input file could not be read, and 2 on invalid options.</p>
+<h2 id="EXAMPLES">EXAMPLES</h2>
+<pre>$ tallyf -d , -f 3 orders.csv | head -n 3
+shipped	1824
+pending	311
+returned	27</pre>
+<h2 id="SEE_ALSO">SEE ALSO</h2>
+<p><a href="/man/cut.1.en">cut(1)</a>, <a href="/man/sort.1.en">sort(1)</a>, <a href="/man/uniq.1.en">uniq(1)</a></p>
+</div>
+</div>
+</div>
+<div id="content-right">
+<aside id="sidebar">
+  <h4>Package information</h4>
+  <dl><dt>Package name:</dt><dd><a href="https://archlinux.org/packages/?q=tallyf">extra/tallyf</a></dd><dt>Version:</dt><dd>0.9.4-1</dd><dt>Upstream:</dt><dd><a href="https://tallyf.example.org/">https://tallyf.example.org/</a></dd></dl>
+  <h4>Table of contents</h4>
+  <ul><li><a href="#NAME">NAME</a></li><li><a href="#SYNOPSIS">SYNOPSIS</a></li><li><a href="#DESCRIPTION">DESCRIPTION</a></li><li><a href="#OPTIONS">OPTIONS</a></li></ul>
+</aside>
+</div>
+<footer id="footer"><p>Powered by archmanweb, using mandoc for the conversion of manual pages.</p><p>The website is available under the terms of the GPL-3.0 license.</p></footer>
+</body>
+</html>

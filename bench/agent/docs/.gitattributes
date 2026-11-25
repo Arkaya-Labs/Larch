@@ -1,0 +1,7 @@
+# The skill reads these files byte for byte: chunk sizes, quote positions and the --check
+# comparison assume LF line ends on every checkout, Windows included.
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.py text eol=lf
+*.pdf binary

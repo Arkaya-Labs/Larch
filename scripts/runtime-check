@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# CPU validation for an already fetched, locked workspace.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export LARCH_BACKEND=CPU
+export CARGO_NET_OFFLINE=true
+
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+# The workspace run covers larch-task, larch-agent and larch-app: none has benches.
+cargo test --locked --workspace

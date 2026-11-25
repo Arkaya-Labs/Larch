@@ -1,0 +1,175 @@
+name: runtime CPU (hosted)
+
+# Only code already accepted into dev may run in the secret-bearing job. In
+# particular, pull_request_target must never check out or execute a PR head.
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+  pull_request:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-cpu:
+    if: github.repository_owner == 'Arkaya-Labs' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      LARCH_BACKEND: CPU
+      CARGO_TERM_COLOR: always
+      CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install pinned build tools
+        run: |
+          python3 -m pip install --user --break-system-packages 'cmake==3.31.6' 'ninja==1.11.1.4'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          rustup toolchain install 1.97 --profile minimal --component rustfmt --component clippy
+      - name: Verify toolchain
+        run: |
+          rustc --version
+          cargo --version
+          cmake --version
+          ninja --version
+      - name: Validate runtime and workspace
+        run: bash scripts/runtime-check
+
+  runtime-crate-pr:
+    if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: never
+      TMPDIR: /tmp
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install Rust 1.97
+        run: rustup toolchain install 1.97 --profile minimal --component rustfmt --component clippy
+      - name: Prepare standalone runtime crate
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f crates/larch-task/Cargo.toml ]]; then
+            echo 'No larch-task crate in this checkout; standalone runtime validation not performed.'
+            exit 0
+          fi
+          echo 'present=true' >> "$GITHUB_OUTPUT"
+          stage="$RUNNER_TEMP/runtime-crate"
+          mkdir -p "$stage"
+          cp -a crates/larch-task "$stage/larch-task"
+          # The Windows pipe transport's OS glue; only larch-task is checked below.
+          cp -a crates/larch-sys "$stage/larch-sys"
+          export RUNTIME_STAGE="$stage"
+          # Preserve workspace package and lint inheritance without importing
+          # the root's private git patches or unrelated workspace members.
+          python3 - <<'PYWORKSPACE'
+          import os, pathlib, re
+          root = pathlib.Path('Cargo.toml').read_text()
+          pattern = r'(?ms)^\[(workspace\.package|workspace\.lints(?:\.[^]\n]+)?)\][^\n]*\n.*?(?=^\[|\Z)'
+          sections = list(re.finditer(pattern, root))
+          names = [match.group(1) for match in sections]
+          if names.count('workspace.package') != 1 or len(names) != len(set(names)) or not any(name.startswith('workspace.lints') for name in names):
+              raise SystemExit('could not preserve root workspace package/lints')
+          manifest = '[workspace]\nresolver = "3"\nmembers = ["larch-task"]\n\n'
+          manifest += '\n'.join(match.group(0) for match in sections)
+          pathlib.Path(os.environ['RUNTIME_STAGE'], 'Cargo.toml').write_text(manifest)
+          PYWORKSPACE
+          cp rust-toolchain.toml "$stage/rust-toolchain.toml"
+          cd "$stage"
+          # This separate lock is intentionally re-resolved: it is not evidence
+          # that the repository workspace lock or private adapters compile.
+          cargo +1.97 generate-lockfile
+          echo 'Standalone runtime source and resolved lock checksums:'
+          shasum -a 256 Cargo.lock rust-toolchain.toml
+          find larch-task -type f -exec shasum -a 256 {} + | sort
+      - name: Check standalone formatting
+        if: ${{ always() && steps.prepare.outcome == 'success' && steps.prepare.outputs.present == 'true' }}
+        working-directory: ${{ runner.temp }}/runtime-crate
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo +1.97 fmt -p larch-task --check 2>&1 | tee "$RUNNER_TEMP/runtime-fmt.log"
+      - name: Clippy standalone runtime
+        if: ${{ always() && steps.prepare.outcome == 'success' && steps.prepare.outputs.present == 'true' }}
+        working-directory: ${{ runner.temp }}/runtime-crate
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo +1.97 clippy --locked -p larch-task --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/runtime-clippy.log"
+      - name: Test standalone runtime
+        if: ${{ always() && steps.prepare.outcome == 'success' && steps.prepare.outputs.present == 'true' }}
+        working-directory: ${{ runner.temp }}/runtime-crate
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo +1.97 test --locked -p larch-task --all-targets 2>&1 | tee "$RUNNER_TEMP/runtime-test.log"
+      # A short, sanitized diagnostic shows as an annotation on the run as well as in logs.
+      - name: Capture first runtime error
+        if: ${{ failure() && steps.prepare.outcome == 'success' && steps.prepare.outputs.present == 'true' }}
+        shell: bash
+        run: |
+          python3 - <<'PYDIAG'
+          import os, pathlib, re
+          findings = []
+          for name in ('runtime-test.log', 'runtime-clippy.log'):
+              path = pathlib.Path(os.environ['RUNNER_TEMP'], name)
+              if not path.exists():
+                  continue
+              lines = path.read_text(errors='replace').splitlines()
+              for index, line in enumerate(lines):
+                  if not (line.startswith('error[') or line.startswith('error:') or (line.startswith('test ') and 'FAILED' in line)):
+                      continue
+                  if line.startswith('error: could not compile') or line.startswith('error: test failed'):
+                      continue
+                  location = ''
+                  for detail in lines[index + 1:index + 8]:
+                      if detail.strip().startswith('-->'):
+                          location = detail.strip().removeprefix('-->').strip()
+                          break
+                  clean = lambda value: re.sub(r'[^a-zA-Z0-9 /_:.\[\]-]', '?', value)
+                  message = clean(line)[:28] + (' ' + clean(location)[:37] if location else '')
+                  if message not in findings:
+                      findings.append(message)
+                  if len(findings) == 3:
+                      break
+              if len(findings) == 3:
+                  break
+          test_log = pathlib.Path(os.environ['RUNNER_TEMP'], 'runtime-test.log')
+          panic_locations = []
+          if test_log.exists():
+              for line in test_log.read_text(errors='replace').splitlines():
+                  match = re.search(r'panicked at (?:[^ :]*[/\\])?([^/\\ :]+\.rs):(\d+)', line)
+                  if match:
+                      location = re.sub(r'[^a-zA-Z0-9_.:-]', '?', f'{match.group(1)}:{match.group(2)}')[:60]
+                      if location not in panic_locations:
+                          panic_locations.append(location)
+                      if len(panic_locations) == 3:
+                          break
+          if panic_locations:
+              findings = (panic_locations + findings)[:3]
+          if not findings:
+              path = pathlib.Path(os.environ['RUNNER_TEMP'], 'runtime-fmt.log')
+              if path.exists():
+                  for line in path.read_text(errors='replace').splitlines():
+                      match = re.match(r'^Diff in .*?(larch-task/[^:]+):(\d+):', line)
+                      if match:
+                          location = re.sub(r'[^a-zA-Z0-9 /_:.\[\]-]', '?', f'{pathlib.PurePosixPath(match.group(1)).name}:{match.group(2)}')[:28]
+                          if location not in findings and len(' | '.join(findings + [location])) <= 300:
+                              findings.append(location)
+                      if len(findings) == 10:
+                          break
+          message = ' | '.join(findings) or 'No compiler, test, or format location captured'
+          print(f"::error title=runtime ({os.environ['RUNNER_OS']})::{message}")
+          PYDIAG

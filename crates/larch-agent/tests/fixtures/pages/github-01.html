@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en" data-color-mode="auto" data-light-theme="light" data-dark-theme="dark">
+<head>
+<meta charset="utf-8">
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/primer-react-css.0b2a1c.css">
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/repository-4d3f9a.css">
+<script crossorigin="anonymous" defer="defer" type="application/javascript" src="https://github.githubassets.com/assets/environment-7b93e0.js"></script>
+<script>
+  const tooltipTpl = '<div class="Popover"><p>Copied!</p></div>';
+</script>
+<title>GitHub - lanternlabs/backoff: Jittered exponential backoff for Go, with context support</title>
+<meta name="description" content="Jittered exponential backoff for Go, with context support - lanternlabs/backoff">
+<meta name="viewport" content="width=device-width">
+<meta property="og:title" content="GitHub - lanternlabs/backoff">
+<meta property="og:url" content="https://github.com/lanternlabs/backoff">
+<link rel="canonical" href="https://github.com/lanternlabs/backoff" data-turbo-transient>
+<style>.react-directory-filename-column a{color:var(--fgColor-default)}</style>
+</head>
+<body class="logged-out env-production page-responsive">
+<div class="position-relative header-wrapper js-header-wrapper">
+<header class="HeaderMktg header-logged-out js-details-container js-header" role="banner">
+  <a class="mr-lg-3 color-fg-inherit flex-order-2" href="https://github.com/" aria-label="Homepage"><svg height="32" aria-hidden="true" viewBox="0 0 24 24" width="32"><path d="M12 1C5.923 1 1 5.923 1 12"></path></svg></a>
+  <nav aria-label="Global" class="mt-5 mb-3 mb-lg-0">
+    <ul class="list-style-none">
+      <li class="HeaderMenu-item"><button type="button" class="HeaderMenu-link">Product</button></li>
+      <li class="HeaderMenu-item"><button type="button" class="HeaderMenu-link">Solutions</button></li>
+      <li class="HeaderMenu-item"><a class="HeaderMenu-link" href="/pricing">Pricing</a></li>
+    </ul>
+  </nav>
+  <a href="/login?return_to=https%3A%2F%2Fgithub.com%2Flanternlabs%2Fbackoff" class="HeaderMenu-link HeaderMenu-link--sign-in">Sign in</a>
+</header>
+</div>
+<div id="start-of-content" class="show-on-focus"></div>
+<main id="js-repo-pjax-container">
+<div id="repository-container-header" class="pt-3 hide-full-screen">
+  <div class="d-flex flex-nowrap flex-justify-end mb-3 px-3 px-lg-5">
+    <div class="flex-auto min-width-0 width-fit"><strong itemprop="author"><a href="/lanternlabs" rel="author">lanternlabs</a></strong><span class="mx-1 flex-self-stretch color-fg-muted">/</span><strong itemprop="name"><a href="/lanternlabs/backoff">backoff</a></strong><span class="Label Label--secondary v-align-middle mr-1">Public</span></div>
+    <ul class="pagehead-actions"><li><a href="/login?return_to=%2Flanternlabs%2Fbackoff" class="btn-sm btn">Notifications</a></li><li><a href="/login?return_to=%2Flanternlabs%2Fbackoff" class="btn-sm btn">Fork 41</a></li><li><a href="/login?return_to=%2Flanternlabs%2Fbackoff" class="btn-sm btn">Star 612</a></li></ul>
+  </div>
+  <nav aria-label="Repository" class="js-repo-nav UnderlineNav px-3 px-md-4 px-lg-5"><ul class="UnderlineNav-body list-style-none"><li><a href="/lanternlabs/backoff" class="UnderlineNav-item selected">Code</a></li><li><a href="/lanternlabs/backoff/issues" class="UnderlineNav-item">Issues 7</a></li><li><a href="/lanternlabs/backoff/pulls" class="UnderlineNav-item">Pull requests 2</a></li></ul></nav>
+</div>
+<div class="repository-content">
+<div class="react-directory-commit">Latest commit: <a href="/lanternlabs/backoff/commit/3f2a9c1">Add Retry helper with context support</a> &middot; 3f2a9c1 &middot; last week</div>
+<table aria-labelledby="folders-and-files" class="Table__StyledTable">
+<thead><tr><th>Name</th><th>Last commit message</th><th>Last commit date</th></tr></thead>
+<tbody>
+<tr class="react-directory-row"><td class="react-directory-filename-column"><a title="README.md" href="/lanternlabs/backoff/blob/main/README.md">README.md</a></td><td><a href="/lanternlabs/backoff/commit/3f2a9c1">Add Retry helper with context support</a></td><td><relative-time datetime="2026-10-18T16:20:00Z">last week</relative-time></td></tr>
+<tr class="react-directory-row"><td class="react-directory-filename-column"><a title="backoff.go" href="/lanternlabs/backoff/blob/main/backoff.go">backoff.go</a></td><td><a href="/lanternlabs/backoff/commit/b7e6d5c">Cap jitter at the max delay</a></td><td><relative-time datetime="2026-08-21T12:00:00Z">2 months ago</relative-time></td></tr>
+<tr class="react-directory-row"><td class="react-directory-filename-column"><a title="retry.go" href="/lanternlabs/backoff/blob/main/retry.go">retry.go</a></td><td><a href="/lanternlabs/backoff/commit/3f2a9c1">Add Retry helper with context support</a></td><td><relative-time datetime="2026-10-18T16:20:00Z">last week</relative-time></td></tr>
+</tbody>
+</table>
+<div id="readme" class="Box MD js-code-block-container">
+<h2 class="Box-title">README</h2>
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 tabindex="-1" class="heading-element" dir="auto">backoff</h1><a id="user-content-backoff" class="anchor" aria-label="Permalink: backoff" href="#backoff"><svg class="octicon octicon-link" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="m7.775 3.275 1.25-1.25"></path></svg></a></div>
+<p dir="auto">A small Go package for retrying operations with jittered exponential backoff. It has no dependencies outside the standard library, and every delay it computes is deterministic for a given seed, which makes tests easy to write.</p>
+<p dir="auto">The package grew out of a set of copy-pasted retry loops in our services, each slightly different, and each wrong in its own way. We wanted one implementation that respects context cancellation, never sleeps longer than the configured cap, and is boring to read.</p>
+<div class="markdown-heading" dir="auto"><h2 tabindex="-1" class="heading-element" dir="auto">Install</h2><a id="user-content-install" class="anchor" aria-label="Permalink: Install" href="#install"><svg class="octicon octicon-link" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="m7.775 3.275"></path></svg></a></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" dir="auto"><pre>go get github.com/lanternlabs/backoff@latest</pre></div>
+<div class="markdown-heading" dir="auto"><h2 tabindex="-1" class="heading-element" dir="auto">Usage</h2></div>
+<div class="highlight highlight-source-go notranslate position-relative overflow-auto" dir="auto"><pre><span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">backoff</span>.<span class="pl-en">Retry</span>(<span class="pl-s1">ctx</span>, <span class="pl-s1">backoff</span>.<span class="pl-c1">Default</span>, <span class="pl-k">func</span>() <span class="pl-smi">error</span> {
+	<span class="pl-k">return</span> <span class="pl-en">callService</span>()
+})</pre></div>
+<p dir="auto">See the <a href="https://pkg.go.dev/github.com/lanternlabs/backoff" rel="nofollow">package documentation</a> for the full API, and <a href="/lanternlabs/backoff/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a> if you would like to send a patch.</p>
+<div class="markdown-heading" dir="auto"><h2 tabindex="-1" class="heading-element" dir="auto">License</h2></div>
+<p dir="auto">MIT, see <a href="/lanternlabs/backoff/blob/main/LICENSE">LICENSE</a>.</p>
+</article>
+</div>
+</div>
+</main>
+<footer class="footer pt-8 pb-6 f6 color-fg-muted p-responsive" role="contentinfo"><h2 class="sr-only">Footer</h2><div><span>&copy; 2026 GitHub,&nbsp;Inc.</span></div><nav aria-label="Footer"><ul class="list-style-none"><li><a href="https://docs.github.com/site-policy/github-terms/github-terms-of-service">Terms</a></li><li><a href="https://docs.github.com/site-policy/privacy-policies/github-privacy-statement">Privacy</a></li></ul></nav></footer>
+</body>
+</html>

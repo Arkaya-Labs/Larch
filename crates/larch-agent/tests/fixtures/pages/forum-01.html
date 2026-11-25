@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html itemscope itemtype="https://schema.org/QAPage" lang="en">
+<head>
+<title>go - Why does my time.Ticker drift when the handler is slow? - DevAnswers</title>
+<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, minimum-scale=1.0">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://devanswers.net/questions/48213/why-does-my-time-ticker-drift-when-the-handler-is-slow">
+<meta name="twitter:title" content="Why does my time.Ticker drift when the handler is slow?">
+<link rel="canonical" href="https://devanswers.net/questions/48213/why-does-my-time-ticker-drift-when-the-handler-is-slow">
+<link rel="stylesheet" type="text/css" href="https://cdn.devanswers.net/css/primary.css?v=0a1b2c3d">
+<script src="https://cdn.devanswers.net/js/stub.en.js?v=4e5f6a"></script>
+<script>
+  DA.init({"locale":"en","serverTime":1761400000,"routeName":"Questions/Show"});
+  var voteTip = "<div class='s-popover'><p>This question shows research effort</p></div>";
+</script>
+<style>.s-prose pre{background:#f6f6f6;padding:12px}</style>
+</head>
+<body class="question-page unified-theme">
+<div id="notify-container"></div>
+<header class="s-topbar js-top-bar">
+  <div class="s-topbar--container">
+    <a href="https://devanswers.net" class="s-topbar--logo"><span class="-img">DevAnswers</span></a>
+    <nav class="s-topbar--navigation"><ol class="s-navigation"><li><a href="/questions" class="s-navigation--item">Questions</a></li><li><a href="/tags" class="s-navigation--item">Tags</a></li><li><a href="/users" class="s-navigation--item">Users</a></li></ol></nav>
+    <form id="search" role="search" action="/search"><input name="q" type="text" placeholder="Search&hellip;" maxlength="240"></form>
+    <a href="/users/login" class="s-btn s-btn__filled">Log in</a>
+  </div>
+</header>
+<div class="cookie-banner js-consent-banner"><p>By accepting all cookies, you agree to our use of cookies to deliver and maintain our services and site.</p><button class="s-btn">Accept all cookies</button><button class="s-btn">Necessary cookies only</button></div>
+<div class="container">
+<div id="left-sidebar" class="left-sidebar"><nav role="navigation"><ol class="nav-links"><li><a href="/">Home</a></li><li><a href="/questions">Questions</a></li><li><a href="/tags">Tags</a></li><li><a href="/collectives">Collectives</a></li></ol></nav></div>
+<div id="content">
+<div id="question-header" class="d-flex sm:fd-column">
+  <h1 itemprop="name" class="fs-headline1"><a href="/questions/48213/why-does-my-time-ticker-drift-when-the-handler-is-slow" class="question-hyperlink">Why does my time.Ticker drift when the handler is slow?</a></h1>
+  <a href="/questions/ask" class="ws-nowrap s-btn s-btn__primary">Ask Question</a>
+</div>
+<div class="d-flex fw-wrap pb8 mb16 bb bc-black-200"><div title="2026-10-19 08:12:44Z">Asked <time itemprop="dateCreated" datetime="2026-10-19T08:12:44">6 days ago</time></div><div>Viewed 1k times</div></div>
+<div id="mainbar" role="main" aria-label="question and answers">
+<div class="question js-question" data-questionid="48213" id="question">
+<div class="post-layout">
+<div class="postcell post-layout--right">
+<div class="s-prose js-post-body" itemprop="text">
+<p>I have a loop that reads from a <code>time.Ticker</code> every second and writes a metrics snapshot to disk. Most of the time it works, but when the disk is slow, the snapshots stop lining up with whole seconds, and after an hour they are several seconds behind the wall clock.</p>
+<pre><code>t := time.NewTicker(time.Second)
+for range t.C {
+    writeSnapshot() // sometimes takes 1.5s
+}
+</code></pre>
+<p>I expected the ticker to keep firing on the second, even if one write is slow. Is the ticker drifting, or am I misunderstanding how it works?</p>
+</div>
+<div class="post-taglist"><ul class="js-post-tag-list-wrapper"><li><a href="/questions/tagged/go" class="post-tag">go</a><li><a href="/questions/tagged/timer" class="post-tag">timer</a></ul></div>
+<div class="post-signature owner"><div class="user-info"><div class="user-details"><a href="/users/90211/kestrel">kestrel</a><div class="-flair"><span class="reputation-score">1,204</span></div></div></div></div>
+</div>
+<div class="votecell post-layout--left"><div class="js-voting-container"><button class="js-vote-up-btn" aria-label="Up vote"></button><div class="js-vote-count" data-value="12"></div><button class="js-vote-down-btn" aria-label="Down vote"></button></div></div>
+</div>
+</div>
+<div id="answers">
+<h2 class="mb0" data-answercount="2">2 Answers</h2>
+<div id="answer-48230" class="answer js-answer accepted-answer" data-answerid="48230" itemprop="acceptedAnswer">
+<div class="answercell post-layout--right"><div class="s-prose js-post-body" itemprop="text">
+<p>The ticker isn&#8217;t drifting. Its channel has a buffer of one, so when your handler is slower than the period, ticks are <em>dropped</em>, not queued. Each time you come back to the channel, you get whatever tick is waiting, which may be stale.</p>
+<p>The drift you see comes from mixing the tick time with <code>time.Now()</code> in <code>writeSnapshot</code>. Use the value received from the channel instead:</p>
+<pre><code>for tick := range t.C {
+    writeSnapshot(tick.Truncate(time.Second))
+}
+</code></pre>
+<p>If a write can take longer than a second, move it to a separate goroutine with a bounded queue, so that a slow disk can never block the ticker loop.</p>
+</div></div>
+</div>
+<div id="answer-48251" class="answer js-answer" data-answerid="48251">
+<div class="answercell post-layout--right"><div class="s-prose js-post-body" itemprop="text">
+<p>Also worth knowing:
+<ul>
+<li>the ticker adjusts its interval to make up for slow receivers
+<li><code>Reset</code> on a ticker is safe since Go 1.15
+</ul>
+<p>See the <a href="https://pkg.go.dev/time#NewTicker">time.NewTicker documentation</a> for the exact rules.</p>
+</div></div>
+</div>
+</div>
+<div class="comments js-comments-container"><ul class="comments-list"><li class="comment"><span class="comment-copy">Thanks, truncating the tick fixed it.</span> &ndash; <a href="/users/90211/kestrel" class="comment-user">kestrel</a></li></ul></div>
+</div>
+<div id="sidebar" class="show-votes" role="complementary">
+<aside class="s-sidebarwidget"><h4>Related</h4><ul><li><a href="/questions/40011/how-to-stop-a-ticker-cleanly">How to stop a ticker cleanly?</a></li><li><a href="/questions/39877/timer-reset-race">Timer.Reset race condition</a></li></ul></aside>
+<div class="ad-banner">Advertisement</div>
+</div>
+</div>
+</div>
+<footer id="footer" class="site-footer"><nav class="site-footer--nav"><a href="/help">Help</a> <a href="/legal/privacy-policy">Privacy</a></nav><p class="site-footer--copyright">Site design / logo &copy; 2026 DevAnswers; user contributions licensed under CC BY-SA.</p></footer>
+</body>
+</html>

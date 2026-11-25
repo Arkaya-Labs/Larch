@@ -1,0 +1,14 @@
+include = [{ path = "config.local.toml", optional = true }]
+
+[net]
+git-fetch-with-cli = true
+
+# The static MSVC runtime, so no program needs the VC++ redistributable (installer E1). Cargo takes
+# one rustflags source: this table replaces [build] rustflags on Windows, and RUSTFLAGS replaces it;
+# larch-sys builds the kernels with whichever runtime wins.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# Link Rust binaries for the same macOS floor as the kernels (Metal 4, architecture 6.4).
+[env]
+MACOSX_DEPLOYMENT_TARGET = "26.0"

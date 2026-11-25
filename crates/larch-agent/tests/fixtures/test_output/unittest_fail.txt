@@ -1,0 +1,21 @@
+.E.sF
+======================================================================
+ERROR: test_crash (test_math.Math.test_crash)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\proj\test_math.py", line 19, in test_crash
+    raise RuntimeError("boom")
+RuntimeError: boom
+
+======================================================================
+FAIL: test_sub (test_math.Math.test_sub)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\proj\test_math.py", line 13, in test_sub
+    self.assertEqual(3 - 1, 1)
+AssertionError: 2 != 1
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.003s
+
+FAILED (failures=1, errors=1, skipped=1)

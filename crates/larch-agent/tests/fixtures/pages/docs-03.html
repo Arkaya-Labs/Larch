@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta property="og:title" content="tempoqueue — Rate-limited work queues" />
+    <meta property="og:type" content="website" />
+    <meta name="description" content="Source code: Lib/tempoqueue.py" />
+    <title>tempoqueue &#8212; Rate-limited work queues &#8212; Python 3.14.0 documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+    <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="next" title="sched — Event scheduler" href="sched.html" />
+    <script src="../_static/documentation_options.js?v=5d57ca2d"></script>
+    <script>
+      var SWITCHER = '<div class="version_switcher_placeholder"><select><option>3.14</option></select></div>';
+    </script>
+    <style>@media only screen { table.full-width-table { width: 100%; } }</style>
+  </head>
+<body>
+<div class="mobile-nav"><input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation" aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu" />
+  <nav class="nav-content" role="navigation"><label for="menuToggler" class="toggler__label"><span></span></label><a href="https://www.python.org/" class="nav-logo"><img src="../_static/py.svg" alt="Python logo"/></a></nav>
+</div>
+<div class="related" role="navigation" aria-label="Related">
+  <h3>Navigation</h3>
+  <ul>
+    <li class="right"><a href="../genindex.html" title="General Index" accesskey="I">index</a></li>
+    <li class="right"><a href="sched.html" title="sched — Event scheduler" accesskey="N">next</a> |</li>
+    <li><a href="../index.html">3.14.0 Documentation</a> &#187;</li>
+    <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">The Python Standard Library</a> &#187;</li>
+  </ul>
+</div>
+<div class="document">
+  <div class="documentwrapper">
+    <div class="bodywrapper">
+      <div class="body" role="main">
+<section id="module-tempoqueue">
+<span id="tempoqueue-rate-limited-work-queues"></span><h1>tempoqueue &#8212; Rate-limited work queues</h1>
+<p><strong>Source code:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Lib/tempoqueue.py">Lib/tempoqueue.py</a></p>
+<hr class="docutils" />
+<p>This module provides a queue that releases items no faster than a configured rate, which is handy when calling a remote service with a request quota. It is built on top of <a class="reference internal" href="queue.html#module-queue" title="queue: A synchronized queue class."><code class="xref py py-mod docutils literal notranslate"><span class="pre">queue</span></code></a>, and it is safe to use from several threads at once.</p>
+<p>Items are released in the order they were added, unless a priority is given. The rate is enforced with a token bucket, so short bursts are allowed as long as the average stays below the limit.</p>
+<p>The module defines the following class:</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="tempoqueue.TempoQueue"><em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tempoqueue.</span></span><span class="sig-name descname"><span class="pre">TempoQueue</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">rate</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">burst</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tempoqueue.TempoQueue" title="Link to this definition">&#182;</a></dt>
+<dd><p>Create a queue that releases at most <em>rate</em> items per second, with bursts of up to <em>burst</em> items. Both values must be positive, or <a class="reference internal" href="exceptions.html#ValueError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">ValueError</span></code></a> is raised.</p>
+</dd></dl>
+<section id="rate-presets">
+<h2>Rate presets<a class="headerlink" href="#rate-presets" title="Link to this heading">&#182;</a></h2>
+<p>The following presets are available as module constants:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Constant</p></th><th class="head"><p>Rate</p></th><th class="head"><p>Burst</p></th></tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">GENTLE</span></code></p></td><td><p>1 per second</p></td><td><p>1</p></td></tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">STEADY</span></code></p></td><td><p>10 per second</p></td><td><p>5</p></td></tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">EAGER</span></code></p></td><td><p>100 per second</p></td><td><p>50</p></td></tr>
+</tbody>
+</table>
+</section>
+<section id="example">
+<h2>Example<a class="headerlink" href="#example" title="Link to this heading">&#182;</a></h2>
+<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">tempoqueue</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">q</span> <span class="o">=</span> <span class="n">tempoqueue</span><span class="o">.</span><span class="n">TempoQueue</span><span class="p">(</span><span class="n">rate</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">q</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="s1">&#39;job-1&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+      </div>
+    </div>
+  </div>
+  <div class="sphinxsidebar" role="navigation" aria-label="Main">
+    <div class="sphinxsidebarwrapper">
+      <h3><a href="../contents.html">Table of Contents</a></h3>
+      <ul><li><a class="reference internal" href="#">tempoqueue — Rate-limited work queues</a><ul><li><a class="reference internal" href="#rate-presets">Rate presets</a></li><li><a class="reference internal" href="#example">Example</a></li></ul></li></ul>
+      <h4>Previous topic</h4><p class="topless"><a href="queue.html">queue — A synchronized queue class</a></p>
+    </div>
+  </div>
+</div>
+<div class="footer">&copy; <a href="../copyright.html">Copyright</a> 2001-2026, Python Software Foundation. <br />Last updated on Oct 20, 2026. Found a bug? Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.</div>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# Weekly update pull requests for the pinned GitHub Actions and the Cargo locks. Each ecosystem's
+# updates arrive as one grouped pull request, reviewed like any other change.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories: ["/", "/.github/actions/release-tools"]
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  # The root workspace and the desktop app's own workspace; fuzz/ follows the root's versions.
+  - package-ecosystem: cargo
+    directories: ["/", "/apps/desktop"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # Only patch updates share a pull request. A minor update of a 0.x crate is a breaking change in
+    # Cargo, so minor and major updates each get their own pull request instead of holding the group.
+    groups:
+      cargo:
+        update-types: ["patch"]

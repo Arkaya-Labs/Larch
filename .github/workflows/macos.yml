@@ -1,0 +1,174 @@
+name: macos
+
+# The Metal build on a GitHub-hosted Mac, which has no GPU a test can use: the CPU reference runs
+# the tests, and the GPU contract and Metal parity run by hand on an Apple-silicon Mac before a
+# release (RELEASING.md).
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+      # A release builds this tag's canonical archives (scripts/release-manifest.py) at this
+      # version, the tag without its v; release.yml passes both.
+      tag:
+        type: string
+        default: ''
+      version:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  # Architecture 14: build Metal + test on the CPU reference. The GPU contract (15) runs by hand.
+  check:
+    runs-on: macos-15
+    # A release has its own group and is never cancelled, and never cancels a PR or manual run.
+    concurrency:
+      group: macos-${{ github.ref }}${{ inputs.release && '-release' || '' }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.release }}
+    timeout-minutes: 90
+    env:
+      LARCH_BACKEND: METAL
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+          # The PR's merge commit and its base, for the scope step.
+          fetch-depth: 2
+      - name: cache the crate downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: ${{ !inputs.release }}
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'apps/desktop/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      # A PR that changes only CUDA/HIP kernels, the kernel tests or the kernel CMake changes no
+      # Rust or Metal code the Mac runs: it gets the kernel build and ctest below, not the
+      # 25-40 min Rust steps. Any other path runs everything.
+      - name: scope
+        id: scope
+        shell: bash
+        run: |
+          rust=true
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            changed=$(git diff --name-only HEAD^1 HEAD)
+            if [ -n "$changed" ] && ! grep -qvE '^kernels/(src/(cuda|hip)/|tests/|CMakeLists\.txt$)' <<<"$changed"; then
+              rust=false
+            fi
+          fi
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "Rust steps: $rust"
+      - name: Metal toolchain (a separate download since Xcode 26)
+        run: xcrun -sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+      - run: rustup toolchain install  # the channel in rust-toolchain.toml
+      - if: steps.scope.outputs.rust == 'true'
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - if: steps.scope.outputs.rust == 'true'
+        run: cargo test
+      # The desktop app is its own workspace with its own lock, which only a release built: a
+      # stale pin there broke the app unseen (#357).
+      - name: check the desktop app (its own workspace and lock)
+        if: steps.scope.outputs.rust == 'true'
+        run: cargo check --locked --manifest-path apps/desktop/Cargo.toml
+      - name: kernel tests (ctest on the CPU reference; metal_smoke and metal_compare need a GPU)
+        run: |
+          cmake -S kernels -B build/kernels -DLARCH_BACKEND=METAL -DLARCH_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build/kernels --config RelWithDebInfo
+          ctest --test-dir build/kernels -C RelWithDebInfo --output-on-failure --no-tests=error -E '^metal_(smoke|compare)$'
+
+  package:
+    runs-on: macos-15
+    needs: check
+    # Under workflow_call, github.event_name and github.workflow are the caller's: a dispatched
+    # caller passing release: false packages nothing.
+    if: inputs.release || (github.event_name == 'workflow_dispatch' && github.workflow == 'macos')
+    concurrency:
+      group: macos-package-${{ github.ref }}${{ inputs.release && '-release' || '' }}
+      cancel-in-progress: ${{ !inputs.release }}
+    # The workflow token stages a release's archives on the draft release in this repository.
+    permissions:
+      contents: write
+    timeout-minutes: 120
+    env:
+      LARCH_BACKEND: METAL
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - name: Metal toolchain (a separate download since Xcode 26)
+        run: xcrun -sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+      - run: rustup toolchain install  # the channel in rust-toolchain.toml
+      # Tests first: the workspace build unifies features and relinks release/larch*, so the
+      # build after it leaves the -p binaries that ship.
+      - run: cargo test --locked --release --workspace
+      - run: cargo build --locked --release -p larch -p larch-agent
+        if: ${{ !inputs.release }}
+      # Loose files, as the Windows and Linux packages hold; no ._* AppleDouble files.
+      - name: package
+        if: ${{ !inputs.release }}
+        run: |
+          mkdir -p dist
+          COPYFILE_DISABLE=1 tar -C "$CARGO_TARGET_DIR/release" -czf dist/larch-macos-arm64-metal.tar.gz larch larch-agent
+      # A release builds the canonical CLI, agent and app archives instead.
+      - if: inputs.release
+        uses: ./.github/actions/release-tools
+      - name: build the release archives (CLI, agent and app)
+        if: inputs.release
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path apps/desktop/Cargo.toml
+          python scripts/release-manifest.py --build aarch64-apple-darwin --flavour metal --version "$VERSION"
+      # From the unpacked archive, so the check is on what ships. The signatures are the linker's
+      # ad-hoc ones: no Developer ID or notarization, so a browser download is quarantined. The
+      # hosted Mac has no GPU, so opening a Metal device is a release gate run by hand.
+      - name: verify ad-hoc signatures, Metal linking and start, from the archive
+        shell: bash  # -o pipefail, for the zstd pipe
+        env:
+          RELEASE: ${{ inputs.release }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          d=$(mktemp -d)
+          if [ "$RELEASE" = true ]; then
+            zstd -dc "dist/cli-aarch64-apple-darwin-metal-$VERSION.tar.zst" | tar -C "$d" -x
+          else
+            tar -C "$d" -xzf dist/larch-macos-arm64-metal.tar.gz
+          fi
+          for b in "$d/larch" "$d/larch-agent"; do
+            codesign -v "$b"
+            otool -L "$b" | grep -q /Metal.framework/ || { echo "::error::$b does not link Metal.framework"; exit 1; }
+            "$b" --version
+          done
+      # Artifact storage is billed; a check build's upload may fail.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !inputs.release }}
+        continue-on-error: true
+        with:
+          name: larch-macos-arm64-metal
+          path: dist/larch-macos-arm64-metal.tar.gz
+          if-no-files-found: error
+      - name: stage the release archives on the draft release
+        if: inputs.release
+        shell: bash
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          shopt -s failglob
+          python scripts/release-manifest.py --version "$VERSION" --stage dist/*.tar.zst

@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+license = "Apache-2.0"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+# `--cfg loom` builds larch-records' ring on loom's atomics for the model-checking test.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
+# Cargo's release default strips debuginfo from build dependencies too; on macOS that leaves proc-macro dylibs
+# with a misaligned LINKEDIT string pool that rustc cannot load (E0463, #68). Binaries are still stripped.
+[profile.release.build-override]
+strip = false

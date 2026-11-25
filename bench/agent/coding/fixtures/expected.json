@@ -1,0 +1,14 @@
+{
+ "swe-mini": {
+  "tasks": 4, "runs": 4, "pass@1": 0.25, "pass^4": null,
+  "steps": {"total": 7, "mean": 1.75}, "wall_s": {"total": 0.0, "mean": 0.0},
+  "tokens": {"prompt": 7003, "completion": 143},
+  "failures": {"no_patch": 0, "patch_does_not_apply": 1, "tests_fail": 1, "step_limit": 1, "timeout": 0, "server_error": 0}
+ },
+ "tb2-slice": {
+  "tasks": 2, "runs": 2, "pass@1": 0.5, "pass^4": null,
+  "steps": {"total": 3, "mean": 1.5}, "wall_s": {"total": 961.5, "mean": 480.75},
+  "tokens": {"prompt": 3001, "completion": 61},
+  "failures": {"no_patch": 0, "patch_does_not_apply": 0, "tests_fail": 0, "step_limit": 0, "timeout": 1, "server_error": 0}
+ }
+}

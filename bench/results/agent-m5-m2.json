@@ -1,0 +1,4433 @@
+{
+  "schema": "larch-agent-bench/1",
+  "model": "m2",
+  "machine": "m5",
+  "commit": "1287c3cc01f8cd60b7bc5fd72226ae79e2c739db",
+  "started_at": "2026-10-16T00:27:44Z",
+  "prompts": {
+    "file": "bench/agent/toolcalls.jsonl",
+    "sha256": "6a040056f347f7cd2629a8f809712b7b1992b119ed2d46135c41cb69e06e0e14"
+  },
+  "summary": {
+    "prompts": 200,
+    "errors": 0,
+    "parse_rate_before": 0.98,
+    "parse_rate_after": 1.0,
+    "wrong_tool_rate": 0.025,
+    "ttft_ms": {
+      "p50": 972.131208,
+      "p99": 1592.654583
+    },
+    "tok_s": 24.114198311634432,
+    "cached_tokens": 3217,
+    "wall_s": 1883.3386215879993
+  },
+  "docs": {
+    "precision": 0.9166666666666666,
+    "recall": 0.6923076923076923,
+    "abstain_rate": 1.0,
+    "errors": {}
+  },
+  "rows": [
+    {
+      "id": "clear-001",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 208,
+      "cached_tokens": 0,
+      "ttft_ms": 950.327625,
+      "tok_s": 24.842189713818634,
+      "wall_ms": 9285.375459
+    },
+    {
+      "id": "clear-002",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 220,
+      "cached_tokens": 0,
+      "ttft_ms": 947.2815,
+      "tok_s": 24.984572881881494,
+      "wall_ms": 9713.604833
+    },
+    {
+      "id": "clear-003",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 160,
+      "cached_tokens": 0,
+      "ttft_ms": 948.308291,
+      "tok_s": 22.319953252348718,
+      "wall_ms": 8073.507375
+    },
+    {
+      "id": "clear-004",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 156,
+      "cached_tokens": 0,
+      "ttft_ms": 958.857292,
+      "tok_s": 24.73745316638735,
+      "wall_ms": 7225.718834
+    },
+    {
+      "id": "clear-005",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 157,
+      "cached_tokens": 0,
+      "ttft_ms": 949.762208,
+      "tok_s": 24.744330070051134,
+      "wall_ms": 7254.7905
+    },
+    {
+      "id": "clear-006",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 146,
+      "cached_tokens": 0,
+      "ttft_ms": 973.456583,
+      "tok_s": 24.191962552822705,
+      "wall_ms": 6967.616959
+    },
+    {
+      "id": "clear-007",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 137,
+      "cached_tokens": 0,
+      "ttft_ms": 988.262125,
+      "tok_s": 24.71888122888827,
+      "wall_ms": 6490.610625
+    },
+    {
+      "id": "clear-008",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 152,
+      "cached_tokens": 0,
+      "ttft_ms": 993.568583,
+      "tok_s": 21.4378994236837,
+      "wall_ms": 8037.987959000001
+    },
+    {
+      "id": "clear-009",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 120,
+      "cached_tokens": 0,
+      "ttft_ms": 1052.129375,
+      "tok_s": 24.11065900836198,
+      "wall_ms": 5988.689583
+    },
+    {
+      "id": "clear-010",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 129,
+      "cached_tokens": 0,
+      "ttft_ms": 1004.942334,
+      "tok_s": 24.20369775301521,
+      "wall_ms": 6293.894625
+    },
+    {
+      "id": "clear-011",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 137,
+      "cached_tokens": 0,
+      "ttft_ms": 1100.436625,
+      "tok_s": 23.166006559684714,
+      "wall_ms": 6971.635834
+    },
+    {
+      "id": "clear-012",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 294,
+      "cached_tokens": 0,
+      "ttft_ms": 1001.084417,
+      "tok_s": 23.011090982623948,
+      "wall_ms": 13734.597000000002
+    },
+    {
+      "id": "clear-013",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 149,
+      "cached_tokens": 0,
+      "ttft_ms": 994.096,
+      "tok_s": 24.226880644860632,
+      "wall_ms": 7103.96575
+    },
+    {
+      "id": "clear-014",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 134,
+      "cached_tokens": 0,
+      "ttft_ms": 979.413834,
+      "tok_s": 24.381952451297106,
+      "wall_ms": 6434.735875
+    },
+    {
+      "id": "clear-015",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 251,
+      "cached_tokens": 0,
+      "ttft_ms": 978.305125,
+      "tok_s": 23.456291787529835,
+      "wall_ms": 11637.140875000001
+    },
+    {
+      "id": "clear-016",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 243,
+      "cached_tokens": 0,
+      "ttft_ms": 988.764792,
+      "tok_s": 22.60292189699272,
+      "wall_ms": 11696.156042
+    },
+    {
+      "id": "clear-017",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 150,
+      "cached_tokens": 0,
+      "ttft_ms": 1011.691042,
+      "tok_s": 22.53386919219086,
+      "wall_ms": 7625.193958
+    },
+    {
+      "id": "clear-018",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 226,
+      "cached_tokens": 0,
+      "ttft_ms": 985.828458,
+      "tok_s": 22.941404864239175,
+      "wall_ms": 10794.504959
+    },
+    {
+      "id": "clear-019",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 146,
+      "cached_tokens": 0,
+      "ttft_ms": 1016.602334,
+      "tok_s": 24.496455647195678,
+      "wall_ms": 6937.275
+    },
+    {
+      "id": "clear-020",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 202,
+      "cached_tokens": 0,
+      "ttft_ms": 973.375083,
+      "tok_s": 24.61295879833604,
+      "wall_ms": 9140.423791
+    },
+    {
+      "id": "clear-021",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 254,
+      "cached_tokens": 0,
+      "ttft_ms": 970.417333,
+      "tok_s": 24.109137587084135,
+      "wall_ms": 11464.826541
+    },
+    {
+      "id": "clear-022",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 159,
+      "cached_tokens": 0,
+      "ttft_ms": 974.203125,
+      "tok_s": 23.78419337119068,
+      "wall_ms": 7617.819042
+    },
+    {
+      "id": "clear-023",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 160,
+      "cached_tokens": 0,
+      "ttft_ms": 1018.988708,
+      "tok_s": 23.66938586813886,
+      "wall_ms": 7737.480625
+    },
+    {
+      "id": "clear-024",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 198,
+      "cached_tokens": 0,
+      "ttft_ms": 980.362666,
+      "tok_s": 24.487805030645067,
+      "wall_ms": 9026.094458
+    },
+    {
+      "id": "clear-025",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 476,
+      "cached_tokens": 0,
+      "ttft_ms": 969.118417,
+      "tok_s": 23.77683349404491,
+      "wall_ms": 20947.307125000003
+    },
+    {
+      "id": "clear-026",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 180,
+      "cached_tokens": 0,
+      "ttft_ms": 985.904333,
+      "tok_s": 23.772477470598325,
+      "wall_ms": 8516.482791999999
+    },
+    {
+      "id": "clear-027",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 160,
+      "cached_tokens": 0,
+      "ttft_ms": 1012.908625,
+      "tok_s": 24.367211266027674,
+      "wall_ms": 7538.784584
+    },
+    {
+      "id": "clear-028",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 694,
+      "generated_tokens": 155,
+      "cached_tokens": 0,
+      "ttft_ms": 967.09325,
+      "tok_s": 24.53858595044058,
+      "wall_ms": 7243.3845
+    },
+    {
+      "id": "clear-029",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 135,
+      "cached_tokens": 0,
+      "ttft_ms": 966.372917,
+      "tok_s": 23.619559232063178,
+      "wall_ms": 6640.061416
+    },
+    {
+      "id": "clear-030",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 160,
+      "cached_tokens": 0,
+      "ttft_ms": 1004.039875,
+      "tok_s": 23.864263967683573,
+      "wall_ms": 7667.154792
+    },
+    {
+      "id": "clear-031",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 698,
+      "generated_tokens": 159,
+      "cached_tokens": 0,
+      "ttft_ms": 994.238625,
+      "tok_s": 24.250476572706237,
+      "wall_ms": 7510.1134170000005
+    },
+    {
+      "id": "clear-032",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 168,
+      "cached_tokens": 0,
+      "ttft_ms": 972.790208,
+      "tok_s": 24.627185093099623,
+      "wall_ms": 7754.748417
+    },
+    {
+      "id": "clear-033",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 699,
+      "generated_tokens": 203,
+      "cached_tokens": 0,
+      "ttft_ms": 964.716,
+      "tok_s": 24.698937377128136,
+      "wall_ms": 9146.136
+    },
+    {
+      "id": "clear-034",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 195,
+      "cached_tokens": 0,
+      "ttft_ms": 963.547792,
+      "tok_s": 24.21660026210448,
+      "wall_ms": 8975.258415999999
+    },
+    {
+      "id": "clear-035",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 700,
+      "generated_tokens": 173,
+      "cached_tokens": 0,
+      "ttft_ms": 970.007375,
+      "tok_s": 24.366193860979955,
+      "wall_ms": 8029.413667
+    },
+    {
+      "id": "clear-036",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 698,
+      "generated_tokens": 152,
+      "cached_tokens": 0,
+      "ttft_ms": 964.59975,
+      "tok_s": 24.174879475862202,
+      "wall_ms": 7211.273958
+    },
+    {
+      "id": "clear-037",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 702,
+      "generated_tokens": 265,
+      "cached_tokens": 0,
+      "ttft_ms": 970.028875,
+      "tok_s": 24.019480071286452,
+      "wall_ms": 11961.5365
+    },
+    {
+      "id": "clear-038",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 698,
+      "generated_tokens": 160,
+      "cached_tokens": 0,
+      "ttft_ms": 970.478833,
+      "tok_s": 24.509434610119445,
+      "wall_ms": 7458.2152080000005
+    },
+    {
+      "id": "clear-039",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 149,
+      "cached_tokens": 0,
+      "ttft_ms": 961.119917,
+      "tok_s": 24.18157124905944,
+      "wall_ms": 7082.005708
+    },
+    {
+      "id": "clear-040",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 701,
+      "generated_tokens": 158,
+      "cached_tokens": 0,
+      "ttft_ms": 1084.969792,
+      "tok_s": 23.275372713583792,
+      "wall_ms": 7835.597708
+    },
+    {
+      "id": "clear-041",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 703,
+      "generated_tokens": 164,
+      "cached_tokens": 0,
+      "ttft_ms": 982.160792,
+      "tok_s": 24.467110921103227,
+      "wall_ms": 7645.661666999999
+    },
+    {
+      "id": "clear-042",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 157,
+      "cached_tokens": 0,
+      "ttft_ms": 978.38675,
+      "tok_s": 24.45659554856324,
+      "wall_ms": 7357.706625
+    },
+    {
+      "id": "clear-043",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 700,
+      "generated_tokens": 256,
+      "cached_tokens": 0,
+      "ttft_ms": 974.903417,
+      "tok_s": 24.249223822760808,
+      "wall_ms": 11491.20525
+    },
+    {
+      "id": "clear-044",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 699,
+      "generated_tokens": 147,
+      "cached_tokens": 0,
+      "ttft_ms": 971.001084,
+      "tok_s": 23.816935855914817,
+      "wall_ms": 7101.709458
+    },
+    {
+      "id": "clear-045",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 140,
+      "cached_tokens": 0,
+      "ttft_ms": 1009.30775,
+      "tok_s": 22.088930415562487,
+      "wall_ms": 7302.568583
+    },
+    {
+      "id": "clear-046",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 701,
+      "generated_tokens": 154,
+      "cached_tokens": 0,
+      "ttft_ms": 1016.054834,
+      "tok_s": 23.011347677624858,
+      "wall_ms": 7666.295292
+    },
+    {
+      "id": "clear-047",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 243,
+      "cached_tokens": 0,
+      "ttft_ms": 1111.92575,
+      "tok_s": 23.67477762242492,
+      "wall_ms": 11336.426667
+    },
+    {
+      "id": "clear-048",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 140,
+      "cached_tokens": 0,
+      "ttft_ms": 973.116917,
+      "tok_s": 23.951536221748924,
+      "wall_ms": 6777.390459
+    },
+    {
+      "id": "clear-049",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 136,
+      "cached_tokens": 0,
+      "ttft_ms": 971.166042,
+      "tok_s": 24.13315602912157,
+      "wall_ms": 6565.736916
+    },
+    {
+      "id": "clear-050",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 260,
+      "cached_tokens": 0,
+      "ttft_ms": 972.131208,
+      "tok_s": 24.07249762685906,
+      "wall_ms": 11731.736375
+    },
+    {
+      "id": "clear-051",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 122,
+      "cached_tokens": 0,
+      "ttft_ms": 966.011167,
+      "tok_s": 24.274243988952414,
+      "wall_ms": 5951.158792
+    },
+    {
+      "id": "clear-052",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 217,
+      "cached_tokens": 0,
+      "ttft_ms": 967.349709,
+      "tok_s": 24.08276745449789,
+      "wall_ms": 9936.831584
+    },
+    {
+      "id": "clear-053",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 147,
+      "cached_tokens": 0,
+      "ttft_ms": 967.168208,
+      "tok_s": 24.257368013624514,
+      "wall_ms": 6986.379583
+    },
+    {
+      "id": "clear-054",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 138,
+      "cached_tokens": 0,
+      "ttft_ms": 965.482208,
+      "tok_s": 23.983380392693718,
+      "wall_ms": 6678.183375
+    },
+    {
+      "id": "clear-055",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 143,
+      "cached_tokens": 0,
+      "ttft_ms": 967.212334,
+      "tok_s": 24.21792121333024,
+      "wall_ms": 6831.04025
+    },
+    {
+      "id": "clear-056",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 124,
+      "cached_tokens": 0,
+      "ttft_ms": 969.003459,
+      "tok_s": 24.189110465620217,
+      "wall_ms": 6054.3567920000005
+    },
+    {
+      "id": "clear-057",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 132,
+      "cached_tokens": 0,
+      "ttft_ms": 970.098917,
+      "tok_s": 24.22192012425672,
+      "wall_ms": 6378.8597500000005
+    },
+    {
+      "id": "clear-058",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 205,
+      "cached_tokens": 0,
+      "ttft_ms": 970.285333,
+      "tok_s": 24.170135597702345,
+      "wall_ms": 9410.868791
+    },
+    {
+      "id": "clear-059",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 189,
+      "cached_tokens": 0,
+      "ttft_ms": 970.667125,
+      "tok_s": 24.119036167392782,
+      "wall_ms": 8765.782541
+    },
+    {
+      "id": "clear-060",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 154,
+      "cached_tokens": 0,
+      "ttft_ms": 968.730292,
+      "tok_s": 24.069310333389215,
+      "wall_ms": 7325.803125
+    },
+    {
+      "id": "clear-061",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 150,
+      "cached_tokens": 0,
+      "ttft_ms": 968.055709,
+      "tok_s": 24.181421521995652,
+      "wall_ms": 7133.295709
+    },
+    {
+      "id": "clear-062",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 197,
+      "cached_tokens": 0,
+      "ttft_ms": 969.427958,
+      "tok_s": 24.13542671050597,
+      "wall_ms": 9090.8985
+    },
+    {
+      "id": "clear-063",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 161,
+      "cached_tokens": 0,
+      "ttft_ms": 970.192959,
+      "tok_s": 24.120417869656805,
+      "wall_ms": 7604.0025
+    },
+    {
+      "id": "clear-064",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 159,
+      "cached_tokens": 0,
+      "ttft_ms": 970.935209,
+      "tok_s": 23.36331751140292,
+      "wall_ms": 7735.415042
+    },
+    {
+      "id": "clear-065",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 140,
+      "cached_tokens": 0,
+      "ttft_ms": 1177.511,
+      "tok_s": 22.32212353894224,
+      "wall_ms": 7407.026791
+    },
+    {
+      "id": "clear-066",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 175,
+      "cached_tokens": 0,
+      "ttft_ms": 1002.977792,
+      "tok_s": 22.808608585971182,
+      "wall_ms": 8632.981709
+    },
+    {
+      "id": "clear-067",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 135,
+      "cached_tokens": 0,
+      "ttft_ms": 976.014417,
+      "tok_s": 22.672216847910455,
+      "wall_ms": 6887.082291000001
+    },
+    {
+      "id": "clear-068",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 143,
+      "cached_tokens": 0,
+      "ttft_ms": 999.205042,
+      "tok_s": 21.79241194115507,
+      "wall_ms": 7515.918083
+    },
+    {
+      "id": "clear-069",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 166,
+      "cached_tokens": 0,
+      "ttft_ms": 1070.353958,
+      "tok_s": 22.220452938483326,
+      "wall_ms": 8502.188167
+    },
+    {
+      "id": "clear-070",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 138,
+      "cached_tokens": 0,
+      "ttft_ms": 987.752917,
+      "tok_s": 22.30478414230763,
+      "wall_ms": 7131.858625
+    },
+    {
+      "id": "clear-071",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 144,
+      "cached_tokens": 0,
+      "ttft_ms": 1008.003792,
+      "tok_s": 24.478735772266774,
+      "wall_ms": 6850.887375
+    },
+    {
+      "id": "clear-072",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 165,
+      "cached_tokens": 0,
+      "ttft_ms": 974.048125,
+      "tok_s": 24.372286225064464,
+      "wall_ms": 7703.872584
+    },
+    {
+      "id": "clear-073",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 694,
+      "generated_tokens": 157,
+      "cached_tokens": 0,
+      "ttft_ms": 962.879666,
+      "tok_s": 23.209336461436123,
+      "wall_ms": 7684.784
+    },
+    {
+      "id": "clear-074",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 141,
+      "cached_tokens": 0,
+      "ttft_ms": 1011.181709,
+      "tok_s": 22.703154771602104,
+      "wall_ms": 7178.340625
+    },
+    {
+      "id": "clear-075",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "forget",
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 118,
+      "cached_tokens": 0,
+      "ttft_ms": 1024.878833,
+      "tok_s": 23.0118729284369,
+      "wall_ms": 6110.175625
+    },
+    {
+      "id": "clear-076",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "forget",
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 157,
+      "cached_tokens": 0,
+      "ttft_ms": 987.014208,
+      "tok_s": 23.38524858519246,
+      "wall_ms": 7658.8385
+    },
+    {
+      "id": "clear-077",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "forget",
+      "error": null,
+      "prompt_tokens": 699,
+      "generated_tokens": 128,
+      "cached_tokens": 0,
+      "ttft_ms": 1003.775875,
+      "tok_s": 22.677876242324842,
+      "wall_ms": 6604.793334
+    },
+    {
+      "id": "clear-078",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "forget",
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 120,
+      "cached_tokens": 0,
+      "ttft_ms": 993.536041,
+      "tok_s": 22.821267167639828,
+      "wall_ms": 6209.627375
+    },
+    {
+      "id": "clear-079",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "forget",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 168,
+      "cached_tokens": 0,
+      "ttft_ms": 983.352,
+      "tok_s": 22.864236182670382,
+      "wall_ms": 8288.338916
+    },
+    {
+      "id": "clear-080",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "forget",
+      "error": null,
+      "prompt_tokens": 698,
+      "generated_tokens": 121,
+      "cached_tokens": 0,
+      "ttft_ms": 972.896458,
+      "tok_s": 24.665576320891503,
+      "wall_ms": 5838.944167000001
+    },
+    {
+      "id": "clear-081",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "forget",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 116,
+      "cached_tokens": 0,
+      "ttft_ms": 958.5955,
+      "tok_s": 23.979573575342577,
+      "wall_ms": 5754.967500000001
+    },
+    {
+      "id": "clear-082",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "forget",
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 130,
+      "cached_tokens": 0,
+      "ttft_ms": 964.60325,
+      "tok_s": 23.728212454582902,
+      "wall_ms": 6401.601459
+    },
+    {
+      "id": "clear-083",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "forget",
+      "error": null,
+      "prompt_tokens": 699,
+      "generated_tokens": 125,
+      "cached_tokens": 0,
+      "ttft_ms": 973.333791,
+      "tok_s": 24.2416379081453,
+      "wall_ms": 6088.935458
+    },
+    {
+      "id": "clear-084",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "forget",
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 129,
+      "cached_tokens": 0,
+      "ttft_ms": 971.639458,
+      "tok_s": 23.783023389906734,
+      "wall_ms": 6354.061209
+    },
+    {
+      "id": "clear-085",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "changed_files",
+      "error": null,
+      "prompt_tokens": 1105,
+      "generated_tokens": 184,
+      "cached_tokens": 0,
+      "ttft_ms": 1502.349625,
+      "tok_s": 23.478137580058004,
+      "wall_ms": 9297.419958
+    },
+    {
+      "id": "clear-086",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "changed_files",
+      "error": null,
+      "prompt_tokens": 1109,
+      "generated_tokens": 210,
+      "cached_tokens": 0,
+      "ttft_ms": 1516.3655,
+      "tok_s": 23.51887085700261,
+      "wall_ms": 10403.445458
+    },
+    {
+      "id": "clear-087",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "changed_files",
+      "error": null,
+      "prompt_tokens": 1104,
+      "generated_tokens": 130,
+      "cached_tokens": 0,
+      "ttft_ms": 1489.74025,
+      "tok_s": 23.083221926591463,
+      "wall_ms": 7078.988542
+    },
+    {
+      "id": "clear-088",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "changed_files",
+      "error": null,
+      "prompt_tokens": 1110,
+      "generated_tokens": 162,
+      "cached_tokens": 0,
+      "ttft_ms": 1548.5315,
+      "tok_s": 23.657007481124538,
+      "wall_ms": 8354.721208
+    },
+    {
+      "id": "clear-089",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "changed_files",
+      "error": null,
+      "prompt_tokens": 1106,
+      "generated_tokens": 132,
+      "cached_tokens": 0,
+      "ttft_ms": 1491.605708,
+      "tok_s": 24.307217435269738,
+      "wall_ms": 6881.502042
+    },
+    {
+      "id": "clear-090",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "changed_files",
+      "error": null,
+      "prompt_tokens": 1107,
+      "generated_tokens": 152,
+      "cached_tokens": 0,
+      "ttft_ms": 1479.0335,
+      "tok_s": 24.202181176123275,
+      "wall_ms": 7718.69275
+    },
+    {
+      "id": "clear-091",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "changed_files",
+      "error": null,
+      "prompt_tokens": 1107,
+      "generated_tokens": 137,
+      "cached_tokens": 0,
+      "ttft_ms": 1485.425917,
+      "tok_s": 23.796420226572042,
+      "wall_ms": 7201.174166999999
+    },
+    {
+      "id": "clear-092",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "changed_files",
+      "error": null,
+      "prompt_tokens": 1107,
+      "generated_tokens": 120,
+      "cached_tokens": 0,
+      "ttft_ms": 1564.884542,
+      "tok_s": 24.249335131270875,
+      "wall_ms": 6472.981125
+    },
+    {
+      "id": "clear-093",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "changed_files",
+      "error": null,
+      "prompt_tokens": 1105,
+      "generated_tokens": 191,
+      "cached_tokens": 0,
+      "ttft_ms": 1477.513125,
+      "tok_s": 24.101985523114998,
+      "wall_ms": 9361.226332999999
+    },
+    {
+      "id": "clear-094",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "diff_file",
+      "error": null,
+      "prompt_tokens": 1109,
+      "generated_tokens": 152,
+      "cached_tokens": 0,
+      "ttft_ms": 1504.475375,
+      "tok_s": 23.554315537903445,
+      "wall_ms": 7915.764833
+    },
+    {
+      "id": "clear-095",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "diff_file",
+      "error": null,
+      "prompt_tokens": 1110,
+      "generated_tokens": 231,
+      "cached_tokens": 0,
+      "ttft_ms": 1757.144417,
+      "tok_s": 21.118385872185492,
+      "wall_ms": 12652.382292
+    },
+    {
+      "id": "clear-096",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "diff_file",
+      "error": null,
+      "prompt_tokens": 1108,
+      "generated_tokens": 166,
+      "cached_tokens": 0,
+      "ttft_ms": 1558.732167,
+      "tok_s": 22.220493587527475,
+      "wall_ms": 8986.377459
+    },
+    {
+      "id": "clear-097",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "diff_file",
+      "error": null,
+      "prompt_tokens": 1112,
+      "generated_tokens": 278,
+      "cached_tokens": 0,
+      "ttft_ms": 1592.654583,
+      "tok_s": 23.15528806876259,
+      "wall_ms": 13556.561375
+    },
+    {
+      "id": "clear-098",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "diff_file",
+      "error": null,
+      "prompt_tokens": 1110,
+      "generated_tokens": 203,
+      "cached_tokens": 0,
+      "ttft_ms": 1527.754375,
+      "tok_s": 23.198347011476475,
+      "wall_ms": 10236.35975
+    },
+    {
+      "id": "clear-099",
+      "before": {
+        "parsed_ok": false,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": true,
+      "tool": "diff_file",
+      "error": null,
+      "prompt_tokens": 2269,
+      "generated_tokens": 743,
+      "cached_tokens": 1109,
+      "ttft_ms": 1538.348584,
+      "tok_s": 23.07860411925093,
+      "wall_ms": 33311.195708
+    },
+    {
+      "id": "clear-100",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "diff_file",
+      "error": null,
+      "prompt_tokens": 1111,
+      "generated_tokens": 174,
+      "cached_tokens": 0,
+      "ttft_ms": 1484.365291,
+      "tok_s": 24.425954906788036,
+      "wall_ms": 8568.084541
+    },
+    {
+      "id": "clear-101",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "diff_file",
+      "error": null,
+      "prompt_tokens": 1109,
+      "generated_tokens": 195,
+      "cached_tokens": 0,
+      "ttft_ms": 1474.236916,
+      "tok_s": 24.43922694971595,
+      "wall_ms": 9413.014333
+    },
+    {
+      "id": "clear-102",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "diff_file",
+      "error": null,
+      "prompt_tokens": 1109,
+      "generated_tokens": 152,
+      "cached_tokens": 0,
+      "ttft_ms": 1471.561375,
+      "tok_s": 24.43915560184787,
+      "wall_ms": 7650.713667
+    },
+    {
+      "id": "clear-103",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "show_file",
+      "error": null,
+      "prompt_tokens": 1109,
+      "generated_tokens": 160,
+      "cached_tokens": 0,
+      "ttft_ms": 1473.211167,
+      "tok_s": 24.458826670033694,
+      "wall_ms": 7974.47225
+    },
+    {
+      "id": "clear-104",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "show_file",
+      "error": null,
+      "prompt_tokens": 1107,
+      "generated_tokens": 261,
+      "cached_tokens": 0,
+      "ttft_ms": 1471.256,
+      "tok_s": 24.4032366411844,
+      "wall_ms": 12126.114125
+    },
+    {
+      "id": "clear-105",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "show_file",
+      "error": null,
+      "prompt_tokens": 1110,
+      "generated_tokens": 167,
+      "cached_tokens": 0,
+      "ttft_ms": 1468.923708,
+      "tok_s": 24.39406002804354,
+      "wall_ms": 8274.403624999999
+    },
+    {
+      "id": "clear-106",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "show_file",
+      "error": null,
+      "prompt_tokens": 1111,
+      "generated_tokens": 215,
+      "cached_tokens": 0,
+      "ttft_ms": 1468.986208,
+      "tok_s": 24.43413497752987,
+      "wall_ms": 10227.778125
+    },
+    {
+      "id": "clear-107",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "show_file",
+      "error": null,
+      "prompt_tokens": 1107,
+      "generated_tokens": 152,
+      "cached_tokens": 0,
+      "ttft_ms": 1468.933416,
+      "tok_s": 24.49329380039152,
+      "wall_ms": 7634.432000000001
+    },
+    {
+      "id": "clear-108",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "show_file",
+      "error": null,
+      "prompt_tokens": 1110,
+      "generated_tokens": 288,
+      "cached_tokens": 0,
+      "ttft_ms": 1469.693958,
+      "tok_s": 24.431076814959184,
+      "wall_ms": 13217.57575
+    },
+    {
+      "id": "clear-109",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "show_file",
+      "error": null,
+      "prompt_tokens": 1105,
+      "generated_tokens": 147,
+      "cached_tokens": 0,
+      "ttft_ms": 1467.981667,
+      "tok_s": 24.50874000411018,
+      "wall_ms": 7425.585375
+    },
+    {
+      "id": "clear-110",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "show_file",
+      "error": null,
+      "prompt_tokens": 1108,
+      "generated_tokens": 211,
+      "cached_tokens": 0,
+      "ttft_ms": 1469.64975,
+      "tok_s": 24.481704821986533,
+      "wall_ms": 10048.011499999999
+    },
+    {
+      "id": "clear-111",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "show_file",
+      "error": null,
+      "prompt_tokens": 1110,
+      "generated_tokens": 159,
+      "cached_tokens": 0,
+      "ttft_ms": 1468.068083,
+      "tok_s": 24.496840895925445,
+      "wall_ms": 7918.395208
+    },
+    {
+      "id": "clear-112",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "log",
+      "error": null,
+      "prompt_tokens": 1106,
+      "generated_tokens": 120,
+      "cached_tokens": 0,
+      "ttft_ms": 1467.694166,
+      "tok_s": 24.445239006467393,
+      "wall_ms": 6339.248375
+    },
+    {
+      "id": "clear-113",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "log",
+      "error": null,
+      "prompt_tokens": 1109,
+      "generated_tokens": 125,
+      "cached_tokens": 0,
+      "ttft_ms": 1471.837708,
+      "tok_s": 24.540643028898433,
+      "wall_ms": 6525.458042
+    },
+    {
+      "id": "clear-114",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "log",
+      "error": null,
+      "prompt_tokens": 1107,
+      "generated_tokens": 167,
+      "cached_tokens": 0,
+      "ttft_ms": 1472.08,
+      "tok_s": 24.48777057562581,
+      "wall_ms": 8251.51525
+    },
+    {
+      "id": "clear-115",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "log",
+      "error": null,
+      "prompt_tokens": 1111,
+      "generated_tokens": 192,
+      "cached_tokens": 0,
+      "ttft_ms": 1471.385208,
+      "tok_s": 24.49993790837071,
+      "wall_ms": 9267.852959
+    },
+    {
+      "id": "clear-116",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "log",
+      "error": null,
+      "prompt_tokens": 1110,
+      "generated_tokens": 169,
+      "cached_tokens": 0,
+      "ttft_ms": 1471.032209,
+      "tok_s": 24.465683460886247,
+      "wall_ms": 8338.336916999999
+    },
+    {
+      "id": "clear-117",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "log",
+      "error": null,
+      "prompt_tokens": 1110,
+      "generated_tokens": 186,
+      "cached_tokens": 0,
+      "ttft_ms": 1471.966792,
+      "tok_s": 24.511600292580688,
+      "wall_ms": 9019.950291000001
+    },
+    {
+      "id": "clear-118",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "log",
+      "error": null,
+      "prompt_tokens": 1107,
+      "generated_tokens": 167,
+      "cached_tokens": 0,
+      "ttft_ms": 1473.056791,
+      "tok_s": 24.509067654382843,
+      "wall_ms": 8246.590917000001
+    },
+    {
+      "id": "clear-119",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "log",
+      "error": null,
+      "prompt_tokens": 1111,
+      "generated_tokens": 209,
+      "cached_tokens": 0,
+      "ttft_ms": 1473.027541,
+      "tok_s": 24.427010566268297,
+      "wall_ms": 9988.737125
+    },
+    {
+      "id": "clear-120",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "log",
+      "error": null,
+      "prompt_tokens": 1107,
+      "generated_tokens": 191,
+      "cached_tokens": 0,
+      "ttft_ms": 1473.365208,
+      "tok_s": 24.48473039215873,
+      "wall_ms": 9233.875624999999
+    },
+    {
+      "id": "none-001",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 164,
+      "cached_tokens": 0,
+      "ttft_ms": 944.432,
+      "tok_s": 24.83664635613951,
+      "wall_ms": 7507.831999999999
+    },
+    {
+      "id": "none-002",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 217,
+      "cached_tokens": 0,
+      "ttft_ms": 945.120792,
+      "tok_s": 24.825349668317028,
+      "wall_ms": 9646.292000000001
+    },
+    {
+      "id": "none-003",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 139,
+      "cached_tokens": 0,
+      "ttft_ms": 944.4885,
+      "tok_s": 24.7935430352662,
+      "wall_ms": 6510.831999999999
+    },
+    {
+      "id": "none-004",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 694,
+      "generated_tokens": 136,
+      "cached_tokens": 0,
+      "ttft_ms": 944.348209,
+      "tok_s": 24.90843536462855,
+      "wall_ms": 6364.559958
+    },
+    {
+      "id": "none-005",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 209,
+      "cached_tokens": 0,
+      "ttft_ms": 945.581917,
+      "tok_s": 24.861389289289633,
+      "wall_ms": 9312.363666
+    },
+    {
+      "id": "none-006",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 145,
+      "cached_tokens": 0,
+      "ttft_ms": 943.77475,
+      "tok_s": 24.887668114355304,
+      "wall_ms": 6730.161833
+    },
+    {
+      "id": "none-007",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 433,
+      "cached_tokens": 0,
+      "ttft_ms": 944.060792,
+      "tok_s": 24.64816070018806,
+      "wall_ms": 18471.091792
+    },
+    {
+      "id": "none-008",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 126,
+      "cached_tokens": 0,
+      "ttft_ms": 951.155375,
+      "tok_s": 24.807812635125053,
+      "wall_ms": 5990.269958
+    },
+    {
+      "id": "none-009",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 221,
+      "cached_tokens": 0,
+      "ttft_ms": 943.721834,
+      "tok_s": 24.806451537883714,
+      "wall_ms": 9812.7785
+    },
+    {
+      "id": "none-010",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 245,
+      "cached_tokens": 0,
+      "ttft_ms": 955.127625,
+      "tok_s": 24.697289610375332,
+      "wall_ms": 10835.622374999999
+    },
+    {
+      "id": "none-011",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 694,
+      "generated_tokens": 343,
+      "cached_tokens": 0,
+      "ttft_ms": 954.406333,
+      "tok_s": 24.650020017646987,
+      "wall_ms": 14829.484917
+    },
+    {
+      "id": "none-012",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 194,
+      "cached_tokens": 0,
+      "ttft_ms": 954.843875,
+      "tok_s": 24.817049134895868,
+      "wall_ms": 8732.62875
+    },
+    {
+      "id": "none-013",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 289,
+      "cached_tokens": 0,
+      "ttft_ms": 946.692291,
+      "tok_s": 24.724789165906447,
+      "wall_ms": 12595.809125
+    },
+    {
+      "id": "none-014",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 135,
+      "cached_tokens": 0,
+      "ttft_ms": 946.736166,
+      "tok_s": 24.90559647959944,
+      "wall_ms": 6327.433084
+    },
+    {
+      "id": "none-015",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 171,
+      "cached_tokens": 0,
+      "ttft_ms": 947.88575,
+      "tok_s": 24.86408471511221,
+      "wall_ms": 7785.450208
+    },
+    {
+      "id": "none-016",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 344,
+      "cached_tokens": 0,
+      "ttft_ms": 947.4245,
+      "tok_s": 24.78081568829278,
+      "wall_ms": 14789.170167
+    },
+    {
+      "id": "none-017",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 215,
+      "cached_tokens": 0,
+      "ttft_ms": 947.124333,
+      "tok_s": 24.864673673675085,
+      "wall_ms": 9554.134459
+    },
+    {
+      "id": "none-018",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 328,
+      "cached_tokens": 0,
+      "ttft_ms": 946.374333,
+      "tok_s": 24.75665201524367,
+      "wall_ms": 14155.346207999999
+    },
+    {
+      "id": "none-019",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 188,
+      "cached_tokens": 0,
+      "ttft_ms": 945.804333,
+      "tok_s": 24.85337353895734,
+      "wall_ms": 8470.352542
+    },
+    {
+      "id": "none-020",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 219,
+      "cached_tokens": 0,
+      "ttft_ms": 945.384709,
+      "tok_s": 24.858849652825597,
+      "wall_ms": 9715.410375
+    },
+    {
+      "id": "none-021",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 377,
+      "cached_tokens": 0,
+      "ttft_ms": 945.811458,
+      "tok_s": 24.724017537777996,
+      "wall_ms": 16154.07225
+    },
+    {
+      "id": "none-022",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 289,
+      "cached_tokens": 0,
+      "ttft_ms": 951.496625,
+      "tok_s": 24.764481787783353,
+      "wall_ms": 12581.603958
+    },
+    {
+      "id": "none-023",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 149,
+      "cached_tokens": 0,
+      "ttft_ms": 945.22325,
+      "tok_s": 24.80424288306251,
+      "wall_ms": 6912.339875
+    },
+    {
+      "id": "none-024",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 374,
+      "cached_tokens": 0,
+      "ttft_ms": 946.107625,
+      "tok_s": 24.736715150311802,
+      "wall_ms": 16025.284916
+    },
+    {
+      "id": "none-025",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 181,
+      "cached_tokens": 0,
+      "ttft_ms": 946.628041,
+      "tok_s": 24.79555035583681,
+      "wall_ms": 8206.374292
+    },
+    {
+      "id": "none-026",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 409,
+      "cached_tokens": 0,
+      "ttft_ms": 947.314459,
+      "tok_s": 24.669655874317087,
+      "wall_ms": 17486.232083000003
+    },
+    {
+      "id": "none-027",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 687,
+      "generated_tokens": 76,
+      "cached_tokens": 0,
+      "ttft_ms": 952.869291,
+      "tok_s": 24.956750990398263,
+      "wall_ms": 3958.456334
+    },
+    {
+      "id": "none-028",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 307,
+      "cached_tokens": 0,
+      "ttft_ms": 945.717125,
+      "tok_s": 24.710856066550452,
+      "wall_ms": 13329.33425
+    },
+    {
+      "id": "none-029",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 372,
+      "cached_tokens": 0,
+      "ttft_ms": 949.302917,
+      "tok_s": 24.467795428564887,
+      "wall_ms": 16112.521625
+    },
+    {
+      "id": "none-030",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 151,
+      "cached_tokens": 0,
+      "ttft_ms": 956.998125,
+      "tok_s": 24.848911198372416,
+      "wall_ms": 6994.725833
+    },
+    {
+      "id": "none-031",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 689,
+      "generated_tokens": 204,
+      "cached_tokens": 0,
+      "ttft_ms": 948.099,
+      "tok_s": 24.659939084700202,
+      "wall_ms": 9180.585667000001
+    },
+    {
+      "id": "none-032",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 694,
+      "generated_tokens": 194,
+      "cached_tokens": 0,
+      "ttft_ms": 951.44225,
+      "tok_s": 24.707883949689915,
+      "wall_ms": 8763.089415999999
+    },
+    {
+      "id": "none-033",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 389,
+      "cached_tokens": 0,
+      "ttft_ms": 951.804167,
+      "tok_s": 24.6443690779171,
+      "wall_ms": 16696.153584
+    },
+    {
+      "id": "none-034",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 147,
+      "cached_tokens": 0,
+      "ttft_ms": 950.671666,
+      "tok_s": 24.36313536813045,
+      "wall_ms": 6943.754333
+    },
+    {
+      "id": "none-035",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 172,
+      "cached_tokens": 0,
+      "ttft_ms": 961.732833,
+      "tok_s": 23.996913097722892,
+      "wall_ms": 8088.161917
+    },
+    {
+      "id": "none-036",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 110,
+      "cached_tokens": 0,
+      "ttft_ms": 964.708,
+      "tok_s": 24.50386855476746,
+      "wall_ms": 5413.870333
+    },
+    {
+      "id": "none-037",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 256,
+      "cached_tokens": 0,
+      "ttft_ms": 952.3175,
+      "tok_s": 24.392808686699837,
+      "wall_ms": 11406.770625
+    },
+    {
+      "id": "none-038",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 693,
+      "generated_tokens": 243,
+      "cached_tokens": 0,
+      "ttft_ms": 959.264792,
+      "tok_s": 24.680541873535116,
+      "wall_ms": 10764.94875
+    },
+    {
+      "id": "none-039",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 162,
+      "cached_tokens": 0,
+      "ttft_ms": 953.575709,
+      "tok_s": 24.37511623486134,
+      "wall_ms": 7559.091708000001
+    },
+    {
+      "id": "none-040",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": null,
+      "error": null,
+      "prompt_tokens": 694,
+      "generated_tokens": 410,
+      "cached_tokens": 0,
+      "ttft_ms": 953.358292,
+      "tok_s": 24.051641755871945,
+      "wall_ms": 17959.042125
+    },
+    {
+      "id": "near-001",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 151,
+      "cached_tokens": 0,
+      "ttft_ms": 969.093959,
+      "tok_s": 23.583544941747682,
+      "wall_ms": 7334.841958
+    },
+    {
+      "id": "near-002",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 104,
+      "cached_tokens": 0,
+      "ttft_ms": 940.944125,
+      "tok_s": 24.890725985356823,
+      "wall_ms": 5080.541875
+    },
+    {
+      "id": "near-003",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 691,
+      "generated_tokens": 119,
+      "cached_tokens": 0,
+      "ttft_ms": 1012.481417,
+      "tok_s": 24.87752627787538,
+      "wall_ms": 5756.303666
+    },
+    {
+      "id": "near-004",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 689,
+      "generated_tokens": 115,
+      "cached_tokens": 0,
+      "ttft_ms": 940.461875,
+      "tok_s": 25.21907992257793,
+      "wall_ms": 5461.306084
+    },
+    {
+      "id": "near-005",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 695,
+      "generated_tokens": 124,
+      "cached_tokens": 0,
+      "ttft_ms": 939.530209,
+      "tok_s": 25.056233082594172,
+      "wall_ms": 5851.420125
+    },
+    {
+      "id": "near-006",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 698,
+      "generated_tokens": 151,
+      "cached_tokens": 0,
+      "ttft_ms": 1190.79375,
+      "tok_s": 20.332478493855618,
+      "wall_ms": 8574.676500000001
+    },
+    {
+      "id": "near-007",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 119,
+      "cached_tokens": 0,
+      "ttft_ms": 948.706,
+      "tok_s": 25.17968241644151,
+      "wall_ms": 5639.193042000001
+    },
+    {
+      "id": "near-008",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "remember",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 168,
+      "cached_tokens": 0,
+      "ttft_ms": 938.471375,
+      "tok_s": 24.734021181416846,
+      "wall_ms": 7690.758084
+    },
+    {
+      "id": "near-009",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 148,
+      "cached_tokens": 0,
+      "ttft_ms": 1045.354791,
+      "tok_s": 24.87613440778491,
+      "wall_ms": 6955.0491250000005
+    },
+    {
+      "id": "near-010",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 124,
+      "cached_tokens": 0,
+      "ttft_ms": 939.128459,
+      "tok_s": 24.84620686290925,
+      "wall_ms": 5890.011917
+    },
+    {
+      "id": "near-011",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "forget",
+      "error": null,
+      "prompt_tokens": 690,
+      "generated_tokens": 140,
+      "cached_tokens": 0,
+      "ttft_ms": 949.437625,
+      "tok_s": 24.935187760352914,
+      "wall_ms": 6524.301417000001
+    },
+    {
+      "id": "near-012",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "forget",
+      "error": null,
+      "prompt_tokens": 692,
+      "generated_tokens": 125,
+      "cached_tokens": 0,
+      "ttft_ms": 939.702708,
+      "tok_s": 25.059273264908047,
+      "wall_ms": 5888.518625
+    },
+    {
+      "id": "near-013",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "log",
+      "error": null,
+      "prompt_tokens": 1107,
+      "generated_tokens": 113,
+      "cached_tokens": 0,
+      "ttft_ms": 1457.986125,
+      "tok_s": 24.56411063536994,
+      "wall_ms": 6018.049542
+    },
+    {
+      "id": "near-014",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "log",
+      "error": null,
+      "prompt_tokens": 1108,
+      "generated_tokens": 185,
+      "cached_tokens": 0,
+      "ttft_ms": 1464.191375,
+      "tok_s": 24.608730108594436,
+      "wall_ms": 8941.769750000001
+    },
+    {
+      "id": "near-015",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "changed_files",
+      "error": null,
+      "prompt_tokens": 1106,
+      "generated_tokens": 151,
+      "cached_tokens": 0,
+      "ttft_ms": 1471.162333,
+      "tok_s": 24.541735916035183,
+      "wall_ms": 7583.7784169999995
+    },
+    {
+      "id": "near-016",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "changed_files",
+      "error": null,
+      "prompt_tokens": 1103,
+      "generated_tokens": 123,
+      "cached_tokens": 0,
+      "ttft_ms": 1481.988167,
+      "tok_s": 24.627450100706923,
+      "wall_ms": 6436.348416000001
+    },
+    {
+      "id": "near-017",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "diff_file",
+      "error": null,
+      "prompt_tokens": 1108,
+      "generated_tokens": 171,
+      "cached_tokens": 0,
+      "ttft_ms": 1495.920292,
+      "tok_s": 24.476029548613532,
+      "wall_ms": 8442.029416000001
+    },
+    {
+      "id": "near-018",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "diff_file",
+      "error": null,
+      "prompt_tokens": 1107,
+      "generated_tokens": 185,
+      "cached_tokens": 0,
+      "ttft_ms": 1507.235459,
+      "tok_s": 23.340395970134757,
+      "wall_ms": 9391.378333
+    },
+    {
+      "id": "near-019",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "show_file",
+      "error": null,
+      "prompt_tokens": 1108,
+      "generated_tokens": 211,
+      "cached_tokens": 0,
+      "ttft_ms": 1567.61875,
+      "tok_s": 21.638319609314987,
+      "wall_ms": 11274.718875
+    },
+    {
+      "id": "near-020",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "show_file",
+      "error": null,
+      "prompt_tokens": 1105,
+      "generated_tokens": 273,
+      "cached_tokens": 0,
+      "ttft_ms": 1671.001666,
+      "tok_s": 21.667180110992597,
+      "wall_ms": 14225.681625
+    },
+    {
+      "id": "infer-001",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 699,
+      "generated_tokens": 352,
+      "cached_tokens": 0,
+      "ttft_ms": 1023.89775,
+      "tok_s": 23.49135382983309,
+      "wall_ms": 15966.13725
+    },
+    {
+      "id": "infer-002",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 700,
+      "generated_tokens": 440,
+      "cached_tokens": 0,
+      "ttft_ms": 1017.629458,
+      "tok_s": 23.700634264853203,
+      "wall_ms": 19540.763125
+    },
+    {
+      "id": "infer-003",
+      "before": {
+        "parsed_ok": false,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "retried": true,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 1457,
+      "generated_tokens": 852,
+      "cached_tokens": 703,
+      "ttft_ms": 1115.114334,
+      "tok_s": 24.495952729698093,
+      "wall_ms": 36156.623375
+    },
+    {
+      "id": "infer-004",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 704,
+      "generated_tokens": 284,
+      "cached_tokens": 0,
+      "ttft_ms": 1098.569125,
+      "tok_s": 24.514687776291687,
+      "wall_ms": 12643.252375
+    },
+    {
+      "id": "infer-005",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 703,
+      "generated_tokens": 228,
+      "cached_tokens": 0,
+      "ttft_ms": 984.355209,
+      "tok_s": 24.693637870481904,
+      "wall_ms": 10177.414375
+    },
+    {
+      "id": "infer-006",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "recall",
+      "error": null,
+      "prompt_tokens": 701,
+      "generated_tokens": 221,
+      "cached_tokens": 0,
+      "ttft_ms": 971.962833,
+      "tok_s": 24.560275364055812,
+      "wall_ms": 9930.062292
+    },
+    {
+      "id": "infer-007",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 702,
+      "generated_tokens": 208,
+      "cached_tokens": 0,
+      "ttft_ms": 1048.203833,
+      "tok_s": 24.129041880983614,
+      "wall_ms": 9627.522583
+    },
+    {
+      "id": "infer-008",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 702,
+      "generated_tokens": 404,
+      "cached_tokens": 0,
+      "ttft_ms": 970.650167,
+      "tok_s": 24.468427336823865,
+      "wall_ms": 17441.289209000002
+    },
+    {
+      "id": "infer-009",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 696,
+      "generated_tokens": 196,
+      "cached_tokens": 0,
+      "ttft_ms": 943.239667,
+      "tok_s": 24.92706835145952,
+      "wall_ms": 8766.494417
+    },
+    {
+      "id": "infer-010",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 699,
+      "generated_tokens": 328,
+      "cached_tokens": 0,
+      "ttft_ms": 942.389916,
+      "tok_s": 24.882538596108212,
+      "wall_ms": 14084.551959
+    },
+    {
+      "id": "infer-011",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 698,
+      "generated_tokens": 139,
+      "cached_tokens": 0,
+      "ttft_ms": 944.01,
+      "tok_s": 24.944645220298742,
+      "wall_ms": 6476.677792
+    },
+    {
+      "id": "infer-012",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 698,
+      "generated_tokens": 285,
+      "cached_tokens": 0,
+      "ttft_ms": 945.5515,
+      "tok_s": 24.86521419500021,
+      "wall_ms": 12367.575
+    },
+    {
+      "id": "infer-013",
+      "before": {
+        "parsed_ok": false,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": true,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 1457,
+      "generated_tokens": 674,
+      "cached_tokens": 703,
+      "ttft_ms": 952.676875,
+      "tok_s": 24.55445762452609,
+      "wall_ms": 28389.1635
+    },
+    {
+      "id": "infer-014",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 698,
+      "generated_tokens": 128,
+      "cached_tokens": 0,
+      "ttft_ms": 958.04025,
+      "tok_s": 24.706925645504302,
+      "wall_ms": 6098.748667
+    },
+    {
+      "id": "infer-015",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 698,
+      "generated_tokens": 305,
+      "cached_tokens": 0,
+      "ttft_ms": 961.923625,
+      "tok_s": 24.624489778688496,
+      "wall_ms": 13307.829166
+    },
+    {
+      "id": "infer-016",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 705,
+      "generated_tokens": 421,
+      "cached_tokens": 0,
+      "ttft_ms": 970.346084,
+      "tok_s": 24.54880974254874,
+      "wall_ms": 18082.039708
+    },
+    {
+      "id": "infer-017",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "write_file",
+      "error": null,
+      "prompt_tokens": 704,
+      "generated_tokens": 200,
+      "cached_tokens": 0,
+      "ttft_ms": 963.03525,
+      "tok_s": 24.637950578128272,
+      "wall_ms": 9040.629583
+    },
+    {
+      "id": "infer-018",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "list_dir",
+      "error": null,
+      "prompt_tokens": 697,
+      "generated_tokens": 135,
+      "cached_tokens": 0,
+      "ttft_ms": 960.862167,
+      "tok_s": 24.74087510598534,
+      "wall_ms": 6377.4190419999995
+    },
+    {
+      "id": "infer-019",
+      "before": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": false,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 701,
+      "generated_tokens": 165,
+      "cached_tokens": 0,
+      "ttft_ms": 962.938958,
+      "tok_s": 24.545367533351186,
+      "wall_ms": 7644.880125000001
+    },
+    {
+      "id": "infer-020",
+      "before": {
+        "parsed_ok": false,
+        "right_tool": false,
+        "args_ok": false
+      },
+      "after": {
+        "parsed_ok": true,
+        "right_tool": true,
+        "args_ok": true
+      },
+      "retried": true,
+      "tool": "read_file",
+      "error": null,
+      "prompt_tokens": 1462,
+      "generated_tokens": 741,
+      "cached_tokens": 702,
+      "ttft_ms": 963.964709,
+      "tok_s": 23.870128934664933,
+      "wall_ms": 32030.836333000003
+    }
+  ]
+}

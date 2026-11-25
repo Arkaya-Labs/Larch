@@ -1,0 +1,2 @@
+heap_type 1
+size_in_bytes 12884901888

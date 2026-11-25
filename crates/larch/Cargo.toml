@@ -1,0 +1,33 @@
+[package]
+license.workspace = true
+name = "larch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+larch-fetch = { path = "../larch-fetch" }
+larch-engine = { path = "../larch-engine" }
+larch-kernels = { path = "../larch-kernels" }
+larch-model = { path = "../larch-model" }
+larch-records = { path = "../larch-records" }
+
+[features]
+default = []
+# The engine's LARCH_FAULT injection, for the recovery runs (bench/results/recovery-plan.md); off by default.
+fault-inject = ["larch-engine/fault-inject"]
+
+[target.'cfg(windows)'.dependencies]
+win32job = "2"
+
+[dev-dependencies]
+# tests/facade.rs mends a .pin's checksums after editing a field.
+sha2 = "0.10"
+
+[lints]
+workspace = true

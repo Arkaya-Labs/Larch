@@ -1,0 +1,9 @@
+2026-10-26 03:53:46,007 - INFO - Intermediate patch for fake__repo-3 written to logs/run_evaluation/larch-coding-run0/hosted_vllm__m5/fake__repo-3/patch.diff, now applying to container...
+2026-10-26 03:53:46,007 - INFO - Failed to apply patch to container: git apply --verbose
+2026-10-26 03:53:46,007 - INFO - Failed to apply patch to container: git apply --verbose --reject
+2026-10-26 03:53:46,007 - INFO - Failed to apply patch to container: patch --batch --fuzz=5 -p1 -i
+2026-10-26 03:53:46,007 - INFO - >>>>> Patch Apply Failed:
+patching file greet.py
+Hunk #1 FAILED at 1.
+1 out of 1 hunk FAILED -- saving rejects to file greet.py.rej
+

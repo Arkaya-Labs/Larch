@@ -1,0 +1,511 @@
+{
+ "model": "larch",
+ "messages": [
+  {
+   "role": "user",
+   "content": [
+    {
+     "type": "text",
+     "text": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as "
+    },
+    {
+     "type": "text",
+     "text": "What does notes.txt say?"
+    }
+   ]
+  },
+  {
+   "role": "system",
+   "content": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in "
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_01",
+     "name": "Read",
+     "input": {
+      "file_path": "/home/user/project/notes.txt"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "tool_use_id": "toolu_01",
+     "type": "tool_result",
+     "content": "1\tThe answer is 42.\n2\t",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ]
+  }
+ ],
+ "system": [
+  {
+   "type": "text",
+   "text": "x-anthropic-billing-header: cc_version=2.1.310.6b8; cc_entrypoint=sdk-cli;"
+  },
+  {
+   "type": "text",
+   "text": "Stand-in text of the same length as the recorded client's prom",
+   "cache_control": {
+    "type": "ephemeral"
+   }
+  },
+  {
+   "type": "text",
+   "text": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded",
+   "cache_control": {
+    "type": "ephemeral"
+   }
+  }
+ ],
+ "tools": [
+  {
+   "name": "Agent",
+   "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is no",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "description": {
+      "description": "A short (3-5 word) description of the task",
+      "type": "string"
+     },
+     "prompt": {
+      "description": "The task for the agent to perform",
+      "type": "string"
+     },
+     "subagent_type": {
+      "description": "The type of specialized agent to use for this task",
+      "type": "string"
+     },
+     "model": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published",
+      "type": "string",
+      "enum": [
+       "sonnet",
+       "opus",
+       "haiku",
+       "fable"
+      ]
+     },
+     "effort": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which",
+      "type": "string",
+      "enum": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ]
+     },
+     "run_in_background": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of",
+      "type": "boolean"
+     },
+     "isolation": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the r",
+      "type": "string",
+      "enum": [
+       "worktree",
+       "remote"
+      ]
+     }
+    },
+    "required": [
+     "description",
+     "prompt"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "Bash",
+   "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "command": {
+      "description": "The command to execute",
+      "type": "string"
+     },
+     "timeout": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, whic",
+      "type": "number"
+     },
+     "description": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same ",
+      "type": "string"
+     },
+     "run_in_background": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. S",
+      "type": "boolean"
+     },
+     "dangerouslyDisableSandbox": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. ",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "command"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "Edit",
+   "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. ",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "file_path": {
+      "description": "The absolute path to the file to modify",
+      "type": "string"
+     },
+     "old_string": {
+      "description": "The text to replace",
+      "type": "string"
+     },
+     "new_string": {
+      "description": "Stand-in text of the same length as the recorded client's promp",
+      "type": "string"
+     },
+     "replace_all": {
+      "description": "Replace all occurrences of old_string (default false)",
+      "default": false,
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file_path",
+     "old_string",
+     "new_string"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "ListAgents",
+   "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "channel": {
+      "description": "Not available in this build; leave unset.",
+      "type": "string",
+      "maxLength": 256
+     },
+     "q": {
+      "description": "Not available in this build; leave unset.",
+      "type": "string",
+      "maxLength": 256
+     }
+    },
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "Read",
+   "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, whic",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "file_path": {
+      "description": "The absolute path to the file to read",
+      "type": "string"
+     },
+     "offset": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. St",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+     },
+     "limit": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not publ",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+     },
+     "pages": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the sa",
+      "type": "string"
+     },
+     "allow_large": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in te",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "ReportFindings",
+   "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length a",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "level": {
+      "description": "Effort level the review ran at",
+      "type": "string",
+      "enum": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ]
+     },
+     "findings": {
+      "description": "Verified findings, most-severe first; empty if none survived",
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "file": {
+         "description": "Repo-relative path of the file the finding is in",
+         "type": "string"
+        },
+        "line": {
+         "description": "1-indexed line the finding anchors to",
+         "type": "integer",
+         "minimum": -9007199254740991,
+         "maximum": 9007199254740991
+        },
+        "summary": {
+         "description": "One-sentence statement of the defect",
+         "type": "string"
+        },
+        "short_summary": {
+         "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-",
+         "type": "string",
+         "maxLength": 60
+        },
+        "failure_scenario": {
+         "description": "Concrete inputs/state → wrong output/crash",
+         "type": "string"
+        },
+        "category": {
+         "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the",
+         "type": "string",
+         "maxLength": 40
+        },
+        "verdict": {
+         "description": "Set when a verify pass ran; absent on inline-only reviews",
+         "type": "string",
+         "enum": [
+          "CONFIRMED",
+          "PLAUSIBLE"
+         ]
+        },
+        "outcome": {
+         "description": "Stand-in text of the same length as the recorded client's prompt, which is not",
+         "type": "string",
+         "enum": [
+          "fixed",
+          "skipped",
+          "no_change_needed"
+         ]
+        }
+       },
+       "required": [
+        "file",
+        "summary",
+        "failure_scenario"
+       ],
+       "additionalProperties": false
+      }
+     }
+    },
+    "required": [
+     "findings"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "ScheduleWakeup",
+   "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, ",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "delaySeconds": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in",
+      "type": "number"
+     },
+     "reason": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the record",
+      "type": "string"
+     },
+     "prompt": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not publis",
+      "type": "string"
+     },
+     "stop": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt",
+      "type": "boolean"
+     },
+     "noop": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as t",
+      "type": "boolean"
+     }
+    },
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "Skill",
+   "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, w",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "skill": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which",
+      "type": "string"
+     },
+     "args": {
+      "description": "Optional arguments for the skill",
+      "type": "string"
+     }
+    },
+    "required": [
+     "skill"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "ToolSearch",
+   "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded clie",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "query": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in ",
+      "type": "string"
+     },
+     "max_results": {
+      "description": "Maximum number of results to return (default: 5)",
+      "default": 5,
+      "type": "number"
+     }
+    },
+    "required": [
+     "query",
+     "max_results"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "Workflow",
+   "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's pr",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "script": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same l",
+      "type": "string",
+      "maxLength": 524288
+     },
+     "name": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text o",
+      "type": "string"
+     },
+     "description": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, wh",
+      "type": "string"
+     },
+     "title": {
+      "description": "Stand-in text of the same length as the recorded client's prom",
+      "type": "string"
+     },
+     "args": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in t"
+     },
+     "scriptPath": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's p",
+      "type": "string"
+     },
+     "resumeFromRunId": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which",
+      "type": "string",
+      "pattern": "^wf_[a-z0-9-]{6,}$"
+     }
+    },
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "DeferredToolPlaceholder",
+   "description": "Stand-in text of the same length as the recorded client's prompt, which is not publ",
+   "input_schema": {
+    "type": "object",
+    "properties": {}
+   },
+   "defer_loading": true
+  },
+  {
+   "name": "Write",
+   "description": "Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's prompt, which is not published. Stand-in text of the same length as the recorded client's pr",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "file_path": {
+      "description": "Stand-in text of the same length as the recorded client's prompt, which",
+      "type": "string"
+     },
+     "content": {
+      "description": "The content to write to the file",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path",
+     "content"
+    ],
+    "additionalProperties": false
+   }
+  }
+ ],
+ "metadata": {
+  "user_id": "{\"device_id\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"account_uuid\":\"\",\"session_id\":\"00000000-0000-0000-0000-000000000000\"}"
+ },
+ "max_tokens": 32000,
+ "thinking": {
+  "type": "adaptive",
+  "display": "omitted"
+ },
+ "context_management": {
+  "edits": [
+   {
+    "type": "clear_thinking_20251015",
+    "keep": "all"
+   }
+  ]
+ },
+ "output_config": {
+  "effort": "high"
+ },
+ "stream": true
+}

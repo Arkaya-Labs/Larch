@@ -1,0 +1,101 @@
+name: native task model (hosted)
+
+# Only the dependency-free presentation model is checked here. This job does
+# not compile GPUI, larch-app, IPC, private dependencies, or platform packaging.
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'apps/desktop/src/tasks_model.rs'
+      - 'apps/desktop/src/tasks_model_tests.rs'
+      - 'apps/desktop/src/tasks_pending_tests.rs'
+      - '.github/workflows/native-task-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-task-model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      diagnostic: ${{ steps.diagnostic.outputs.message }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install Rust 1.97
+        run: rustup toolchain install 1.97 --profile minimal --component rustfmt
+      - name: Check task model formatting
+        shell: bash
+        run: |
+          set -o pipefail
+          rustfmt +1.97 --edition 2024 --check apps/desktop/src/tasks_model.rs apps/desktop/src/tasks_model_tests.rs 2>&1 | tee "$RUNNER_TEMP/native-task-fmt.log"
+      - name: Compile task model tests
+        id: compile
+        if: ${{ always() && !cancelled() }}
+        shell: bash
+        run: |
+          set -o pipefail
+          rustc +1.97 --edition 2024 --test apps/desktop/src/tasks_model_tests.rs -o "$RUNNER_TEMP/native-task-tests" 2>&1 | tee "$RUNNER_TEMP/native-task-compile.log"
+      - name: Run task model tests
+        if: ${{ always() && steps.compile.outcome == 'success' && !cancelled() }}
+        shell: bash
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/native-task-tests" 2>&1 | tee "$RUNNER_TEMP/native-task-test.log"
+      - name: Capture first model error
+        id: diagnostic
+        if: ${{ always() && !cancelled() }}
+        shell: bash
+        run: |
+          python3 - <<'PYDIAG'
+          import os, pathlib, re
+          findings = []
+          for name in ('native-task-compile.log', 'native-task-test.log'):
+              path = pathlib.Path(os.environ['RUNNER_TEMP'], name)
+              if not path.exists():
+                  continue
+              lines = path.read_text(errors='replace').splitlines()
+              for index, line in enumerate(lines):
+                  if not (line.startswith('error[') or line.startswith('error:') or (line.startswith('test ') and 'FAILED' in line)):
+                      continue
+                  if line.startswith('error: aborting'):
+                      continue
+                  location = ''
+                  for detail in lines[index + 1:index + 8]:
+                      if detail.strip().startswith('-->'):
+                          location = detail.strip().removeprefix('-->').strip()
+                          break
+                  clean = lambda value: re.sub(r'[^a-zA-Z0-9 /_:.\[\]-]', '?', value)
+                  message = clean(line)[:28] + (' ' + clean(location)[:37] if location else '')
+                  if message not in findings:
+                      findings.append(message)
+                  if len(findings) == 3:
+                      break
+              if len(findings) == 3:
+                  break
+          if not findings:
+              path = pathlib.Path(os.environ['RUNNER_TEMP'], 'native-task-fmt.log')
+              if path.exists():
+                  for line in path.read_text(errors='replace').splitlines():
+                      match = re.match(r'^Diff in .*?(apps/desktop/src/[^:]+):(\d+):', line)
+                      if match:
+                          location = re.sub(r'[^a-zA-Z0-9 /_:.\[\]-]', '?', f'{match.group(1)}:{match.group(2)}')[:60]
+                          if location not in findings:
+                              findings.append(location)
+                      if len(findings) == 3:
+                          break
+          message = ' | '.join(findings) or 'No compiler, test, or format location captured'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('message=' + message + '\n')
+          PYDIAG
+
+  native-task-diagnostic:
+    if: ${{ always() && needs.native-task-model.result == 'failure' }}
+    needs: native-task-model
+    name: "Native model diagnostic - ${{ needs.native-task-model.outputs.diagnostic }}"
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - run: echo 'See the preceding native model job for complete diagnostics.'

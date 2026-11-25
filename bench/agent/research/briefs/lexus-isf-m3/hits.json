@@ -1,0 +1,25 @@
+{
+ "synthetic": true,
+ "hits": [
+  {
+   "title": "2012 Lexus IS F vs 2012 BMW M3: Comparison Test",
+   "url": "https://www.motortrend.example/2012-lexus-is-f-vs-2012-bmw-m3-comparison",
+   "snippet": "Two V-8 sport sedans, one from Japan and one from Germany, tested back to back."
+  },
+  {
+   "title": "Lexus ISF vs BMW E92 M3 on track",
+   "url": "https://www.caranddriver.example/lexus-isf-vs-bmw-e92-m3-track-test",
+   "snippet": "We lapped the ISF and the E92 M3 at Willow Springs."
+  },
+  {
+   "title": "2026 Lexus IS 500 F Sport Performance vs 2026 BMW M3",
+   "url": "https://www.roadandtrack.example/2026-lexus-is-500-vs-2026-bmw-m3",
+   "snippet": "The IS 500 is the last V-8 Lexus sedan; the new M3 has a turbo six."
+  },
+  {
+   "title": "2026 BMW M3 CS review",
+   "url": "https://www.bmwblog.example/2026-bmw-m3-cs-review",
+   "snippet": "The M3 CS is the quickest M3 yet."
+  }
+ ]
+}

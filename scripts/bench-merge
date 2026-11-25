@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""The per-merge scoreboard step (architecture 16). Python 3.11+, stdlib only.
+
+    python3 scripts/bench-merge --machine <name> --models <dir> --alias <alias> --ref <oracle dump> [--correctness-fix]
+
+Refuses on a dirty tree, a model without a bench/oracle-bounds.json entry, a --ref other than its calibrated reference
+dump, a failed parity gate, a failed run, a fixed row with any decode step run eager on a refused graph capture (invalid) or
+an unfair comparison with llama.cpp's W4 row; else appends one line to
+<out>/history.csv, one per commit, machine and model. A loss over 3 % against the machine's last line for the model exits 1
+and appends nothing: revert the merge unless it is a correctness fix. History lines are never edited.
+"""
+
+import argparse
+import csv
+import hashlib
+import json
+import math
+import pathlib
+import subprocess
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import baseline  # noqa: E402
+
+# agg_tok_s_8 is `larch bench --mode batched` at 8 (architecture 16 names it the aggregate number);
+# serve_tok_s_8, the W4 serve aggregate reported beside it, is gated too.
+COLUMNS = ["commit", "machine", "model", "agg_tok_s_8", "ttft_p99_ms", "tpot_p99_ms", "single_tok_s", "serve_tok_s_8"]
+HIGHER_IS_BETTER = {"agg_tok_s_8", "single_tok_s", "serve_tok_s_8"}
+LOSS = 0.03  # the architecture's "loses > 3 %"; exactly 3 % passes
+W4_8 = ("w4-8", "chat.jsonl", 8, False, None)  # the llama.cpp row the larch run is compared with
+# Its own result files: a refused merge must never replace the attended run's published larch-* rows.
+SERVED, FIXED = "merge-w4-8", "merge-fixed"
+
+
+def row(commit, machine, alias, run, fixed):
+    """The history line of a W4-at-8 serve result and a fixed-shape result; refuses a missing or non-positive number."""
+    s = run.get("summary") or {}
+    pl = {r.get("pl"): r for r in fixed.get("fixed", [])}
+    got = {"agg_tok_s_8": pl.get(8, {}).get("speed"), "ttft_p99_ms": (s.get("ttft_ms") or {}).get("p99"),
+           "tpot_p99_ms": (s.get("tpot_ms") or {}).get("p99"), "single_tok_s": pl.get(1, {}).get("speed_tg"),
+           "serve_tok_s_8": s.get("agg_tok_s")}
+    # A zero would also divide the next merge's comparison.
+    bad = [k for k, v in got.items() if not isinstance(v, (int, float)) or v <= 0]
+    if bad:
+        baseline.die(f"refused: the results lack a positive {', '.join(bad)}")
+    # History rows measure the graph path: a decode step run eager on a refused capture mixes in the eager one.
+    for n in (1, 8):
+        eager, replays = pl[n].get("eager_decode_steps", 0), pl[n].get("graph_replays", 0)
+        if eager > 0:
+            baseline.die(f"invalid: fixed pl={n} ran {eager} decode steps eager on refused captures and replayed "
+                         f"{replays}; not compared (LARCH_FIT_DIAGNOSTICS=1 prints why)")
+    return {"commit": commit, "machine": machine, "model": alias, **got}
+
+
+def bounds(alias, ref, path=baseline.BENCH / "oracle-bounds.json"):
+    """The model's calibrated (bound, margin), once `ref` is the dump they were calibrated against (architecture 15)."""
+    try:
+        entry = json.loads(path.read_text()).get(alias)
+        bound, margin, want = entry["bound"], entry["margin"], entry["reference"]["dump_sha256"]
+        # parity's own rule: a finite bound > 0 and margin >= 0; NaN fails both comparisons.
+        if not (type(bound) in (int, float) and type(margin) in (int, float) and 0 < bound < math.inf
+                and 0 <= margin < math.inf and isinstance(want, str) and want):
+            raise ValueError(f"bound {bound!r}, margin {margin!r}, reference dump {want!r}")
+    except (OSError, ValueError, AttributeError, KeyError, TypeError) as e:
+        baseline.die(f"refused: no calibrated bound and margin for {alias} in {path.name} ({type(e).__name__}: {e}); "
+                     "calibrate it first")
+    try:
+        with open(ref, "rb") as f:
+            got = hashlib.file_digest(f, "sha256").hexdigest()
+    except OSError as e:
+        baseline.die(f"refused: --ref {ref}: {e}")
+    if got != want:
+        baseline.die(f"refused: --ref is not {alias}'s calibrated reference dump (sha256 {got[:12]}, want {want[:12]})")
+    return bound, margin
+
+
+def last(path, machine, model, commit):
+    """The newest history line of this machine and model, or None. Refuses when `commit` already has one: one line per
+    merge, since a rerun would add a duplicate and move the baseline the next merge is compared with."""
+    if not path.exists():
+        return None
+    with path.open(newline="") as f:
+        mine = [r for r in csv.DictReader(f) if r["machine"] == machine and r["model"] == model]
+    if any(r["commit"] == commit for r in mine):
+        baseline.die(f"refused: {path.name} already has {commit[:12]}'s line for {machine} {model}")
+    return mine[-1] if mine else None
+
+
+def change(prev, new, key):
+    """Relative change of a metric; rounded so that exactly 3 % is not a float-noise 3.0000000000000027 %."""
+    return round(float(new[key]) / float(prev[key]) - 1, 9)
+
+
+def losses(prev, new):
+    """One message per metric that is more than 3 % worse than the previous line."""
+    out = []
+    for key in COLUMNS[3:]:
+        c = change(prev, new, key)
+        if c < -LOSS if key in HIGHER_IS_BETTER else c > LOSS:
+            out.append(f"{key} {prev[key]} -> {new[key]} ({c:+.1%})")
+    return out
+
+
+def append(path, new):
+    """Add a line, with the header when the file is new; existing lines are never rewritten."""
+    fresh = not path.exists() or path.stat().st_size == 0
+    with path.open("a", newline="") as f:
+        w = csv.DictWriter(f, COLUMNS, lineterminator="\n")
+        if fresh:
+            w.writeheader()
+        w.writerow(new)
+
+
+def check_machine(machine):
+    """History needs llama.cpp's W4-at-8 row of the same machine; mac, sm86 and cpu run none."""
+    if W4_8 not in baseline.MACHINES[machine]["rows"]:
+        baseline.die(f"refused: --machine {machine} has no llama.cpp W4 at 8 row to compare with")
+
+
+def built(messages):
+    """The larch binary Cargo reports in its JSON messages: under CARGO_TARGET_DIR or a configured target dir, a
+    hardcoded target/release/larch would be an older build."""
+    exes = [m["executable"] for m in map(json.loads, messages.splitlines())
+            if m.get("reason") == "compiler-artifact" and m["target"]["name"] == "larch"
+            and "bin" in m["target"]["kind"] and m.get("executable")]
+    if len(exes) != 1:
+        baseline.die(f"refused: cargo reported {len(exes)} larch executables")
+    return pathlib.Path(exes[0])
+
+
+def git(*args, cwd=baseline.ROOT):
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+
+
+def dirty(root=baseline.ROOT):
+    """Changes or untracked files besides new results and Python bytecode: the numbers must belong to a commit, and
+    committed results (history, baseline rows) are never edited."""
+    r = git("status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude,glob)**/__pycache__/**", cwd=root)
+    return bool(r.returncode) or any(not line.startswith("?? bench/results/") for line in r.stdout.splitlines())
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--machine", required=True, choices=baseline.MACHINES)
+    p.add_argument("--models", required=True, type=pathlib.Path, help="the directory of <alias>.gguf files")
+    p.add_argument("--alias", required=True, choices=baseline.models_toml())
+    p.add_argument("--ref", required=True, type=pathlib.Path, help="llama.cpp oracle dump for the parity gate")
+    p.add_argument("--out", type=pathlib.Path, default=baseline.BENCH / "results")
+    p.add_argument("--correctness-fix", action="store_true", help="append even with a loss")
+    a = p.parse_args()
+    check_machine(a.machine)
+    bound, margin = bounds(a.alias, a.ref)
+    # Against llama.cpp's W4 row at the same context, so the serve number is a like-for-like one.
+    llama = baseline.out_path(a, a.alias, "w4-8")
+    if not llama.exists():
+        baseline.die(f"refused: no llama.cpp W4 at 8 result at {llama}; run baseline.py run first")
+    if dirty():
+        baseline.die("refused: changes or untracked files in the tree; the numbers must belong to a commit")
+    head = git("rev-parse", "HEAD")
+    if head.returncode:
+        baseline.die("refused: git rev-parse HEAD failed")
+    commit = head.stdout.strip()
+    history = a.out / "history.csv"
+    prev = last(history, a.machine, a.alias, commit)  # before the runs: a merged commit refuses at once
+    # Built here, so the binary is this commit's and not a stale one; --locked, so the build cannot rewrite
+    # Cargo.lock under a result attributed to HEAD.
+    cargo = baseline.run(["cargo", "build", "--release", "--locked", "-p", "larch",
+                          "--message-format=json-render-diagnostics"], cwd=baseline.ROOT, stdout=subprocess.PIPE, text=True)
+    larch = built(cargo.stdout)
+
+    model = baseline.gguf(a, a.alias)
+    ctx = baseline.row_ctx(W4_8, baseline.peaks(a.alias))
+    a.out.mkdir(parents=True, exist_ok=True)
+    served, fixed = baseline.out_path(a, a.alias, SERVED), baseline.out_path(a, a.alias, FIXED)
+    steps = [("parity", [larch, "parity", "-m", model, "--ref", a.ref, "--bound", bound, "--margin", margin,
+                         "--mode", "all"]),
+             ("serve bench", [larch, "bench", "-m", model, "--mode", "serve", "--prompts", baseline.PROMPTS / "chat.jsonl",
+                              "--concurrency", 8, "--set",
+                              f"max_context={ctx}", "--machine", a.machine, "--json", served]),
+             ("batched bench", [larch, "bench", "-m", model, "--mode", "batched", "--npl", "1,4,8,16",
+                                "--machine", a.machine, "--json", fixed])]
+    for what, cmd in steps:
+        if baseline.run(cmd, check=False).returncode:
+            baseline.die(f"refused: {what} failed")
+
+    if baseline.run([sys.executable, baseline.ROOT / "scripts" / "baseline.py", "--machine", a.machine, "compare",
+                     llama, served], check=False).returncode:
+        baseline.die("refused: the larch W4 run does not match llama.cpp's row")
+
+    new = row(commit, a.machine, a.alias, json.loads(served.read_text()), json.loads(fixed.read_text()))
+    if prev is None:
+        print(f"no previous line for {a.machine} {a.alias}")
+    else:
+        for key in COLUMNS[3:]:
+            print(f"{key}: {prev[key]} -> {new[key]} ({change(prev, new, key):+.1%})")
+        bad = losses(prev, new)
+        if bad:
+            print("loses more than 3 %:\n  " + "\n  ".join(bad))
+            if not a.correctness_fix:
+                sys.exit("bench-merge: not appended; revert the merge unless it is a correctness fix")
+    append(history, new)
+    print(",".join(str(new[k]) for k in COLUMNS))
+
+
+if __name__ == "__main__":
+    main()

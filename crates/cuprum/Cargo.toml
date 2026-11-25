@@ -1,0 +1,16 @@
+[package]
+license.workspace = true
+name = "cuprum"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+larch-records = { path = "../larch-records", features = ["schema"] }
+
+[lints]
+workspace = true

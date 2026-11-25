@@ -1,0 +1,272 @@
+[
+  {
+    "id": "q01",
+    "question": "What is the monthly rent for the apartment at 42 Alder Street?",
+    "facts": [
+      {
+        "file": "lease-alder-street.md",
+        "quote": "Monthly rent: $1,850, due on the first day of each month.",
+        "line": 14
+      }
+    ]
+  },
+  {
+    "id": "q02",
+    "question": "What is the late fee if the Alder Street rent is paid late?",
+    "facts": [
+      {
+        "file": "lease-alder-street.md",
+        "quote": "If rent is not received by the fifth day of the month, the tenant pays a late fee of $75.",
+        "line": 17
+      }
+    ]
+  },
+  {
+    "id": "q03",
+    "question": "When is the kitchen countertop installation scheduled?",
+    "facts": [
+      {
+        "file": "project-status-2026-10.md",
+        "quote": "Countertop installation is now scheduled for 3 November 2026",
+        "line": 11
+      }
+    ]
+  },
+  {
+    "id": "q04",
+    "question": "What time does my flight to Lisbon depart?",
+    "facts": [
+      {
+        "file": "trip-plan-lisbon.md",
+        "quote": "Outbound flight GL 218 departs Newark at 18:40 on Thursday 22 October",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "id": "q05",
+    "question": "What does error code E21 mean on the washer?",
+    "facts": [
+      {
+        "file": "washer-manual.txt",
+        "quote": "E21: The drum did not drain within 10 minutes.",
+        "line": 208
+      }
+    ]
+  },
+  {
+    "id": "q06",
+    "question": "How often should I clean the washer's drain pump filter?",
+    "facts": [
+      {
+        "file": "washer-manual.txt",
+        "quote": "Clean the drain pump filter every three months.",
+        "line": 235
+      }
+    ]
+  },
+  {
+    "id": "q07",
+    "question": "At what temperature and for how long do I bake the banana bread?",
+    "facts": [
+      {
+        "file": "recipes.md",
+        "quote": "Bake at 175 °C for 60 minutes, until a skewer comes out clean.",
+        "line": 26
+      }
+    ]
+  },
+  {
+    "id": "q08",
+    "question": "How much will the annual residents' association dues be from January 2027?",
+    "facts": [
+      {
+        "file": "residents-meeting-notes-2026.md",
+        "quote": "The board voted to raise annual dues to $640 starting January 2027.",
+        "line": 429
+      }
+    ]
+  },
+  {
+    "id": "q09",
+    "question": "What will the interest rate on my savings account change to?",
+    "facts": [
+      {
+        "file": "bank-letter-savings-rate.txt",
+        "quote": "will change from 3.10% APY\nto 2.75% APY",
+        "line": 16
+      }
+    ]
+  },
+  {
+    "id": "q10",
+    "question": "What is the deductible on my renters insurance?",
+    "facts": [
+      {
+        "file": "insurance-renters-renewal.txt",
+        "quote": "Deductible: $500 per claim.",
+        "line": 18
+      }
+    ]
+  },
+  {
+    "id": "q11",
+    "question": "When is my next dentist appointment?",
+    "facts": [
+      {
+        "file": "dentist-appointment.txt",
+        "quote": "Your next appointment is on Tuesday 3 November 2026 at 08:30 with Dr. Imani Okafor.",
+        "line": 8
+      }
+    ]
+  },
+  {
+    "id": "q12",
+    "question": "When is Miso's rabies booster due?",
+    "facts": [
+      {
+        "file": "vet-records-miso.md",
+        "quote": "Rabies booster due: 14 February 2027.",
+        "line": 11
+      }
+    ]
+  },
+  {
+    "id": "q13",
+    "question": "How much notice do I need to give to cancel my gym membership?",
+    "facts": [
+      {
+        "file": "gym-membership.txt",
+        "quote": "To cancel, give 30 days' written notice at the front desk or by email",
+        "line": 13
+      }
+    ]
+  },
+  {
+    "id": "q14",
+    "question": "What is the lockbox code for the cabin key?",
+    "facts": [
+      {
+        "file": "cabin-weekend-plan.md",
+        "quote": "the lockbox code is 2719",
+        "line": 10
+      }
+    ]
+  },
+  {
+    "id": "q15",
+    "question": "How much do I pay each month for the Alder Street rent and the renters insurance together?",
+    "facts": [
+      {
+        "file": "lease-alder-street.md",
+        "quote": "Monthly rent: $1,850, due on the first day of each month.",
+        "line": 14
+      },
+      {
+        "file": "insurance-renters-renewal.txt",
+        "quote": "Your premium: $18.50 per month.",
+        "line": 21
+      }
+    ]
+  },
+  {
+    "id": "q16",
+    "question": "Is my dentist appointment before or after my return flight from Lisbon?",
+    "facts": [
+      {
+        "file": "dentist-appointment.txt",
+        "quote": "Your next appointment is on Tuesday 3 November 2026 at 08:30 with Dr. Imani Okafor.",
+        "line": 8
+      },
+      {
+        "file": "trip-plan-lisbon.md",
+        "quote": "Return flight GL 219 leaves Lisbon at 10:15 on Thursday 29 October",
+        "line": 8
+      }
+    ]
+  },
+  {
+    "id": "q17",
+    "question": "Is the kitchen countertop installation before or after the wedding RSVP deadline?",
+    "facts": [
+      {
+        "file": "project-status-2026-10.md",
+        "quote": "Countertop installation is now scheduled for 3 November 2026",
+        "line": 11
+      },
+      {
+        "file": "wedding-rsvp-and-gift.md",
+        "quote": "Please RSVP by 1 November 2026",
+        "line": 6
+      }
+    ]
+  },
+  {
+    "id": "q18",
+    "question": "Can my cat Miso live with me at Alder Street, and how much does Miso weigh?",
+    "facts": [
+      {
+        "file": "lease-alder-street.md",
+        "quote": "One cat is allowed with a pet deposit of $300.",
+        "line": 34
+      },
+      {
+        "file": "vet-records-miso.md",
+        "quote": "Weight on 2 September 2026: 4.6 kg.",
+        "line": 17
+      }
+    ]
+  },
+  {
+    "id": "q19",
+    "question": "Which costs more each month, the gym membership or the phone plan?",
+    "facts": [
+      {
+        "file": "gym-membership.txt",
+        "quote": "Monthly fee: $42, charged on the 10th of each month.",
+        "line": 6
+      },
+      {
+        "file": "phone-plan-bill-2026-09.txt",
+        "quote": "Plan: Unlimited Talk 20 GB, $55.00 per month.",
+        "line": 8
+      }
+    ]
+  },
+  {
+    "id": "q20",
+    "question": "Is the next book club meeting before the Pine Hollow cabin weekend?",
+    "facts": [
+      {
+        "file": "book-club-notes.md",
+        "quote": "Next meeting: Thursday 12 November at Priya's place, 7 pm.",
+        "line": 12
+      },
+      {
+        "file": "cabin-weekend-plan.md",
+        "quote": "Pine Hollow cabin weekend, Friday 20 to Sunday 22 November 2026.",
+        "line": 3
+      }
+    ]
+  },
+  {
+    "id": "q21",
+    "question": "What is the Wi-Fi password at the Pine Hollow cabin?",
+    "facts": []
+  },
+  {
+    "id": "q22",
+    "question": "What is my passport number?",
+    "facts": []
+  },
+  {
+    "id": "q23",
+    "question": "What is the monthly rent for 17 Maple Avenue in 2027?",
+    "facts": []
+  },
+  {
+    "id": "q24",
+    "question": "How long is the warranty on the dishwasher?",
+    "facts": []
+  }
+]

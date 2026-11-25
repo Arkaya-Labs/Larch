@@ -1,0 +1,341 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vMAJOR.MINOR.PATCH tag to package
+        required: true
+        type: string
+      from:
+        description: First stage to run; a later stage reuses what earlier runs staged on the draft
+        type: choice
+        options: [build, runtimes, audit, draft]
+        default: build
+# Every job runs on a GitHub-hosted runner and hands files on as assets of this repository's
+# draft release, written with the workflow's own token: a job that stages needs contents: write.
+# GPU tests and parity are release gates run by hand (RELEASING.md), not here.
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+  LARCH_CMAKE_GENERATOR: Ninja
+jobs:
+  version:
+    # Every job below needs this one, so the `release` environment's required reviewer (set in the
+    # repository settings) approves the whole run before any runner builds or touches the draft.
+    environment: release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import importlib.util, os
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location('release', 'scripts/release-manifest.py')
+          release=importlib.util.module_from_spec(spec);spec.loader.exec_module(release)
+          # The workflow token writes only to the repository it runs in, so a run anywhere else (a
+          # fork, a rename) would fail at its first upload: stop here instead.
+          if os.environ['GITHUB_REPOSITORY'] != release.REPO: raise SystemExit('releases are built only in '+release.REPO+', not '+os.environ['GITHUB_REPOSITORY'])
+          tag=os.environ['RELEASE_TAG']
+          if not tag.startswith('v') or not release.valid_version(tag[1:]): raise SystemExit('invalid release tag')
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as stream: stream.write('version='+tag[1:]+'\ntag='+tag+'\n')
+          PY
+      # The jobs below hand files to each other as this draft's assets, not as Actions artifacts:
+      # one release outgrows the artifact quota. A re-tag starts from an empty draft; a dispatch from a
+      # later stage keeps it, so a packaging fix on dev re-runs only that stage and the ones after it.
+      - name: Open a fresh draft release
+        if: ${{ !inputs.from || inputs.from == 'build' }}
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: python3 scripts/release-manifest.py --version "$VERSION" --open-draft
+  # The GPU flavours: each checks out the tag and builds its canonical cli/app archives with
+  # release-manifest.py --build (#187, #189).
+  backends:
+    needs: version
+    permissions:
+      contents: write
+    if: ${{ !inputs.from || inputs.from == 'build' }}
+    uses: ./.github/workflows/backend-builds.yml
+    with:
+      release: true
+      tag: ${{ needs.version.outputs.tag }}
+      version: ${{ needs.version.outputs.version }}
+  metal:
+    needs: version
+    permissions:
+      contents: write
+    if: ${{ !inputs.from || inputs.from == 'build' }}
+    uses: ./.github/workflows/macos.yml
+    with:
+      release: true
+      tag: ${{ needs.version.outputs.tag }}
+      version: ${{ needs.version.outputs.version }}
+  cpu:
+    needs: version
+    if: ${{ !inputs.from || inputs.from == 'build' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+          persist-credentials: false
+      - uses: ./.github/actions/release-tools
+      - name: Cache both locked workspaces before offline version updates
+        shell: bash
+        run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path apps/desktop/Cargo.toml
+      - name: Set versions and build locked CPU CLI, agent and app
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          LARCH_BACKEND: CPU
+        run: python scripts/release-manifest.py --build "$TARGET" --flavour cpu --version "$VERSION"
+      - name: Stage on the draft release
+        shell: bash
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          shopt -s failglob
+          python scripts/release-manifest.py --version "$VERSION" --stage dist/*.tar.zst
+  setup:
+    needs: version
+    if: ${{ !inputs.from || inputs.from == 'build' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+          persist-credentials: false
+      - uses: ./.github/actions/release-tools
+      - name: Cache locks and install musl target
+        shell: bash
+        run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path apps/desktop/Cargo.toml
+          cargo fetch --locked --manifest-path apps/setup/Cargo.toml
+          if [ "$RUNNER_OS" = Linux ]; then rustup target add x86_64-unknown-linux-musl; fi
+      # The installer window people double-click is built here too: setup's package carries a copy
+      # for the uninstall entry and the launchers.
+      - name: Build engine-free setup (musl, macOS 11, or static CRT) and the installer window
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          LARCH_BACKEND: CPU
+        run: python scripts/release-manifest.py --build "$TARGET" --setup-only --version "$VERSION"
+      - name: Stage on the draft release
+        shell: bash
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          shopt -s failglob
+          python scripts/release-manifest.py --version "$VERSION" --stage dist/setup-*.tar.zst dist/larch-setup-* dist/larch-installer-*
+  runtimes:
+    needs: [version, cpu, setup, backends, metal]
+    if: ${{ !failure() && !cancelled() && (!inputs.from || inputs.from == 'build' || inputs.from == 'runtimes') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            flavour: cuda
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            flavour: cuda
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            flavour: hip
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    env:
+      ROCM_IMAGE: rocm/dev-ubuntu-24.04:10.0.0-full@sha256:a90cf047f615abe70fbef83c64def0a2d549ef37a39c8ea545430aba4981b374
+    steps:
+      # Packaging runs the workflow's own commit (dev's on a resume); the builds above run the tag's.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/release-tools
+      - name: Fetch the staged files from the draft release
+        shell: bash
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: python scripts/release-manifest.py --version "$VERSION" --unstage
+      # The ROCm image unpacks to more than a hosted runner's free disk.
+      - name: free disk for the ROCm image
+        if: runner.os == 'Linux'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup && docker image prune -af
+      - name: Repackage verified upstream runtime dependency closure
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          FLAVOUR: ${{ matrix.flavour }}
+        run: |
+          if [ "$FLAVOUR" = hip ]; then
+            docker run --rm -v "$PWD:/w" -w /w -e VERSION -e TARGET -e ROCM_IMAGE "$ROCM_IMAGE" bash -ceu '
+              trap '\''chown -R "$(stat -c %u:%g /w)" /w/dist'\'' EXIT
+              apt-get update -qq
+              apt-get install -y --no-install-recommends python3 zstd binutils
+              python3 scripts/release-manifest.py --runtimes hip --target "$TARGET" --version "$VERSION" --image "$ROCM_IMAGE"'
+          else
+            python scripts/release-manifest.py --runtimes cuda --target "$TARGET" --version "$VERSION"
+          fi
+      - name: Stage on the draft release
+        shell: bash
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          FLAVOUR: ${{ matrix.flavour }}
+        run: |
+          shopt -s failglob
+          if [ "$FLAVOUR" = hip ]; then
+            files=(dist/rocm-*-"$TARGET"-*.tar.zst dist/rocm-*-"$TARGET"-*.provenance.json)
+          else
+            files=(dist/cuda-"$TARGET"-*.tar.zst dist/cuda-"$TARGET"-*.provenance.json)
+          fi
+          python scripts/release-manifest.py --version "$VERSION" --stage "${files[@]}"
+  audit:
+    needs: [version, runtimes]
+    if: ${{ !failure() && !cancelled() && inputs.from != 'draft' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    env:
+      ROCM_IMAGE: rocm/dev-ubuntu-24.04:10.0.0-full@sha256:a90cf047f615abe70fbef83c64def0a2d549ef37a39c8ea545430aba4981b374
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/release-tools
+      - name: Fetch the staged files from the draft release
+        shell: bash
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: python scripts/release-manifest.py --version "$VERSION" --unstage
+      - name: free disk for the ROCm image
+        if: runner.os == 'Linux'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup && docker image prune -af
+      - name: Hard native package gates
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            docker run --rm -v "$PWD:/w" -w /w -e VERSION "$ROCM_IMAGE" bash -ceu '
+              trap '\''chown -R "$(stat -c %u:%g /w)" /w/dist'\'' EXIT
+              apt-get update -qq
+              apt-get install -y --no-install-recommends python3 zstd binutils
+              python3 scripts/release-manifest.py --cuda-tools /tmp/cuda-tools --version "$VERSION"
+              tool=$(find /tmp/cuda-tools -type f -name cuobjdump -print -quit)
+              export PATH="$(dirname "$tool"):/opt/rocm/llvm/bin:/opt/rocm/lib/llvm/bin:$PATH"
+              python3 scripts/release-manifest.py --version "$VERSION" --audit --report dist/reports/audit-Linux.json --output dist/manifest-Linux.json'
+          else
+            if [ "$RUNNER_OS" = Windows ]; then
+              python scripts/release-manifest.py --cuda-tools "$RUNNER_TEMP/cuda-audit" --target x86_64-pc-windows-msvc --version "$VERSION"
+              tool=$(find "$RUNNER_TEMP/cuda-audit" -name cuobjdump.exe -print -quit)
+              export PATH="$(dirname "$tool"):$PATH"
+            fi
+            python scripts/release-manifest.py --version "$VERSION" --audit --report "dist/reports/audit-$RUNNER_OS.json" --output "dist/manifest-$RUNNER_OS.json"
+          fi
+      - name: Stage on the draft release
+        shell: bash
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          shopt -s failglob
+          python scripts/release-manifest.py --version "$VERSION" --stage dist/reports/*.json
+  draft:
+    needs: [version, audit]
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      # The build provenance step below signs with this run's OIDC identity and stores the result.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/release-tools
+      - name: Fetch the staged files from the draft release
+        shell: bash
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: python scripts/release-manifest.py --version "$VERSION" --unstage
+      - name: Collect audit reports
+        run: |
+          mkdir -p dist/reports
+          find dist -maxdepth 1 -name 'audit-*.json' -exec mv {} dist/reports/ \;
+      - name: Write unsigned manifest and upload only a DRAFT release
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: python scripts/release-manifest.py --version "$VERSION" --reports dist/reports --upload
+      # GitHub's signed record of the workflow, commit and run that built each file, which anyone can
+      # check with `gh attestation verify` (docs/install.md). It complements the minisign signature over
+      # SHA256SUMS, which stays the installer's root of trust. GitHub stores attestations for private
+      # repositories only on Enterprise plans, so the step runs once the repository is public.
+      - name: Attest the build provenance of the release files
+        if: ${{ github.event.repository.visibility == 'public' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.zst
+            dist/larch-setup-*
+            dist/larch-installer-*

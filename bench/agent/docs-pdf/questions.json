@@ -1,0 +1,6 @@
+[
+  {"id": "pdf-q01", "question": "What is the monthly rent for the apartment at 42 Alder Street?", "facts": [{"file": "lease-alder-street.pdf", "quote": "Monthly rent: $1,850, due on the first day of each month.", "line": 10}]},
+  {"id": "pdf-q02", "question": "What is the late fee if the Alder Street rent is paid late?", "facts": [{"file": "lease-alder-street.pdf", "quote": "If rent is not received by the fifth day of the month, the tenant pays a late fee of $75.", "line": 13}]},
+  {"id": "pdf-q18", "question": "Can my cat live with me at Alder Street?", "facts": [{"file": "lease-alder-street.pdf", "quote": "One cat is allowed with a pet deposit of $300.", "line": 24}]},
+  {"id": "pdf-q22", "question": "What is my passport number?", "facts": [], "outcome": "unreadable"}
+]

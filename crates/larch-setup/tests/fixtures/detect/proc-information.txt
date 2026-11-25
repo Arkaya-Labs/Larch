@@ -1,0 +1,2 @@
+Model: NVIDIA RTX 4060
+IRQ: 41

@@ -1,0 +1,80 @@
+{
+ "schema": "larch-bench/1",
+ "engine": "llama.cpp",
+ "driver": "llama-serve-bench",
+ "mode": "fixed",
+ "llama_cpp": {
+  "tag": "b11458",
+  "commit": "c479922ac"
+ },
+ "build": "d151f1ff29a7b1fcdbd7919e5056316f3fb9e89e83898c6efd3d4b95799027d3",
+ "system_info": "CUDA : ARCHS = 1200 | USE_GRAPHS = 1 | FA_QUANTS = q4_0-q4_0,q8_0-q8_0,f16-f16,bf16-bf16 | BLACKWELL_NATIVE_FP4 = 1 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX_VNNI = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | ",
+ "machine": "wsl5070",
+ "started_at": "2026-10-17T07:59:20Z",
+ "model": "m1.gguf",
+ "date_string": "26 Jul 2024",
+ "params": {
+  "n_ctx": 16384,
+  "n_ctx_seq": 1024,
+  "n_seq_max": 16,
+  "n_batch": 2048,
+  "n_ubatch": 1024,
+  "n_gpu_layers": 99,
+  "flash_attn": "enabled",
+  "type_k": "f16",
+  "type_v": "f16",
+  "n_threads": 4,
+  "n_threads_batch": 4,
+  "kv_unified": false
+ },
+ "fixed": [
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 1,
+   "n_kv": 640,
+   "t_pp": 0.091375322,
+   "speed_pp": 5603.263428171558,
+   "t_tg": 0.944948575,
+   "speed_tg": 135.45710675313734,
+   "t": 1.036323897,
+   "speed": 617.5675402764548
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 4,
+   "n_kv": 2560,
+   "t_pp": 0.286744887,
+   "speed_pp": 7142.237204041236,
+   "t_tg": 1.106950985,
+   "speed_tg": 462.53177144966355,
+   "t": 1.3936958720000001,
+   "speed": 1836.8426364973834
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 8,
+   "n_kv": 5120,
+   "t_pp": 0.57766606,
+   "speed_pp": 7090.601791630272,
+   "t_tg": 1.29722846,
+   "speed_tg": 789.3752192269973,
+   "t": 1.87489452,
+   "speed": 2730.8202916929963
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 16,
+   "n_kv": 10240,
+   "t_pp": 1.1482142819999999,
+   "speed_pp": 7134.556788242424,
+   "t_tg": 1.5548753970000002,
+   "speed_tg": 1317.1473443797759,
+   "t": 2.703089679,
+   "speed": 3788.257592618332
+  }
+ ]
+}

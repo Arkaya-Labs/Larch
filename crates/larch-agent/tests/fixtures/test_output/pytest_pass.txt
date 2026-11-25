@@ -1,0 +1,9 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.17, pytest-9.1.1, pluggy-1.6.0
+rootdir: /work/py
+configfile: pyproject.toml
+collected 4 items
+
+tests/test_math.py ...s                                                  [100%]
+
+========================= 3 passed, 1 skipped in 0.01s =========================

@@ -1,0 +1,80 @@
+[package]
+license.workspace = true
+name = "larch-agent"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+runtime-admission = []
+
+[dependencies]
+# The transcript and the CLI speak the facade's anyhow and clap; both are in the lock already.
+anyhow = "1"
+# OAuth sign-in for remote MCP servers (mcp::oauth): the PKCE verifier's randomness, its S256
+# challenge and base64url. All three are in the lock already.
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+# Free bytes of the data volume for the document cache's default budget; in the lock already (larch-task).
+fs2 = "0.4"
+getrandom = "0.3"
+# Validates tool arguments against each tool's JSON Schema. No default features: they resolve
+# remote and file references over HTTP and disk, and a schema never reaches the network.
+jsonschema = { version = "0.58", default-features = false }
+# PDF text when poppler's pdftotext is not installed, so read_papers reads PDFs with nothing else
+# installed; pdftotext stays first, as its text keeps the layout better.
+pdf-extract = "0.10"
+# web_search reads the providers' result pages; regex is in the lock already (jsonschema's).
+regex = "1"
+# SQLite with FTS5 compiled in (`bundled`), so the memory index has no system dependency.
+rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+strsim = "0.11"
+tempfile = "3"
+# web_search's and fetch_page's HTTP, as larch-fetch's; url resolves a page's links. Both in the lock already.
+ureq = { version = "2", features = ["native-certs"] }
+url = "2"
+larch = { path = "../larch" }
+larch-task = { path = "../larch-task" }
+# The engine the CLI starts itself, to keep its handle for the prefix cache's counters and, in the
+# bench, to render with the benchmark's date (`Larch::from_engine`, as `larch bench` does); the
+# `CPU` device ordinal; and the GGUF header's `general.architecture`, which the facade does not show.
+larch-engine = { path = "../larch-engine" }
+# web_search's HTTP client (`agent`): the proxy and OS certificates every larch download uses; ureq
+# (above) to send its requests, as `larch_fetch::get` retries and a search must not.
+larch-fetch = { path = "../larch-fetch" }
+larch-kernels = { path = "../larch-kernels" }
+larch-model = { path = "../larch-model" }
+
+[dev-dependencies]
+# The engine's step samples, read back to see that workers park KV for their group.
+larch-records = { path = "../larch-records" }
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The sandbox's file confinement: Landlock's syscalls need unsafe, which this crate forbids.
+landlock = "0.4.7"
+libc = "0.2.190"
+seccompiler = "0.5.0"
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+# fetch_page's TLS, as larch-fetch's: the OS's verifier, which fetches a root Windows has not
+# installed yet; rustls with the installed roots refused arXiv on Windows (UnknownIssuer).
+native-tls = "0.2"
+ureq = { version = "2", features = ["native-certs", "native-tls"] }
+
+[target.'cfg(windows)'.dependencies]
+# The sandbox's AppContainer and Job Object: their Win32 calls need unsafe, which this crate forbids.
+larch-sys = { path = "../larch-sys" }
+# Finds MSVC's LIB, INCLUDE and PATH outside the container for the linker inside; in the lock
+# already, as cc's.
+find-msvc-tools = "0.1"
+# A stdio MCP server's Job Object, so it ends with the app however the app ends; its safe API, in
+# the lock already through larch-sys.
+win32job = "2"

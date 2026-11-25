@@ -1,0 +1,25 @@
+[package]
+license.workspace = true
+name = "larch-model"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+# The source commit for card::BUILD, by the facade's own script.
+build = "../larch/build.rs"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+minijinja = { version = "2.24", features = ["fuel", "preserve_order"] }
+minijinja-contrib = { version = "2.24", features = ["pycompat"] }
+regex-syntax = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+larch-kernels = { path = "../larch-kernels" }
+# NVML's driver build for the card profile; larch-kernels already links it.
+larch-sys = { path = "../larch-sys" }
+larch-records = { path = "../larch-records" }
+
+[lints]
+workspace = true

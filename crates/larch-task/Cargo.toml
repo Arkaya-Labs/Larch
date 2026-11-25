@@ -1,0 +1,27 @@
+[package]
+license.workspace = true
+name = "larch-task"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+sha2 = "0.10"
+fs2 = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = { version = "0.10", features = ["serde"] }
+getrandom = "0.3"
+
+# The Windows transport: a named pipe (unsafe lives in larch-sys only), without the kernel build.
+[target.'cfg(windows)'.dependencies]
+larch-sys = { path = "../larch-sys", default-features = false }
+
+[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly"))'.dependencies]
+nix = { version = "0.31.3", default-features = false, features = ["socket", "user"] }

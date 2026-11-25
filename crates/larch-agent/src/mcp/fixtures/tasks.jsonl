@@ -1,0 +1,30 @@
+# A task-augmented call answers with its task at once; tasks/result waits for the call's result.
+> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.0.0"}}}
+< {"jsonrpc":"2.0","id":1,"result":"*"}
+> {"jsonrpc":"2.0","method":"notifications/initialized"}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"count","arguments":{"n":2},"task":{"ttl":60000}}}
+< {"jsonrpc":"2.0","id":2,"result":{"task":{"taskId":"task-1","status":"working","createdAt":"*","lastUpdatedAt":"*","ttl":60000,"pollInterval":1000}}}
+> {"jsonrpc":"2.0","id":3,"method":"tasks/result","params":{"taskId":"task-1"}}
+< {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"counted 2"}],"isError":false,"_meta":{"io.modelcontextprotocol/related-task":{"taskId":"task-1"}}}}
+> {"jsonrpc":"2.0","id":4,"method":"tasks/get","params":{"taskId":"task-1"}}
+< {"jsonrpc":"2.0","id":4,"result":{"taskId":"task-1","status":"completed","createdAt":"*","lastUpdatedAt":"*","ttl":60000,"pollInterval":1000}}
+> {"jsonrpc":"2.0","id":5,"method":"tasks/cancel","params":{"taskId":"task-1"}}
+< {"jsonrpc":"2.0","id":5,"error":{"code":-32602,"message":"cannot cancel task-1: it is already completed"}}
+> {"jsonrpc":"2.0","id":6,"method":"tasks/get","params":{"taskId":"task-9"}}
+< {"jsonrpc":"2.0","id":6,"error":{"code":-32602,"message":"no task task-9"}}
+# A cancelled task stays cancelled, and its result says so.
+> {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"slow","arguments":{},"task":{}}}
+< {"jsonrpc":"2.0","id":7,"result":{"task":{"taskId":"task-2","status":"working","createdAt":"*","lastUpdatedAt":"*","ttl":3600000,"pollInterval":1000}}}
+> {"jsonrpc":"2.0","id":8,"method":"tasks/cancel","params":{"taskId":"task-2"}}
+< {"jsonrpc":"2.0","id":8,"result":{"taskId":"task-2","status":"cancelled","statusMessage":"cancelled by the client","createdAt":"*","lastUpdatedAt":"*","ttl":3600000,"pollInterval":1000}}
+> {"jsonrpc":"2.0","id":9,"method":"tasks/result","params":{"taskId":"task-2"}}
+< {"jsonrpc":"2.0","id":9,"result":{"content":[{"type":"text","text":"the task was cancelled"}],"isError":true,"_meta":{"io.modelcontextprotocol/related-task":{"taskId":"task-2"}}}}
+# A task past its TTL is kept while it works: a client may still be waiting on its result.
+> {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"slow","arguments":{},"task":{"ttl":0}}}
+< {"jsonrpc":"2.0","id":10,"result":{"task":{"taskId":"task-3","status":"working","createdAt":"*","lastUpdatedAt":"*","ttl":0,"pollInterval":1000}}}
+> {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"count","arguments":{"n":1},"task":{"ttl":0}}}
+< {"jsonrpc":"2.0","id":11,"result":{"task":{"taskId":"task-4","status":"working","createdAt":"*","lastUpdatedAt":"*","ttl":0,"pollInterval":1000}}}
+> {"jsonrpc":"2.0","id":12,"method":"tasks/get","params":{"taskId":"task-3"}}
+< {"jsonrpc":"2.0","id":12,"result":{"taskId":"task-3","status":"working","createdAt":"*","lastUpdatedAt":"*","ttl":0,"pollInterval":1000}}
+> {"jsonrpc":"2.0","id":13,"method":"tasks/cancel","params":{"taskId":"task-3"}}
+< {"jsonrpc":"2.0","id":13,"result":"*"}

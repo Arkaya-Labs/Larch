@@ -1,0 +1,400 @@
+{
+  "m10": {
+    "what": "the image gate: llama-logits --mmproj on m10 with mmproj-m10, 100 image prompts (tools/llama-logits/images/prompts.jsonl, beside its images; make.py drew them)",
+    "logits": {
+      "model_sha256": "e87f98e2945c91da1a324034143f2f3bad014dcf6b34d440fcf885c00704378f",
+      "prompts_sha256": "9612e22bb3302fdbec62cb3968c44f36058c8af83beee5878fb22952f1b6acf6",
+      "prompts": 100,
+      "llama_cpp": "b11458 (c479922)",
+      "reference_backend": "CUDA",
+      "reference": {
+        "backend": "CUDA",
+        "device": "CUDA0",
+        "n_batch": 32,
+        "n_ubatch": 32,
+        "dump_sha256": "363527a7f110ebf5317ee20825a4e70a69281e2c8650a9ce94bfb7365adb6d2b"
+      },
+      "pairs": [
+        {
+          "backend": "CUDA",
+          "device": "CUDA0",
+          "n_batch": 512,
+          "n_ubatch": 512,
+          "dump_sha256": "c13d5cc0b0137128d468d8336abd509bd8dd40717f56e3937a6c17d6434286dc",
+          "positions": 71184,
+          "top1": 0.9947460103394021,
+          "flip_gap": 0.3281250596046448,
+          "mean_kl": 0.0004036675973619454,
+          "p99_kl": 0.0024678195648185994,
+          "max_kl": 0.05440202681387015
+        },
+        {
+          "backend": "CUDA",
+          "device": "CUDA0",
+          "n_batch": 32,
+          "n_ubatch": 32,
+          "dump_sha256": "408b6f813b117a781a052fdc364bef4e597c4f206ad54e54f86fe1862c30f47a",
+          "positions": 71184,
+          "top1": 0.99134636997078,
+          "flip_gap": 0.5625,
+          "mean_kl": 0.0009237836629574174,
+          "p99_kl": 0.007952341452771431,
+          "max_kl": 0.10747788236984751
+        },
+        {
+          "backend": "CPU",
+          "device": "CPU",
+          "n_batch": 512,
+          "n_ubatch": 512,
+          "dump_sha256": "56e5c41a303f9a3f58dcd6b99b668185bdfa86bcd8b451be5c04b98399374b89",
+          "positions": 71184,
+          "top1": 0.9740110137109462,
+          "flip_gap": 0.9687500596046448,
+          "mean_kl": 0.004764685230344916,
+          "p99_kl": 0.030246734013242058,
+          "max_kl": 0.52548649997858
+        }
+      ],
+      "kl": "per position, KL(p_ref || q) over the reference top 64 plus one bucket for the rest; an id outside q's top 64 takes q's 64th logprob (a lower bound on that term)",
+      "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over positions",
+      "bound": 0.045370101019863086,
+      "margin_rule": "largest reference top-1/top-2 gap (nats) at which any pair's top-1 differs",
+      "margin": 0.9687500596046448,
+      "gate": "per backend and mode: top-1 >= 0.99 on positions whose reference gap exceeds the margin, and mean KL over all positions <= bound"
+    },
+    "embd": {
+      "min_cos": 0.993484,
+      "max_abs": 0.356341,
+      "rule": "per image row against the reference's: min_cos = 1 - 1.5 x (1 - the worst pair's lowest row cosine); max_abs = 1.5 x the worst pair's largest absolute difference",
+      "pairs": {
+        "c512": {
+          "min_cos": 1.0,
+          "max_abs": 0.0
+        },
+        "fa0": {
+          "min_cos": 0.997494,
+          "max_abs": 0.207031
+        },
+        "cpu100": {
+          "min_cos": 0.995656,
+          "max_abs": 0.237561
+        }
+      }
+    }
+  },
+  "m12": {
+    "what": "the image gate: llama-logits --mmproj on m12 (InternVL3.5-1B, qwen3 text) with mmproj-m12, 110 image prompts rendered by its GGUF template, plain ChatML (tools/llama-logits/images/prompts-chatml.jsonl, which make.py writes): the 100 PNG prompts, then 10 for JPEG (two, decoded by stb itself), EXIF orientation, WebP and a transparent GIF (those three through `.oracle.png` twins of the pixels larch shows); prompts_sha256 3feb1d98f5224ba11017f68b5eb6445b74d5f86cacdd9b9662089aefc5c7e503",
+    "logits": {
+      "model_sha256": "b979079cd780092582aaf542500167810bad8c64ca24e99f9c128de9a35e1f65",
+      "prompts_sha256": "3feb1d98f5224ba11017f68b5eb6445b74d5f86cacdd9b9662089aefc5c7e503",
+      "prompts": 100,
+      "llama_cpp": "b11458 (c479922)",
+      "reference_backend": "CUDA",
+      "reference": {
+        "backend": "CUDA",
+        "device": "CUDA0",
+        "n_batch": 32,
+        "n_ubatch": 32,
+        "dump_sha256": "e76de3748387b111c589e733e88c36767f704cff3a4064758db6e3d9c577b251"
+      },
+      "pairs": [
+        {
+          "backend": "CUDA",
+          "device": "CUDA0",
+          "n_batch": 512,
+          "n_ubatch": 512,
+          "dump_sha256": "5ab32d7490764e7417eeb92f2315918445b469e83286ef0718743000175f8327",
+          "positions": 67484,
+          "top1": 0.9328137039890937,
+          "flip_gap": 3.6929472908377647,
+          "mean_kl": 0.015887127314147705,
+          "p99_kl": 0.16291602774288413,
+          "max_kl": 3.391537623739343
+        },
+        {
+          "backend": "CUDA",
+          "device": "CUDA0",
+          "n_batch": 32,
+          "n_ubatch": 32,
+          "dump_sha256": "48f8ee10fe42fc0001cd255fcd714bba543e496fc5f1614cf15884da99c03fdd",
+          "positions": 67484,
+          "top1": 0.9105269397190445,
+          "flip_gap": 2.7726230919361115,
+          "mean_kl": 0.033660251717296474,
+          "p99_kl": 0.36579978279665065,
+          "max_kl": 8.149899641419907
+        },
+        {
+          "backend": "CPU",
+          "device": "CPU",
+          "n_batch": 512,
+          "n_ubatch": 512,
+          "dump_sha256": "2c172793b813dfaf0c046a2168a5e21b5d20eaa4af6d61d03b8a777ba2f86b0b",
+          "positions": 67484,
+          "top1": 0.9123051389959101,
+          "flip_gap": 2.888732984662056,
+          "mean_kl": 0.03370526829378504,
+          "p99_kl": 0.4487795661006518,
+          "max_kl": 6.362702947408086
+        }
+      ],
+      "kl": "per position, KL(p_ref || q) over the reference top 64 plus one bucket for the rest; an id outside q's top 64 takes q's 64th logprob (a lower bound on that term)",
+      "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over positions",
+      "bound": 0.6731693491509777,
+      "margin_rule": "largest reference top-1/top-2 gap (nats) at which any pair's top-1 differs",
+      "margin": 3.6929472908377647,
+      "gate": "per backend and mode: top-1 >= 0.99 on positions whose reference gap exceeds the margin, and mean KL over all positions <= bound",
+      "calibration_set": "oracle::calibrate's rule: the first 100 prompts (the PNG ones), from the dumps below cut to them (header first and prompts 100)",
+      "full_dumps_sha256": {
+        "ref": "776c526fe8f0f0080328ca31e50c7bfc3b199752a339914f9e74f79c03e5db2b",
+        "c512": "1dd3075105fa998740a9c863a38dc58c2375c97d4f13c4d0f9505a7ac73f67a8",
+        "fa0": "34e23cf67a3f95bfe9e607197ce8521231b057755bb002906c8d602e60ff3323",
+        "cpu": "e0ec0f8b4f290bf02e5266cd7c01e5b22dd7775d57f7cf1ab8f751a1309c3de6"
+      }
+    },
+    "embd": {
+      "min_cos": 0.989977,
+      "max_abs": 0.168307,
+      "rule": "per image row against the reference's: min_cos = 1 - 1.5 x (1 - the worst pair's lowest row cosine); max_abs = 1.5 x the worst pair's largest absolute difference",
+      "images": 120,
+      "pairs": {
+        "c512": {
+          "min_cos": 1.0,
+          "max_abs": 0.0
+        },
+        "fa0": {
+          "min_cos": 0.996664,
+          "max_abs": 0.082031
+        },
+        "cpu": {
+          "min_cos": 0.993318,
+          "max_abs": 0.112204
+        }
+      }
+    },
+    "measured": {
+      "larch_cuda_rtx3050": {
+        "as_larch_decodes": {
+          "passes": false,
+          "emb_min_cos": 0.929157,
+          "emb_worst_image": "photo.jpg",
+          "emb_max_abs": 0.699,
+          "kl_mean": 0.03871,
+          "kl_p99": 0.61301,
+          "text_kl_p99": 0.04337,
+          "decisive_top1": 1.0,
+          "top1": 0.9056,
+          "encode_ms_per_tile": 110.4
+        },
+        "photo_jpg_as_stb_decodes_it": {
+          "passes": true,
+          "emb_min_cos": 0.994632,
+          "emb_worst_image": "progressive.jpg",
+          "photo_jpg_min_cos": 0.996036,
+          "emb_max_abs": 0.118,
+          "kl_mean": 0.03114,
+          "kl_p99": 0.41793,
+          "text_kl_p99": 0.04337,
+          "decisive_top1": 1.0,
+          "top1": 0.9095,
+          "encode_ms_per_tile": 110.6
+        }
+      },
+      "note": "larch decodes photo.jpg (4:2:0, soft grain) with zune-jpeg, at most 3/255 from stb (mean 0.017): enough to move a few embedding rows past the per-row bound (cos 0.929 against 0.990) while every logit check passes. Given stb's own pixels, the gate passes. A finding for the owner (review P1), not a bound change. llama.cpp disagrees with itself on qwen3-0.6B (top-1 0.91-0.93 across batch size, flash attention and CPU), so the all-positions logit bound is wide."
+    },
+    "logits_text": {
+      "positions": "text rows and each image's last row (oracle::text_positions)",
+      "reference_dump_sha256": "776c526fe8f0f0080328ca31e50c7bfc3b199752a339914f9e74f79c03e5db2b",
+      "pairs": [
+        {
+          "backend": "CUDA",
+          "dump_sha256": "1dd3075105fa998740a9c863a38dc58c2375c97d4f13c4d0f9505a7ac73f67a8",
+          "positions": 2806,
+          "top1": 0.9821810406272273,
+          "flip_gap": 0.5080966949462891,
+          "mean_kl": 0.004216461045902809,
+          "p99_kl": 0.05984848130207963,
+          "max_kl": 0.19259543143551805
+        },
+        {
+          "backend": "CUDA",
+          "dump_sha256": "34e23cf67a3f95bfe9e607197ce8521231b057755bb002906c8d602e60ff3323",
+          "positions": 2806,
+          "top1": 0.977904490377762,
+          "flip_gap": 0.7639427185058594,
+          "mean_kl": 0.00462517886909044,
+          "p99_kl": 0.052276775848122015,
+          "max_kl": 0.15197141594720853
+        },
+        {
+          "backend": "CPU",
+          "dump_sha256": "e0ec0f8b4f290bf02e5266cd7c01e5b22dd7775d57f7cf1ab8f751a1309c3de6",
+          "positions": 2806,
+          "top1": 0.9732715609408411,
+          "flip_gap": 0.5127733945846558,
+          "mean_kl": 0.005387435217950787,
+          "p99_kl": 0.07007241168984699,
+          "max_kl": 0.3555134504091951
+        }
+      ],
+      "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over those positions",
+      "bound": 0.10510861753477048,
+      "margin": 0.7639427185058594
+    }
+  },
+  "m14": {
+    "what": "the image gate: llama-logits --mmproj on m14 (Qwen3.5-0.8B Q8_0) with mmproj-m14 (qwen3vl_merger), --image-max-tokens 1600 (larch's cap), M-RoPE positions as llama.cpp's mtmd helpers lay them out, the 110 chatml image prompts (tools/llama-logits/images/prompts-chatml.jsonl); prompts_sha256 3feb1d98f5224ba11017f68b5eb6445b74d5f86cacdd9b9662089aefc5c7e503",
+    "logits": {
+      "positions": "every row, image rows included",
+      "reference_dump_sha256": "855c61bf392d3d2d5b7f3d3eb695e851f08d8da510ca520b28f130d860ec1777",
+      "pairs": [
+        {
+          "backend": "CUDA",
+          "dump_sha256": "3c7f80a361a99271c92b22ed6fffb7f6796a4ec9c1cb6f63b122a07c4ff997fb",
+          "positions": 22572,
+          "top1": 0.9765195817827397,
+          "flip_gap": 0.8616752028465271,
+          "mean_kl": 0.003796092724009218,
+          "p99_kl": 0.035696449884749806,
+          "max_kl": 0.2285100473234365
+        },
+        {
+          "backend": "CUDA",
+          "dump_sha256": "c62c93b39b10904d75808eb6927285381aea4ed72864ee89485fe7c3bd6c1384",
+          "positions": 22572,
+          "top1": 0.8708133971291866,
+          "flip_gap": 6.857802600599825,
+          "mean_kl": 0.23629861914921335,
+          "p99_kl": 6.053406827333557,
+          "max_kl": 14.207475301618684
+        },
+        {
+          "backend": "CPU",
+          "dump_sha256": "09f16d06260e5fe18a764874776c6bdfe50e9176fd8721b086682d48a56dad9c",
+          "positions": 22572,
+          "top1": 0.8804713804713805,
+          "flip_gap": 13.838810074253615,
+          "mean_kl": 0.2145875918006077,
+          "p99_kl": 5.569592049194988,
+          "max_kl": 16.626711774860176
+        }
+      ],
+      "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over those positions",
+      "bound": 9.080110241000336,
+      "margin": 13.838810074253615,
+      "calibration_set": "the first 100 prompts (the PNG ones) of each dump, by oracle-calibrate's LARCH_ORACLE_ALL_ROWS mode (every row; the full calibration wants 4 prompts over 1100 tokens, and Qwen's image prompts are all shorter)",
+      "full_dumps_sha256": {
+        "ref": "c77875aba874f40100308043bd2bc6de4ef6f3f947addf886f95354a46401664",
+        "c512": "c98984bb0954593b85ce00658319aad70808b610a988ef5b7de5978a6ee9c924",
+        "fa0": "64e1e57bba802d97cb15a5a7b98401265c68cb95f6921354f2d2bfb17e1f42fa",
+        "cpu": "e7b0904b34288a82d8bae4fa3028bfc2e71e4b851701acc32b705206320d03d3"
+      }
+    },
+    "embd": {
+      "min_cos": 0.651914,
+      "max_abs": 4.119141,
+      "rule": "per image row against the reference's: min_cos = 1 - 1.5 x (1 - the worst pair's lowest row cosine); max_abs = 1.5 x the worst pair's largest absolute difference",
+      "images": 120,
+      "pairs": {
+        "c512": {
+          "min_cos": 1.0,
+          "max_abs": 0.0,
+          "worst": null
+        },
+        "fa0": {
+          "min_cos": 0.767942765263634,
+          "max_abs": 2.74609375,
+          "worst": "p13-i0.f32"
+        },
+        "cpu": {
+          "min_cos": 0.7747412810679807,
+          "max_abs": 1.8834128379821777,
+          "worst": "p13-i0.f32"
+        }
+      }
+    },
+    "logits_text": {
+      "positions": "text rows and each image's last row (oracle::text_positions)",
+      "reference_dump_sha256": "855c61bf392d3d2d5b7f3d3eb695e851f08d8da510ca520b28f130d860ec1777",
+      "pairs": [
+        {
+          "backend": "CUDA",
+          "dump_sha256": "3c7f80a361a99271c92b22ed6fffb7f6796a4ec9c1cb6f63b122a07c4ff997fb",
+          "positions": 2570,
+          "top1": 0.9797665369649805,
+          "flip_gap": 0.3350210189819336,
+          "mean_kl": 0.0024317014818841043,
+          "p99_kl": 0.04281853677191763,
+          "max_kl": 0.13822706605014448
+        },
+        {
+          "backend": "CUDA",
+          "dump_sha256": "c62c93b39b10904d75808eb6927285381aea4ed72864ee89485fe7c3bd6c1384",
+          "positions": 2570,
+          "top1": 0.9867704280155642,
+          "flip_gap": 0.1656627655029297,
+          "mean_kl": 0.0050238300704573005,
+          "p99_kl": 0.07402998256276516,
+          "max_kl": 0.3489173068473318
+        },
+        {
+          "backend": "CPU",
+          "dump_sha256": "09f16d06260e5fe18a764874776c6bdfe50e9176fd8721b086682d48a56dad9c",
+          "positions": 2570,
+          "top1": 0.9859922178988327,
+          "flip_gap": 0.08641815185546875,
+          "mean_kl": 0.005751086026297485,
+          "p99_kl": 0.06462595746008394,
+          "max_kl": 0.2101045564294583
+        }
+      ],
+      "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over those positions",
+      "bound": 0.11104497384414774,
+      "margin": 0.3350210189819336
+    },
+    "measured": {
+      "larch_cuda_rtx3050": {
+        "as_larch_decodes": {
+          "passes": false,
+          "emb_min_cos": 0.676293,
+          "emb_worst_image": "photo.jpg",
+          "emb_max_abs": 1.8697,
+          "kl_mean": 0.22977,
+          "kl_p99": 6.20826,
+          "decisive_top1": 1.0,
+          "top1": 0.8722,
+          "text_kl_mean": 0.00622,
+          "text_kl_p99": 0.07186,
+          "text_decisive_top1": 0.9572,
+          "encode_ms_per_row": 0.17
+        },
+        "jpegs_as_stb_decodes_them": {
+          "passes": false,
+          "emb_min_cos": 0.768368,
+          "emb_worst_image": "wide.png",
+          "photo_jpg_min_cos": 0.840995,
+          "text_decisive_top1": 0.9572
+        },
+        "text_failure": "all 110 decisive text flips are one row: the prediction after '<|im_start|>user\\n<|vision_start|>' (a 4-token text context), which llama.cpp's own runs give at gaps 0.33-0.56 nats (659 over 271); larch picks 271. The text oracle on 100 chat prompts (bench/oracle-bounds.json m14, margin 0.540) passes: 31279 decisive positions at top-1 1.0, KL mean 8.6e-4 (bound 4.6e-3)."
+      },
+      "exact_f64_wide_png": {
+        "note": "every row of wide.png (589) against a forward of the projector in f64 from the GGUF's values, the pixels as larch cuts them",
+        "worst_row_cos": {
+          "larch_cuda": 0.9959,
+          "larch_cpu": 0.9957,
+          "llama_cpu": 0.9704,
+          "llama_cuda_flash_attn": 0.7661,
+          "llama_cuda_no_flash_attn": 0.7768
+        },
+        "max_abs": {
+          "larch_cuda": 0.132,
+          "larch_cpu": 0.232,
+          "llama_cpu": 0.749,
+          "llama_cuda_flash_attn": 1.894,
+          "llama_cuda_no_flash_attn": 2.775
+        }
+      },
+      "note": "llama.cpp's CUDA encoder is far from exact on large Qwen images (wide.png: cos 0.77 on its worst rows, with or without flash attention), so its pairs widen every bound; larch's encoder is the closest of all runs to the f64 values. Image rows' logits differ across llama.cpp's own runs (top-1 0.87-0.98) while text rows agree, as for InternVL."
+    }
+  }
+}

@@ -1,0 +1,458 @@
+name: backend-builds
+
+# CUDA (Windows native, Linux) and HIP (Linux) builds: architecture 6.2, 6.3, 14. They run on
+# GitHub-hosted runners, which have no GPU: the GPU code is compiled and inspected, the tests run on
+# the CPU reference, and GPU tests and parity run by hand before a release (RELEASING.md).
+# A separate file from ci.yml, so a mistake here can never break the required CPU `check` jobs.
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "kernels/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - "rust-toolchain.toml"
+      - ".github/workflows/backend-builds.yml"
+  push:
+    branches: [dev]
+    paths:
+      - "kernels/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - "rust-toolchain.toml"
+      - ".github/workflows/backend-builds.yml"
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+      # A release builds this tag's canonical archives (scripts/release-manifest.py) at this
+      # version, the tag without its v; release.yml passes both.
+      tag:
+        type: string
+        default: ''
+      version:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  LARCH_CMAKE_GENERATOR: Ninja
+
+jobs:
+  cuda-windows:
+    runs-on: windows-2025
+    # The workflow token stages a release's archives on the draft release in this repository.
+    permissions:
+      contents: write
+    # A release has its own group and is never cancelled, and never cancels a PR or manual run.
+    concurrency:
+      group: backend-builds-cuda-windows-${{ github.ref }}${{ inputs.release && '-release' || '' }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.release }}
+    timeout-minutes: 120
+    env:
+      LARCH_BACKEND: CUDA
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      # Check runs keep the verified toolkit tree and the crate downloads between runs. A release
+      # restores no cache: it downloads and verifies everything itself.
+      - name: cache the CUDA 13.4.2 toolkit tree
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: ${{ !inputs.release }}
+        with:
+          path: |
+            ${{ runner.tool_cache }}/larch-cuda-13.4.2
+            ${{ runner.tool_cache }}/larch-cuda-13.4.2.complete
+          key: cuda-13.4.2-windows-x86_64
+      - name: cache the crate downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: ${{ !inputs.release }}
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'apps/desktop/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      # NVIDIA's redistributable manifest names every component's archive and its sha256, so no
+      # installer filename is guessed and every download is verified. CUDA 13 ships crt and nvvm
+      # apart from nvcc; cccl holds nv/target, which cuda_fp16.h includes.
+      # The toolkit goes to the runner's tool cache; a tree is used only once it is complete.
+      - name: install CUDA 13.4.2 (compiler, cudart, cuBLAS, cuobjdump)
+        run: |
+          $root = Join-Path $env:RUNNER_TOOL_CACHE larch-cuda-13.4.2
+          if (-not (Test-Path "$root.complete")) {
+            if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+            $base = "https://developer.download.nvidia.com/compute/cuda/redist"
+            $manifest = Invoke-RestMethod "$base/redistrib_13.4.2.json"
+            $unzip = Join-Path $env:RUNNER_TEMP cuda-archives
+            foreach ($c in "cuda_nvcc", "cuda_crt", "libnvvm", "cccl", "cuda_cudart", "libcublas", "cuda_cuobjdump") {
+              $p = $manifest.$c
+              if (-not $p) { throw "redistrib_13.4.2.json has no $c (components: $($manifest.PSObject.Properties.Name -join ', '))" }
+              $a = $p.'windows-x86_64'
+              if (-not $a) { throw "redistrib_13.4.2.json has no windows-x86_64 archive for $c (it lists: $($p.PSObject.Properties.Name -join ', '))" }
+              $zip = Join-Path $env:RUNNER_TEMP (Split-Path $a.relative_path -Leaf)
+              Invoke-WebRequest "$base/$($a.relative_path)" -OutFile $zip
+              if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $a.sha256) { throw "$c sha256 mismatch" }
+              Expand-Archive $zip $unzip
+            }
+            # Each archive holds one <component>-archive directory; together they form the toolkit tree.
+            New-Item -ItemType Directory $root | Out-Null
+            Get-ChildItem $unzip -Directory | ForEach-Object { Copy-Item "$($_.FullName)\*" $root -Recurse -Force }
+            if (-not (Test-Path "$root\bin\nvcc.exe")) { throw "nvcc.exe missing from $root\bin" }
+            if (-not ((Test-Path "$root\include\cccl\nv\target") -or (Test-Path "$root\include\nv\target"))) {
+              throw "CCCL headers (nv/target) missing from $root\include"
+            }
+            New-Item -ItemType File "$root.complete" | Out-Null
+          }
+          & "$root\bin\nvcc.exe" --version
+          if ($LASTEXITCODE) { throw "nvcc --version failed: exit $LASTEXITCODE" }
+          "CUDA_PATH=$root" >> $env:GITHUB_ENV
+          "CUDACXX=$root\bin\nvcc.exe" >> $env:GITHUB_ENV
+          # cuBLAS DLLs for the tests: bin\x64 since CUDA 13, bin before.
+          "$root\bin" >> $env:GITHUB_PATH
+          "$root\bin\x64" >> $env:GITHUB_PATH
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - run: rustup toolchain install  # the channel in rust-toolchain.toml
+      - name: CUDA toolchain (configure for the fat-binary arch list)
+        run: cmake -S kernels -B build/cuda -G Ninja -DLARCH_BACKEND=CUDA -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      # Tests first: the workspace build unifies features (cuprum turns on larch-records/schema)
+      # and relinks release\larch*, so the build after it leaves the -p binaries that ship.
+      - name: test on the CPU reference (no GPU on the runner)
+        run: cargo test --release --workspace
+      # A release builds the canonical archives instead (last steps); release.yml's audit runs these
+      # checks on them.
+      - name: build
+        if: ${{ !inputs.release }}
+        run: cargo build --release -p larch -p larch-agent
+      - name: package and start without the toolkit
+        if: ${{ !inputs.release }}
+        run: |
+          $d = "dist\larch-windows-x86_64-cuda"
+          $exes = "larch.exe", "larch-agent.exe"
+          New-Item -ItemType Directory $d | Out-Null
+          foreach ($exe in $exes) {
+            Copy-Item "target\release\$exe" $d
+          }
+          foreach ($dll in "cublas64_13.dll", "cublasLt64_13.dll") {
+            $f = Get-ChildItem $env:CUDA_PATH -Recurse -Filter $dll | Select-Object -First 1
+            if (-not $f) { throw "$dll not found under $env:CUDA_PATH" }
+            Copy-Item $f.FullName $d
+          }
+          # --version runs the same on a CPU-only binary, so prove the GPU code: cuBLAS imported, SASS
+          # for every shipped arch plus compute_120 PTX (architecture 6.2).
+          foreach ($exe in $exes) {
+            $deps = dumpbin /nologo /dependents "$d\$exe" | Out-String
+            if ($deps -notmatch 'cublas64_13\.dll') { throw "$exe does not import cublas64_13.dll: not a CUDA build" }
+            $objs = & "$env:CUDA_PATH\bin\cuobjdump.exe" --list-elf --list-ptx "$d\$exe" | Out-String
+            if ($LASTEXITCODE) { throw "cuobjdump failed on ${exe}: exit $LASTEXITCODE" }
+            $objs
+            foreach ($sm in "sm_86", "sm_89", "sm_120") { if ($objs -notmatch "ELF file.*\.$sm\.cubin") { throw "no $sm SASS in $exe" } }
+            if ($objs -notmatch 'PTX file.*\.sm_120\.ptx') { throw "no compute_120 PTX in $exe" }
+            if ($deps -match 'cudart64') { throw "$exe imports cudart64: cudart must be static" }
+          }
+          # The static MSVC runtime (installer E1): no shipped exe or DLL needs the VC++ redistributable.
+          foreach ($f in Get-ChildItem "$d\*" -Include *.exe, *.dll) {
+            $imports = dumpbin /nologo /dependents $f.FullName | Out-String
+            if ($imports -match 'vcruntime140|msvcp140') { throw "$($f.Name) imports the MSVC runtime: $imports" }
+          }
+          # cudart is static, so the directory alone must start: a missing DLL fails here.
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch 'CUDA' }) -join ';'
+          foreach ($exe in $exes) {
+            & "$d\$exe" --version
+            if ($LASTEXITCODE) { throw "packaged $exe did not start: exit $LASTEXITCODE" }
+          }
+      # Artifact storage is billed; a check build's upload may fail.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !inputs.release }}
+        continue-on-error: true
+        with:
+          name: larch-windows-x86_64-cuda
+          path: dist/larch-windows-x86_64-cuda
+          if-no-files-found: error
+      - if: inputs.release
+        uses: ./.github/actions/release-tools
+      - name: build the release archives (CLI, agent and app)
+        if: inputs.release
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path apps/desktop/Cargo.toml
+          python scripts/release-manifest.py --build x86_64-pc-windows-msvc --flavour cuda --version "$VERSION"
+      - name: stage the release archives on the draft release
+        if: inputs.release
+        shell: bash
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          shopt -s failglob
+          python scripts/release-manifest.py --version "$VERSION" --stage dist/*.tar.zst
+
+  cuda-linux:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    # A release has its own group and is never cancelled, and never cancels a PR or manual run.
+    concurrency:
+      group: backend-builds-cuda-linux-${{ github.ref }}${{ inputs.release && '-release' || '' }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.release }}
+    timeout-minutes: 120
+    container: nvidia/cuda:13.4.2-devel-ubuntu24.04@sha256:7005688f5eaa5a9aaa9e555f546107c4454446a543347fd48b0bdb63ea027ad2
+    env:
+      LARCH_BACKEND: CUDA
+      # A hosted runner has 16 GB: nvcc's thread per arch (kernels/CMakeLists.txt) next to cargo's
+      # parallel rustc runs it out of memory. The last --threads wins.
+      NVCC_APPEND_FLAGS: --threads=1
+    steps:
+      # python3: the larch-agent tests run bench/agent/gen.py --check.
+      - name: build tools
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            ca-certificates curl git cmake ninja-build libclang-dev python3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - name: cache the crate downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: ${{ !inputs.release }}
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'apps/desktop/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - name: CUDA toolchain (configure for the fat-binary arch list)
+        run: cmake -S kernels -B build/cuda -G Ninja -DLARCH_BACKEND=CUDA -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - name: install Rust (the version comes from rust-toolchain.toml)
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      # Tests first, as on Windows: the build after them leaves the -p binaries that ship.
+      - name: test on the CPU reference (no GPU on the runner)
+        run: cargo test --release --workspace
+      # A release builds the canonical archives instead (below); release.yml's audit runs these
+      # checks on them.
+      - name: build
+        if: ${{ !inputs.release }}
+        run: |
+          cargo build --release -p larch -p larch-agent
+      - name: package
+        if: ${{ !inputs.release }}
+        run: |
+          d=dist/larch-linux-x86_64-cuda
+          mkdir -p "$d"
+          cp target/release/larch target/release/larch-agent "$d/"
+          # cudart is static; libcublas.so.13 ships apart, in the release's cuda runtime package.
+          # --version runs the same on a CPU-only binary, so prove the GPU code: SASS for every
+          # shipped arch plus compute_120 PTX (architecture 6.2).
+          for bin in "$d/larch" "$d/larch-agent"; do
+            readelf -d "$bin" | grep NEEDED
+            readelf -d "$bin" | grep -q 'libcublas.so.13' || { echo "::error::libcublas.so.13 not NEEDED in $bin: not a CUDA build"; exit 1; }
+            if readelf -d "$bin" | grep -q libcudart; then echo "::error::libcudart must be static in $bin"; exit 1; fi
+            objs=$(cuobjdump --list-elf --list-ptx "$bin")
+            echo "$objs" | sort -u -t. -k3 | head -20
+            for sm in sm_86 sm_89 sm_120; do
+              echo "$objs" | grep -q "ELF file.*\.$sm\.cubin" || { echo "::error::no $sm SASS in $bin"; exit 1; }
+            done
+            echo "$objs" | grep -q 'PTX file.*\.sm_120\.ptx' || { echo "::error::no compute_120 PTX in $bin"; exit 1; }
+            "$bin" --version
+          done
+          # Loose files, as the Windows and macOS packages hold.
+          tar -C "$d" -czf dist/larch-linux-x86_64-cuda.tar.gz larch larch-agent
+      # Artifact storage is billed; a check build's upload may fail.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !inputs.release }}
+        continue-on-error: true
+        with:
+          name: larch-linux-x86_64-cuda
+          path: dist/larch-linux-x86_64-cuda.tar.gz
+          if-no-files-found: error
+      # The release-tools action's Linux packages for the app, without its sudo: the container is root.
+      - name: build the release archives (CLI, agent and app)
+        if: inputs.release
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends pkg-config zstd binutils \
+            libxkbcommon-x11-dev libxcb-xkb-dev
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path apps/desktop/Cargo.toml
+          python3 scripts/release-manifest.py --build x86_64-unknown-linux-gnu --flavour cuda --version "$VERSION"
+      - name: stage the release archives on the draft release
+        if: inputs.release
+        shell: bash
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          shopt -s failglob
+          python3 scripts/release-manifest.py --version "$VERSION" --stage dist/*.tar.zst
+
+  # Compile-only for the 3 days (architecture 6.3). The image unpacks to more than a hosted runner's
+  # free disk, so the job frees space first and runs it with docker instead of `container:`.
+  hip-linux:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    # A release has its own group and is never cancelled, and never cancels a PR or manual run.
+    concurrency:
+      group: backend-builds-hip-linux-${{ github.ref }}${{ inputs.release && '-release' || '' }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.release }}
+    timeout-minutes: 90
+    env:
+      ROCM_IMAGE: rocm/dev-ubuntu-24.04:10.0.0-full@sha256:a90cf047f615abe70fbef83c64def0a2d549ef37a39c8ea545430aba4981b374
+      ROCM: larch-ci-rocm
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - name: free disk, start ROCm 10.0, install CMake and Ninja in it
+        run: |
+          # The VM is thrown away after the job, so its unused toolchains and images can go.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache
+          docker image prune -af
+          df -h /
+          # /cache holds this job's CMake and cargo builds and its Rust toolchain.
+          mkdir -p ../hip-cache
+          docker run -d --name "$ROCM" -v "$PWD:/w" -v "$PWD/../hip-cache:/cache" -w /w \
+            -e CARGO_HOME=/cache/cargo -e RUSTUP_HOME=/cache/rustup \
+            "$ROCM_IMAGE" sleep infinity
+          docker exec "$ROCM" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends cmake ninja-build git'
+          df -h /
+      - name: HIP toolchain (configure for the gfx list, find hipBLAS and hipify-perl)
+        run: docker exec "$ROCM" cmake -S kernels -B /cache/build-hip -G Ninja -DLARCH_BACKEND=HIP -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLARCH_BUILD_TESTS=ON
+      # The build hipifies every file first and fails on any call hipify cannot convert. The test
+      # binaries are linked, not run: no AMD GPU, and the image has no loader path for /opt/rocm/lib.
+      - name: hipify and compile
+        run: |
+          docker exec "$ROCM" bash -c 'set -o pipefail; mkdir -p build; cmake --build /cache/build-hip | tee build/hip-build.log'
+          # The CMake hipify gate fails the build on any warning; this is only the summary.
+          stats=$(grep -E 'statistics:|refs count|lines of code|WARNINGS:' build/hip-build.log || true)
+          [ -n "$stats" ] || echo "::warning::no hipify statistics in the build log"
+          printf '### hipify-perl --print-stats\n```\n%s\n```\n' "$stats" >> "$GITHUB_STEP_SUMMARY"
+      - name: install Rust in the container
+        run: docker exec "$ROCM" bash -c '[ -x "$CARGO_HOME/bin/rustup" ] || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none'
+      # The same binaries and features as the CUDA packages, so an AMD package is the same product.
+      # A release builds the canonical archives instead (below); release.yml's audit checks them.
+      - name: link the Rust binaries (larch-sys HIP link directives)
+        if: ${{ !inputs.release }}
+        run: |
+          docker exec -e LARCH_BACKEND=HIP -e LARCH_CMAKE_GENERATOR=Ninja -e LIBCLANG_PATH=/opt/rocm/lib/llvm/lib \
+            -e CARGO_TARGET_DIR=/cache/target-hip "$ROCM" bash -c '. "$CARGO_HOME/env" && cargo build --release -p larch -p larch-agent'
+      # The container runs as root on the bind-mounted checkout, so dist/ is written from inside it.
+      - name: check and package the HIP binaries
+        if: ${{ !inputs.release }}
+        run: |
+          docker exec -i "$ROCM" bash -euo pipefail <<'EOF'
+          rel=/cache/target-hip/release
+          for bin in "$rel/larch" "$rel/larch-agent"; do
+            readelf -d "$bin" | grep NEEDED
+            for lib in libamdhip64.so libhipblas.so; do
+              readelf -d "$bin" | grep -q "$lib" || { echo "::error::$lib not NEEDED in $bin: not a HIP build"; exit 1; }
+            done
+          done
+          llvm=/opt/rocm/llvm/bin
+          [ -x "$llvm/clang-offload-bundler" ] || llvm=/opt/rocm/lib/llvm/bin
+          [ -x "$llvm/clang-offload-bundler" ] || { echo "::error::clang-offload-bundler is in neither /opt/rocm/llvm/bin nor /opt/rocm/lib/llvm/bin"; exit 1; }
+          [ -x "$llvm/llvm-objcopy" ] || { echo "::error::llvm-objcopy is not in $llvm"; exit 1; }
+          [ -x "$llvm/llvm-readelf" ] || { echo "::error::llvm-readelf is not in $llvm"; exit 1; }
+          # The objects of larch-sys's own CMake build ($OUT_DIR/build), the one linked into $bin. A
+          # non-rdc HIP object is a host object; its device code objects sit in the .hip_fatbin bundle.
+          shopt -s nullglob
+          # The cached build keeps objects of deleted sources; drop them so the name check sees this tree.
+          for d in /cache/target-hip/release/build/larch-sys-*/out/build; do ninja -C "$d" -t cleandead; done
+          objs=(/cache/target-hip/release/build/larch-sys-*/out/build/CMakeFiles/larch_kernels.dir/hip/cuda/*.hip.o)
+          names=$(for o in "${objs[@]}"; do basename "$o"; done | sort | tr '\n' ' ')
+          srcs=$(for f in kernels/src/cuda/*.cu; do echo "$(basename "$f" .cu).hip.o"; done | sort | tr '\n' ' ')
+          [ "$names" = "$srcs" ] ||
+            { echo "::error::expected one .hip.o per kernels/src/cuda/*.cu ($srcs) in larch-sys's build, found ${#objs[@]}: ${objs[*]}"; exit 1; }
+          # clang emits no .hip_fatbin for a translation unit without device code (nvcc emits an empty
+          # one), so the bundles must sit in exactly the objects whose source defines a __global__.
+          kern=$(grep -l '__global__' -- kernels/src/cuda/*.cu </dev/null || true)
+          [ -n "$kern" ] || { echo "::error::no kernels/src/cuda/*.cu defines __global__"; exit 1; }
+          want=$(for f in $kern; do basename "$f" .cu; done | sort)
+          t=$(mktemp -d)
+          # Captured first: under pipefail, grep -q closing the pipe early would read as "no section".
+          have=$(for o in "${objs[@]}"; do
+            sections=$("$llvm/llvm-readelf" -S --wide "$o")
+            if grep -q '\.hip_fatbin' <<<"$sections"; then basename "$o" .hip.o; fi
+          done | sort)
+          for x in $(comm -23 <(echo "$want") <(echo "$have")); do
+            echo "::error::no .hip_fatbin in $x.hip.o although $x.cu defines __global__ kernels"; bad=1
+          done
+          for x in $(comm -13 <(echo "$want") <(echo "$have")); do
+            echo "::error::$x.hip.o has a .hip_fatbin although $x.cu defines no __global__ kernels"; bad=1
+          done
+          [ -z "${bad:-}" ] || exit 1
+          for x in $want; do
+            o=$(dirname "${objs[0]}")/$x.hip.o
+            "$llvm/llvm-objcopy" --dump-section=.hip_fatbin="$t/fb" "$o" "$t/rest.o" ||
+              { echo "::error::$llvm/llvm-objcopy could not dump the .hip_fatbin of $o"; exit 1; }
+            bundles=$("$llvm/clang-offload-bundler" --list --type=o --input="$t/fb") ||
+              { echo "::error::$llvm/clang-offload-bundler --list failed on the .hip_fatbin of $o"; exit 1; }
+            echo "$o:"; echo "$bundles"
+            for g in gfx1030 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201; do
+              echo "$bundles" | grep -Eq -- "--$g(:|$)" || { echo "::error::no $g code object in $o"; exit 1; }
+            done
+          done
+          d=dist/larch-linux-x86_64-hip
+          mkdir -p "$d"
+          for name in larch larch-agent; do
+            LD_LIBRARY_PATH=/opt/rocm/lib "$rel/$name" --version
+            cp "$rel/$name" "$d/"
+          done
+          tar -C "$d" -czf dist/larch-linux-x86_64-hip.tar.gz larch larch-agent
+          EOF
+      # Artifact storage is billed; a check build's upload may fail.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !inputs.release }}
+        continue-on-error: true
+        with:
+          name: larch-linux-x86_64-hip
+          path: dist/larch-linux-x86_64-hip.tar.gz
+          if-no-files-found: error
+      # The release-tools action's Linux packages for the app, installed in the root container.
+      - name: build the release archives (CLI, agent and app)
+        if: inputs.release
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          docker exec "$ROCM" bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3 pkg-config zstd binutils libxkbcommon-x11-dev libxcb-xkb-dev'
+          docker exec -e VERSION -e LARCH_CMAKE_GENERATOR=Ninja -e LIBCLANG_PATH=/opt/rocm/lib/llvm/lib \
+            -e CARGO_TARGET_DIR=/cache/target-hip "$ROCM" bash -c '. "$CARGO_HOME/env" && cargo fetch --locked &&
+              cargo fetch --locked --manifest-path apps/desktop/Cargo.toml &&
+              python3 scripts/release-manifest.py --build x86_64-unknown-linux-gnu --flavour hip --version "$VERSION"'
+      # From the host: the archives are in the mounted workspace, and the token stays out of the container.
+      - name: stage the release archives on the draft release
+        if: inputs.release
+        shell: bash
+        env:
+          RELEASES_WRITE: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          shopt -s failglob
+          python3 scripts/release-manifest.py --version "$VERSION" --stage dist/*.tar.zst
+      - name: stop ROCm
+        if: always()
+        run: docker rm -f "$ROCM"

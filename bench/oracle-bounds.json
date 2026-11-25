@@ -1,0 +1,392 @@
+{
+  "m1": {
+    "bound": 0.0880593441491973,
+    "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over positions",
+    "gate": "per backend and mode: top-1 >= 0.99 on positions whose reference gap exceeds the margin, and mean KL over all positions <= bound",
+    "kl": "per position, KL(p_ref || q) over the reference top 64 plus one bucket for the rest; an id outside q's top 64 takes q's 64th logprob (a lower bound on that term)",
+    "llama_cpp": "b11458 (c479922ac)",
+    "margin": 0.703125,
+    "margin_rule": "largest reference top-1/top-2 gap (nats) at which any pair's top-1 differs",
+    "pairs": [
+      {
+        "backend": "CPU",
+        "device": "CPU",
+        "dump_sha256": "cda2a6a2cba3bdbcb4abb3a201dbe6dbc13292a5703c09b2009cb1d6ba0dacd4",
+        "flip_gap": 0.703125,
+        "max_kl": 0.34390321372329885,
+        "mean_kl": 0.003034943149066411,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.058706229432798206,
+        "positions": 58403,
+        "top1": 0.9310309401914285
+      },
+      {
+        "backend": "CUDA",
+        "device": "CUDA0",
+        "dump_sha256": "09f28e02203210c65181890eb5c195dbf8d1f5175bad5006633a0a6955385372",
+        "flip_gap": 0.15625,
+        "max_kl": 0.0643736934948879,
+        "mean_kl": 0.000541422338147756,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.003507054183973574,
+        "positions": 58403,
+        "top1": 0.9712514768076982
+      }
+    ],
+    "prompts": 100,
+    "prompts_sha256": "1638111506aff0c93aa062cc260672d8bf37867e02a2e03a15fa838acd8757b6",
+    "reference": {
+      "backend": "CUDA",
+      "device": "CUDA0",
+      "dump_sha256": "f0e5ce16fed8497e29f5f2d86bdb1ea3bd8a1bfe01721f579d2046bfbb5601c9",
+      "n_batch": 32,
+      "n_ubatch": 32
+    },
+    "reference_backend": "CUDA"
+  },
+  "m14": {
+    "bound": 0.0045790741241832755,
+    "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over positions",
+    "gate": "per backend and mode: top-1 >= 0.99 on positions whose reference gap exceeds the margin, and mean KL over all positions <= bound",
+    "kl": "per position, KL(p_ref || q) over the reference top 64 plus one bucket for the rest; an id outside q's top 64 takes q's 64th logprob (a lower bound on that term)",
+    "llama_cpp": "b11458 (c479922)",
+    "margin": 0.5403900444507599,
+    "margin_rule": "largest reference top-1/top-2 gap (nats) at which any pair's top-1 differs",
+    "model_sha256": "0ad885ffd4bb022fc4f0d33a3308fa108ef8613159d3b3a67e23abca056b7a6c",
+    "pairs": [
+      {
+        "backend": "CUDA",
+        "device": "CUDA0",
+        "dump_sha256": "67db5efac658e6eb6400e5401518c4be9f0378b9c9d1ca3928c0c324a67086a4",
+        "flip_gap": 0.5403900444507599,
+        "max_kl": 0.05353423778135638,
+        "mean_kl": 0.0007935185683880065,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.0028093784797283052,
+        "positions": 56629,
+        "top1": 0.97065107983542
+      },
+      {
+        "backend": "CUDA",
+        "device": "CUDA0",
+        "dump_sha256": "c3f6561a409e491c742b14b6ea1363651fb923515a87596a89fb8f3728dfdc3d",
+        "flip_gap": 0.39972686767578125,
+        "max_kl": 0.02359892755214018,
+        "mean_kl": 0.000776011413115067,
+        "n_batch": 32,
+        "n_ubatch": 32,
+        "p99_kl": 0.0027589181549130797,
+        "positions": 56629,
+        "top1": 0.97151636087517
+      },
+      {
+        "backend": "CPU",
+        "device": "CPU",
+        "dump_sha256": "65372b22cd59d2e2143d7ae0ca1705d61c4cfc0853250fdb8b9af6efb05f0cbd",
+        "flip_gap": 0.39972686767578125,
+        "max_kl": 0.038418243798669434,
+        "mean_kl": 0.0008626515115183486,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.00305271608278885,
+        "positions": 56629,
+        "top1": 0.9703861978844761
+      }
+    ],
+    "prompts": 100,
+    "prompts_sha256": "1638111506aff0c93aa062cc260672d8bf37867e02a2e03a15fa838acd8757b6",
+    "reference": {
+      "backend": "CUDA",
+      "device": "CUDA0",
+      "dump_sha256": "32faedee9a63b88cc267f362b997a130e7c018ab01300ae368f285951fa07940",
+      "n_batch": 32,
+      "n_ubatch": 32
+    },
+    "reference_backend": "CUDA"
+  },
+  "m2": {
+    "bound": 0.022720053141737005,
+    "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over positions",
+    "gate": "per backend and mode: top-1 >= 0.99 on positions whose reference gap exceeds the margin, and mean KL over all positions <= bound",
+    "kl": "per position, KL(p_ref || q) over the reference top 64 plus one bucket for the rest; an id outside q's top 64 takes q's 64th logprob (a lower bound on that term)",
+    "llama_cpp": "b11458 (c479922ac)",
+    "margin": 0.7656250596046448,
+    "margin_rule": "largest reference top-1/top-2 gap (nats) at which any pair's top-1 differs",
+    "pairs": [
+      {
+        "backend": "CPU",
+        "device": "CPU",
+        "dump_sha256": "aa2ce1bf34ef44c291b52a72d9b507d8edca7f785633485f44d2c379ac592bd6",
+        "flip_gap": 0.7656250596046448,
+        "max_kl": 0.3838012683795534,
+        "mean_kl": 0.00441066939243987,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.015146702094491336,
+        "positions": 55703,
+        "top1": 0.9125002244044307
+      },
+      {
+        "backend": "CUDA",
+        "device": "CUDA0",
+        "dump_sha256": "6eed39b32026f0da699cde4ac6630f6550599e102a168d6fe19dc5f393de2880",
+        "flip_gap": 0.20363616943359375,
+        "max_kl": 0.013150125215977157,
+        "mean_kl": 0.00027727679482478516,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.001091052757012119,
+        "positions": 55703,
+        "top1": 0.9857458305656787
+      }
+    ],
+    "prompts": 100,
+    "prompts_sha256": "1638111506aff0c93aa062cc260672d8bf37867e02a2e03a15fa838acd8757b6",
+    "reference": {
+      "backend": "CUDA",
+      "device": "CUDA0",
+      "dump_sha256": "50e5e52c2016578880b723ac74e7a95691f15a98c6da96d40d42c835fabec6f9",
+      "n_batch": 32,
+      "n_ubatch": 32
+    },
+    "reference_backend": "CUDA"
+  },
+  "m3": {
+    "bound": 0.1350003787714915,
+    "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over positions",
+    "gate": "per backend and mode: top-1 >= 0.99 on positions whose reference gap exceeds the margin, and mean KL over all positions <= bound",
+    "kl": "per position, KL(p_ref || q) over the reference top 64 plus one bucket for the rest; an id outside q's top 64 takes q's 64th logprob (a lower bound on that term)",
+    "llama_cpp": "b11458 (c479922ac)",
+    "margin": 1.3437499701976776,
+    "margin_rule": "largest reference top-1/top-2 gap (nats) at which any pair's top-1 differs",
+    "pairs": [
+      {
+        "backend": "CPU",
+        "device": "CPU",
+        "dump_sha256": "35de1bef2d5c70d1ddeb2d187d7951a70b1cccf6e9be08b92f5dfbb766c71eac",
+        "flip_gap": 1.3437499701976776,
+        "max_kl": 0.5279995135129121,
+        "mean_kl": 0.00471658007913673,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.09000025251432767,
+        "positions": 58403,
+        "top1": 0.937434720819136
+      },
+      {
+        "backend": "CUDA",
+        "device": "CUDA0",
+        "dump_sha256": "d6988745dcd474d2f4ae7016ccad4acf45407faa77c0f3568355ead8cbc56b6e",
+        "flip_gap": 0.25,
+        "max_kl": 0.06940497955813443,
+        "mean_kl": 0.0006409746221572671,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.0029085390638348982,
+        "positions": 58403,
+        "top1": 0.9691967878362413
+      }
+    ],
+    "prompts": 100,
+    "prompts_sha256": "1638111506aff0c93aa062cc260672d8bf37867e02a2e03a15fa838acd8757b6",
+    "reference": {
+      "backend": "CUDA",
+      "device": "CUDA0",
+      "dump_sha256": "44bb70b87431a0410ffb5900197f917e241c2f8fc4729f97bf8dee9cdd9246a7",
+      "n_batch": 32,
+      "n_ubatch": 32
+    },
+    "reference_backend": "CUDA"
+  },
+  "m5": {
+    "bound": 0.06534985856703847,
+    "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over positions",
+    "gate": "per backend and mode: top-1 >= 0.99 on positions whose reference gap exceeds the margin, and mean KL over all positions <= bound",
+    "kl": "per position, KL(p_ref || q) over the reference top 64 plus one bucket for the rest; an id outside q's top 64 takes q's 64th logprob (a lower bound on that term)",
+    "llama_cpp": "b11458 (c479922ac)",
+    "margin": 1.234375,
+    "margin_rule": "largest reference top-1/top-2 gap (nats) at which any pair's top-1 differs",
+    "pairs": [
+      {
+        "backend": "CPU",
+        "device": "CPU",
+        "dump_sha256": "9b5695b6de23e6804980635b0f870a49aa1a2b2b0f61cb8f10b21af1fb016384",
+        "flip_gap": 1.234375,
+        "max_kl": 0.786218877042705,
+        "mean_kl": 0.006702643491647422,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.04356657237802564,
+        "positions": 57803,
+        "top1": 0.8766846011452692
+      },
+      {
+        "backend": "CUDA",
+        "device": "CUDA0",
+        "dump_sha256": "4863686bc6c87dbd9f656779bfefd0e2070a6a61a207dc2a3527179a14360749",
+        "flip_gap": 0.2734375,
+        "max_kl": 0.017464939744020136,
+        "mean_kl": 0.0007742555551623065,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.0039455703428864525,
+        "positions": 57803,
+        "top1": 0.9649672162344515
+      }
+    ],
+    "prompts": 100,
+    "prompts_sha256": "1638111506aff0c93aa062cc260672d8bf37867e02a2e03a15fa838acd8757b6",
+    "reference": {
+      "backend": "CUDA",
+      "device": "CUDA0",
+      "dump_sha256": "7c2f92f4160a975944234fc8cce4b637f3dc728d3d8215e84b1f1474b6e0bfdf",
+      "n_batch": 32,
+      "n_ubatch": 32
+    },
+    "reference_backend": "CUDA"
+  },
+  "m6": {
+    "bound": 0.009188878786578817,
+    "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over positions",
+    "gate": "per backend and mode: top-1 >= 0.99 on positions whose reference gap exceeds the margin, and mean KL over all positions <= bound",
+    "kl": "per position, KL(p_ref || q) over the reference top 64 plus one bucket for the rest; an id outside q's top 64 takes q's 64th logprob (a lower bound on that term)",
+    "llama_cpp": "b11458 (c479922ac)",
+    "margin": 0.640625,
+    "margin_rule": "largest reference top-1/top-2 gap (nats) at which any pair's top-1 differs",
+    "pairs": [
+      {
+        "backend": "CPU",
+        "device": "CPU",
+        "dump_sha256": "28f7582ceedad0a3f508748866bbf55ad32073dacb6a055e97aae61aaf376bc1",
+        "flip_gap": 0.640625,
+        "max_kl": 0.10850963007768576,
+        "mean_kl": 0.0010998538267616253,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.006125919191052544,
+        "positions": 58403,
+        "top1": 0.9472629830659384
+      },
+      {
+        "backend": "CUDA",
+        "device": "CUDA0",
+        "dump_sha256": "79c5b0a891ac0a8e479fb55d797d3a6795ca0ea2bbb79be569a93321b2e30025",
+        "flip_gap": 0.203125,
+        "max_kl": 0.01671729841178917,
+        "mean_kl": 0.0004209794015705996,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.0019450131136044917,
+        "positions": 58403,
+        "top1": 0.9699672962005377
+      }
+    ],
+    "prompts": 100,
+    "prompts_sha256": "1638111506aff0c93aa062cc260672d8bf37867e02a2e03a15fa838acd8757b6",
+    "reference": {
+      "backend": "CUDA",
+      "device": "CUDA0",
+      "dump_sha256": "b597fec3386df7f79efbd2b6dbc411d11d39df39b7325e0bc42c89c0dccb0863",
+      "n_batch": 32,
+      "n_ubatch": 32
+    },
+    "reference_backend": "CUDA"
+  },
+  "m7": {
+    "bound": 0.009629055859524432,
+    "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over positions",
+    "gate": "per backend and mode: top-1 >= 0.99 on positions whose reference gap exceeds the margin, and mean KL over all positions <= bound",
+    "kl": "per position, KL(p_ref || q) over the reference top 64 plus one bucket for the rest; an id outside q's top 64 takes q's 64th logprob (a lower bound on that term)",
+    "llama_cpp": "b11458 (c479922ac)",
+    "margin": 0.37499988079071045,
+    "margin_rule": "largest reference top-1/top-2 gap (nats) at which any pair's top-1 differs",
+    "pairs": [
+      {
+        "backend": "CPU",
+        "device": "CPU",
+        "dump_sha256": "577986d7aac324c45e9d26bed29e5a32f8449e78f4ae4b2c224e856f709a5776",
+        "flip_gap": 0.37499988079071045,
+        "max_kl": 0.10029055342497253,
+        "mean_kl": 0.001310086833479494,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.006419370573016288,
+        "positions": 57836,
+        "top1": 0.9421640500726192
+      },
+      {
+        "backend": "CUDA",
+        "device": "CUDA0",
+        "dump_sha256": "53e6e6b02eb27a41545ab0da89f1a50032ad08119e3b790f4273aa47d998a1b5",
+        "flip_gap": 0.140625,
+        "max_kl": 0.00921000535863636,
+        "mean_kl": 0.00020259095485671916,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.0007366084010116286,
+        "positions": 57836,
+        "top1": 0.9807040597551698
+      }
+    ],
+    "prompts": 100,
+    "prompts_sha256": "1638111506aff0c93aa062cc260672d8bf37867e02a2e03a15fa838acd8757b6",
+    "reference": {
+      "backend": "CUDA",
+      "device": "CUDA0",
+      "dump_sha256": "f4ce24fa8d9b02715b88c26ce9b3c90ebd195b9b704b24edbf92a81ec779f9d1",
+      "n_batch": 32,
+      "n_ubatch": 32
+    },
+    "reference_backend": "CUDA"
+  },
+  "m8": {
+    "bound": 0.021716577412409198,
+    "bound_rule": "1.5 x max over pairs of the p99 (nearest rank) over positions",
+    "gate": "per backend and mode: top-1 >= 0.99 on positions whose reference gap exceeds the margin, and mean KL over all positions <= bound",
+    "kl": "per position, KL(p_ref || q) over the reference top 64 plus one bucket for the rest; an id outside q's top 64 takes q's 64th logprob (a lower bound on that term)",
+    "llama_cpp": "b11458 (c479922ac)",
+    "margin": 0.42968761920928955,
+    "margin_rule": "largest reference top-1/top-2 gap (nats) at which any pair's top-1 differs",
+    "pairs": [
+      {
+        "backend": "CPU",
+        "device": "CPU",
+        "dump_sha256": "836de61883eac6e7a124d25c3b7e06b4200f121139e81e78e7e9402902a79473",
+        "flip_gap": 0.42968761920928955,
+        "max_kl": 0.05598841884348767,
+        "mean_kl": 0.0016791634460975456,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.014477718274939464,
+        "positions": 57803,
+        "top1": 0.9439475459751224
+      },
+      {
+        "backend": "CUDA",
+        "device": "CUDA0",
+        "dump_sha256": "e4866572087f348dde397583800ce5fe097c6c7232838b3020563365deb16324",
+        "flip_gap": 0.08723068237304688,
+        "max_kl": 0.026419857235304902,
+        "mean_kl": 0.00012400312226196612,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "p99_kl": 0.0006543127424998067,
+        "positions": 57803,
+        "top1": 0.9919035344186288
+      }
+    ],
+    "prompts": 100,
+    "prompts_sha256": "1638111506aff0c93aa062cc260672d8bf37867e02a2e03a15fa838acd8757b6",
+    "reference": {
+      "backend": "CUDA",
+      "device": "CUDA0",
+      "dump_sha256": "e13b20b50c3c96d9ed652a40b97e059a6e3837c9baec3706866d820ba9e82167",
+      "n_batch": 32,
+      "n_ubatch": 32
+    },
+    "reference_backend": "CUDA"
+  }
+}

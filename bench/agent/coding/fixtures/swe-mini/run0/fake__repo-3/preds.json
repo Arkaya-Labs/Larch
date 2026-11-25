@@ -1,0 +1,7 @@
+{
+  "fake__repo-3": {
+    "model_name_or_path": "hosted_vllm/m5",
+    "instance_id": "fake__repo-3",
+    "model_patch": "diff --git a/greet.py b/greet.py\n--- a/greet.py\n+++ b/greet.py\n@@ -1,2 +1,2 @@\n def greet():\n-    pass\n+    print(\"hello\")\n"
+  }
+}

@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""The scoreboard (architecture 16): larch against llama.cpp and Ollama from larch-bench/1 result files.
+
+    python3 scripts/scoreboard [--machine wsl5070] [files...]
+
+Without files it reads bench/results/<machine>-*.json except bench-merge's merge-* rows and the server check's driver
+run. Other JSON there and --replay generated runs (a gate, not a comparison) are skipped. Prints one fixed-width table per model, with a %
+only for a pair `baseline.py compare` accepts (else ~ and its reasons). Exits 1 when no result is found and on two
+files for the same (model, engine, workload, N).
+"""
+
+import argparse
+import collections
+import contextlib
+import io
+import json
+import math
+import re
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import baseline  # noqa: E402
+
+# W-name by workload file, from baseline.py's row tables: ("w2-4", "w2-chats.jsonl", ...) -> W2.
+LABELS = {r[1]: r[0].split("-")[0].upper() for r in baseline.W1 + baseline.W2 + baseline.W3 + baseline.W4 + baseline.W5}
+ENGINES = ("larch", "llama.cpp", "ollama")
+HEAD = ["workload", "N", "larch", "llama.cpp", "Ollama", "viv TTFT p50", "viv TTFT p99", "llama TTFT p99",
+        "viv TPOT p99", "llama TPOT p99", "vs llama.cpp", "vs Ollama"]
+
+
+Cell = collections.namedtuple("Cell", "agg failures ttft tpot path doc")
+
+
+def cells(d, p):
+    """The (workload, N, Cell) rows of result `d` from file `p`: one per fixed shape (S over all its runs), else the run's
+    summary. llama.cpp's W6 is llama-batched-bench's JSONL beside the driver's fixed file, which is only the mirror its
+    gate checks."""
+    if d["mode"] == "fixed":
+        rows = d["fixed"]  # W6 is these shapes only: another pp, tg or pl is no row of the table
+        if d["engine"] == "llama.cpp":
+            rows = (baseline.batched_rows(p.with_name(p.name.removesuffix("-fixed.json") + "-batched.jsonl"))
+                    if p.name.endswith("-fixed.json") else [])
+            if not all(map(fixed_row, rows)):
+                raise ValueError("llama-batched-bench rows without integer pp, tg, pl and a finite speed")
+        rows = [{"pp": t[0], "tg": t[1], "pl": t[2], "speed": v} for t, (v, _) in baseline.pooled(rows).items()]
+        return [(f"W6 pp{r['pp']} tg{r['tg']}", r["pl"], Cell(r["speed"], 0, {}, {}, p, d)) for r in rows
+                if (r["pp"], r["tg"], r["pl"]) in baseline.FIXED_SHAPES]
+    s, f = d["summary"], d["workload"]["file"]
+    return [(LABELS.get(f, f), d["concurrency"],
+             Cell(s["agg_tok_s"], s["failures"], s["ttft_ms"] or {}, s["tpot_ms"] or {}, p, d))]
+
+
+def names(msg):
+    """`msg` with every absolute path (POSIX, a Windows drive or a UNC share) cut to its file name: the notes go into PR
+    bodies. A repo-relative path names nobody and stays whole."""
+    return re.sub(r"(?<![^\s'\"(=])(?:[A-Za-z]:|\\\\[^\\/\s:'\"]+)?(?:[\\/][^\\/\s:'\"]+)+[\\/]([^\\/\s:'\"]+)", r"\1", msg)
+
+
+def server_check(machine, out, alias):
+    """baseline.py server's record for `alias` on `machine`, or None when it is missing or not a JSON object."""
+    sc = baseline.load(out / f"{machine}-{alias}-server-check.json")
+    return sc if isinstance(sc, dict) else None
+
+
+def driver_id(d):
+    """Which llama.cpp and which driver sources produced a llama.cpp result or server check."""
+    return d.get("llama_cpp"), d.get("build")
+
+
+def server_problems(machine, out, alias):
+    """Why baseline.py server's check of one W1 conversation through a real llama-server does not vouch for `alias`'s
+    driver on `machine`: missing, malformed or failed, another model's or machine's, run with flags other than the flag
+    search's, or by another llama.cpp or driver build than the fixed-shape mirror's."""
+    sc = server_check(machine, out, alias)
+    if sc is None or sc.get("ok") is not True:
+        return [f"no passing llama-server check of {alias} on {machine} (baseline.py server)"]
+    if "alias" not in sc:
+        return [f"the llama-server check of {alias} on {machine} predates its model and flags record: rerun baseline.py server"]
+    if (sc.get("alias"), sc.get("machine")) != (alias, machine):
+        return [f"the llama-server check names {sc.get('alias')!r} on {sc.get('machine')!r}, not {alias} on {machine}"]
+    if not isinstance(sc.get("params"), dict):
+        return [f"the llama-server check of {alias} on {machine} records no flags: rerun baseline.py server"]
+    flags = argparse.Namespace(machine=machine, out=out)
+    bad = [f"llama-server check: {e}" for e in baseline.check_params(sc, flags, alias)]
+    mirror = baseline.load(out / f"{machine}-{alias}-fixed.json")
+    if baseline.MACHINES[machine]["fixed"] and isinstance(mirror, dict) and driver_id(mirror) != driver_id(sc):
+        bad.append("the fixed-shape mirror ran another llama.cpp or driver build than the llama-server check")
+    return bad
+
+
+def build_problems(c):
+    """A llama.cpp cell (a run, or W6 through its fixed-shape mirror) from another llama.cpp or driver build than its
+    model's server check; a missing or malformed check is the driver gate's problem."""
+    d = c.doc
+    sc = server_check(d["machine"], c.path.parent, d["model"].removesuffix(".gguf"))
+    if d["engine"] != "llama.cpp" or sc is None or driver_id(sc) == driver_id(d):
+        return []
+    return [f"{c.path.name}: another llama.cpp or driver build than its llama-server check's"]
+
+
+def startup(d):
+    """A larch run's startup settings in force: the last --set of each knob (the engine applies them in order), in a
+    canonical order (keys and values as JSON, so values of any type compare)."""
+    last = {json.dumps(k.get("knob")): json.dumps(k.get("value")) for k in d.get("knob_timeline") or []
+            if isinstance(k, dict) and k.get("at_s") is None}
+    return tuple(sorted(last.items()))
+
+
+def identity(d):
+    """What must match between a scripted run and the generated run that clears it: the binary (when results record
+    it), the device and the startup settings."""
+    return d.get("build"), d.get("system_info"), startup(d)
+
+
+def number(v):
+    """A finite JSON number (a bool is not one)."""
+    return type(v) in (int, float) and math.isfinite(v)
+
+
+def fixed_row(r):
+    """A fixed shape's row as the tables need it: integer pp, tg and pl, a finite speed."""
+    return isinstance(r, dict) and all(type(r.get(k)) is int for k in ("pp", "tg", "pl")) and number(r.get("speed"))
+
+
+def shape(d):
+    """Why `d` cannot be a table row, checked before any field is used: the fields the tables print and sort by."""
+    if not all(isinstance(d.get(k), str) for k in ("machine", "model")) or d.get("engine") not in ENGINES:
+        return "machine, model or engine"
+    if d.get("mode") == "fixed":
+        ok = isinstance(d.get("fixed"), list) and all(map(fixed_row, d["fixed"])) and isinstance(d.get("params"), dict)
+        return None if ok else "fixed rows or params"
+    if d.get("mode") != "run":
+        return f"mode {d.get('mode')!r}"
+    s, w = d.get("summary"), d.get("workload")
+    ok = (type(d.get("concurrency")) is int and d["concurrency"] > 0 and isinstance(w, dict) and isinstance(w.get("file"), str)
+          and isinstance(w.get("sha256"), str) and isinstance(d.get("requests"), list) and isinstance(s, dict)
+          and number(s.get("agg_tok_s")) and type(s.get("failures")) is int and type(s.get("requests")) is int
+          and all(s.get(k) is None or isinstance(s[k], dict) and all(number(v) for v in s[k].values())
+                  for k in ("ttft_ms", "tpot_ms")))
+    return None if ok else "summary, workload, concurrency or requests"
+
+
+def session_problems(d, alias):
+    """Why a --replay generated run does not clear its row for scripted numbers (architecture 16): it must be larch's
+    run of one of the machine's rows over the manifest's workload bytes, with every request the manifest expects once,
+    none failed, and each turn finding exactly the KV its session parked (cached_tokens == tokens_in_kv())."""
+    row = baseline.row_of(d)
+    if d["engine"] != "larch" or row is None:
+        return ["not larch's run of one of the machine's rows"]
+    ctx = baseline.row_ctx(row, baseline.peaks(alias))
+    if (d.get("params") or {}).get("n_ctx_seq") != ctx:
+        return [f"params.n_ctx_seq = {(d.get('params') or {}).get('n_ctx_seq')!r}, not the row's {ctx}"]
+    want = baseline.expected_requests(alias, row)
+    if not want or next(iter(want.values()))["workload_sha256"] != d["workload"]["sha256"]:
+        return [f"{d['workload']['file']} is not in bench/manifest/{alias}.jsonl with these bytes"]
+    keys = [(r["conv"], r["turn"]) for r in d["requests"]]
+    bad = [] if len(keys) == len(set(keys)) and set(keys) == set(want) else [
+        f"{len(set(keys))} distinct requests of {len(keys)}, the manifest expects exactly {len(want)}"]
+    bad += [f"{r['conv']} turn {r['turn']}: error {r['error']!r}, KV {r.get('kv_tokens')!r} for {r['cached_tokens']!r} cached"
+            for r in d["requests"] if r["error"] is not None or r.get("kv_tokens") is None or r["kv_tokens"] != r["cached_tokens"]]
+    if d["summary"]["failures"] or d["summary"]["requests"] != len(want):
+        bad.append(f"summary: {d['summary']['requests']} requests, {d['summary']['failures']} failed")
+    return bad
+
+
+def driver_gate(machine, out, alias):
+    """The problems of architecture 16's honesty checks on llama.cpp's driver over directory `out`: the fixed-shape
+    mirror (baseline.check_fixed, where the machine runs it) and the llama-server check of one W1 conversation on
+    the machine. A missing file, a flag search that never ran or an unknown machine is a problem, never a pass."""
+    try:
+        bad = []
+        if baseline.MACHINES[machine]["fixed"]:
+            with contextlib.redirect_stdout(io.StringIO()):
+                bad += baseline.check_fixed(argparse.Namespace(machine=machine, out=out), alias)
+        bad += server_problems(machine, out, alias)
+        return [names(b) for b in bad]
+    except SystemExit as e:
+        return [names(str(e))]
+    except (KeyError, TypeError, AttributeError, ValueError, OSError) as e:
+        return [names(f"could not run ({type(e).__name__}: {e})")]
+
+
+def gather(paths):
+    """({(machine, alias, workload, N, engine): Cell}, {(machine, alias, workload, N, workload sha256, identity):
+    problems of larch's generated runs, all of them}, {(machine, alias): problems of llama.cpp's driver gate}); dies on
+    two files for one key."""
+    out, gen, gate = {}, {}, {}
+    for p in paths:
+        d = baseline.load(p)
+        if not isinstance(d, dict) or d.get("schema") != "larch-bench/1":
+            print(f"scoreboard: skipped {p.name}: not a larch-bench/1 result", file=sys.stderr)
+            continue
+        if bad := shape(d):
+            print(f"scoreboard: skipped {p.name}: malformed {bad}", file=sys.stderr)
+            continue
+        try:
+            alias, machine = d["model"].removesuffix(".gguf"), d["machine"]
+            # Soaks (--duration), R3 (--cancel-rate), --slice parts and live knob changes (W7) are not the row.
+            # A joined --slice row keeps each part's timeline under slices.
+            timelines = [d.get("knob_timeline")] + [s.get("knob_timeline") for s in d.get("slices") or []]
+            live = any(k.get("at_s") is not None for t in timelines for k in t or [])
+            if d.get("duration") is not None or d.get("cancel_rate") or d.get("slice") is not None or live:
+                print(f"scoreboard: skipped {p.name}: a duration, cancel-rate, slice or live-knob run", file=sys.stderr)
+                continue
+            if baseline.row_of(d) is None if d["mode"] == "run" else not baseline.MACHINES.get(machine, {}).get("fixed"):
+                print(f"scoreboard: skipped {p.name}: not one of {machine}'s rows", file=sys.stderr)
+                continue
+            if d.get("replay") == "generated":
+                key = (machine, alias, LABELS.get(d["workload"]["file"]), d["concurrency"], d["workload"]["sha256"],
+                       identity(d))
+                gen[key] = gen.get(key, []) + session_problems(d, alias)
+                continue
+            rows = cells(d, p)
+            if d["engine"] == "llama.cpp" and (machine, alias) not in gate:
+                gate[(machine, alias)] = driver_gate(machine, p.parent, alias)
+        except (KeyError, TypeError, AttributeError, ValueError, OSError) as e:
+            print(f"scoreboard: skipped {p.name}: malformed ({type(e).__name__}: {e})", file=sys.stderr)
+            continue
+        except SystemExit as e:  # baseline's die(), e.g. a missing manifest: the gate cannot clear
+            print(f"scoreboard: skipped {p.name}: {names(str(e))}", file=sys.stderr)
+            continue
+        for wl, n, c in rows:
+            key = (machine, alias, wl, n, d["engine"])
+            if key in out:
+                baseline.die(f"ambiguous scoreboard: {out[key].path.name} and {p.name} are both "
+                             f"{alias} {d['engine']} {wl} at {n} on {machine}")
+            out[key] = c
+    return out, gen, gate
+
+
+def num(v):
+    """A tok/s or ms value as text, or - when absent."""
+    return "-" if v is None else f"{v:.1f}"
+
+
+def agg(c, held):
+    """An engine's aggregate cell; ! marks a run with failed requests, x a number that may not be published."""
+    return "-" if c is None else "x" if held else num(c.agg) + ("!" if c.failures else "")
+
+
+def lat(c, held, which, p):
+    """A latency percentile cell, under the same rule as agg."""
+    return "-" if c is None else "x" if held else num(getattr(c, which).get(p))
+
+
+def own(c):
+    """A cell's own problems, by file name. A run: its machine's row, the full request set, exact lengths, prompt hashes
+    and a driver's searched flags. W6: a context that fits the shape. Both: a llama.cpp cell's build against its server
+    check's."""
+    if c is None:
+        return []
+    if c.doc["mode"] == "run":
+        bad = baseline.compare_problems([str(c.path)] * 2, [c.doc] * 2)
+    else:
+        ctx = (c.doc.get("params") or {}).get("n_ctx_seq")
+        fits = type(ctx) is int and all(ctx >= r["pp"] + r["tg"] for r in c.doc["fixed"])
+        bad = [] if fits else [f"{c.path.name}: params.n_ctx_seq = {ctx!r} does not fit its shapes"]
+    return list(dict.fromkeys(names(b) for b in bad + build_problems(c)))
+
+
+def gain(viv, base, notes, held):
+    """larch's % over a baseline, only for a like-for-like pair (baseline.compare_problems) with a positive baseline and
+    nothing `held` against either side."""
+    if viv is None or base is None or base.agg <= 0:
+        return "-"
+    if held:  # its reasons are noted once, for the model or the row
+        return "~"
+    bad = ([names(b) for b in baseline.compare_problems([str(viv.path), str(base.path)], [viv.doc, base.doc])]
+           if viv.doc["mode"] == "run" else [])
+    if bad:
+        more = f"; and {len(bad) - 3} more (baseline.py compare lists them)" if len(bad) > 3 else ""
+        notes.append(f"~ {viv.path.name} vs {base.path.name}: not published: {'; '.join(bad[:3])}{more}")
+        return "~"
+    return f"{viv.agg / base.agg - 1:+.1%}"
+
+
+def withheld(c, reasons, notes):
+    """`reasons` plus the run's own manifest problems; each withheld run is noted once."""
+    held = reasons + own(c)
+    if c is not None and held and held != reasons:
+        bad = [m.removeprefix(c.path.name).lstrip(": ") for m in held[len(reasons):]]  # the note names it once
+        more = f"; and {len(bad) - 3} more" if len(bad) > 3 else ""
+        notes.append(f"x {c.path.name}: {'; '.join(bad[:3])}{more}")
+    return held
+
+
+def report(paths):
+    """The text of all tables and their footnotes; empty when no file is a result."""
+    got, gen, gate = gather(paths)
+    lines = []
+    for machine, alias in sorted({k[:2] for k in got}, key=lambda k: (k[1], k[0])):
+        rows, notes = [], []
+        driver = [f"llama.cpp's driver gate: {'; '.join(gate[(machine, alias)])}"] if gate.get((machine, alias)) else []
+        if driver:
+            notes.append(f"x llama.cpp: {driver[0]} (architecture 16: no driver number until it passes)")
+        for wl, n in sorted({k[2:4] for k in got if k[:2] == (machine, alias)}):
+            viv, llama, oll = (got.get((machine, alias, wl, n, g)) for g in ENGINES)
+            notes += [f"! {c.path.name}: {c.failures} failed requests" for c in (viv, llama, oll) if c and c.failures]
+            session = []
+            if viv and wl in ("W1", "W2", "W3") and viv.doc.get("build") is None:
+                # Results from before `build` cannot show one binary ran both runs: the gate stays shut.
+                session = [f"records no build, so no --replay generated run can clear {wl} at {n} (architecture 16)"]
+            elif viv and wl in ("W1", "W2", "W3") and gen.get((machine, alias, wl, n, viv.doc["workload"]["sha256"],
+                                                               identity(viv.doc)), [""]):
+                session = [f"no clean --replay generated run of {wl} at {n} (architecture 16)"]
+            if session:
+                notes.append(f"x {viv.path.name}: {session[0]}")
+            viv_held, llama_held = withheld(viv, session, notes), withheld(llama, driver, notes)
+            oll_held = withheld(oll, [], notes)
+            rows.append([wl, str(n), agg(viv, viv_held), agg(llama, llama_held), agg(oll, oll_held),
+                         lat(viv, viv_held, "ttft", "p50"), lat(viv, viv_held, "ttft", "p99"),
+                         lat(llama, llama_held, "ttft", "p99"), lat(viv, viv_held, "tpot", "p99"),
+                         lat(llama, llama_held, "tpot", "p99"), gain(viv, llama, notes, viv_held + llama_held),
+                         gain(viv, oll, notes, viv_held + oll_held)])
+        w = [max(len(r[i]) for r in [HEAD, *rows]) for i in range(len(HEAD))]
+        lines += [f"{alias} ({machine})", *("  ".join(c.ljust(w[i]) if i == 0 else c.rjust(w[i]) for i, c in enumerate(r))
+                                            .rstrip() for r in [HEAD, *rows]), *notes, ""]
+    return "\n".join(lines)
+
+
+def results(out, machine):
+    """The machine's result files, without bench-merge's merge-* rows, which repeat the attended ones, and the server
+    check's driver run, a consistency check rather than a timing row."""
+    return sorted(p for p in out.glob(f"{machine}-*.json") if "-merge-" not in p.name and "-server-check" not in p.name)
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--machine", default="wsl5070")
+    p.add_argument("files", nargs="*", type=pathlib.Path)
+    a = p.parse_args()
+    files = a.files or results(baseline.BENCH / "results", a.machine)
+    out = report(files)
+    if not out:
+        baseline.die(f"no larch-bench/1 results for {a.machine}")
+    print(out)
+
+
+if __name__ == "__main__":
+    main()

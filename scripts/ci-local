@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# The required CI checks on this machine, before you push: ci.yml's `check` job on Linux and
+# Windows (Git Bash), macos.yml's `check` job on macOS. Keep the steps in step with those
+# workflows. backend-builds.yml (CUDA/HIP packaging) is not covered here.
+#
+# Usage: scripts/ci-local    (from anywhere in the repo; stops at the first failure)
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+export CARGO_TERM_COLOR=always
+
+step() { printf '\n==> %s\n' "$*"; }
+
+case "$(uname -s)" in
+  Linux) os=linux ;;
+  Darwin) os=macos ;;
+  MINGW* | MSYS* | CYGWIN*) os=windows ;;
+  *) echo "unsupported OS: $(uname -s)" >&2; exit 2 ;;
+esac
+
+if [ "$os" = macos ]; then
+  export LARCH_BACKEND=METAL
+  step "Metal toolchain"
+  xcrun -sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+  step "cargo clippy"
+  cargo clippy --workspace --all-targets --all-features -- -D warnings
+  step "cargo test"
+  cargo test
+  step "ctest (CPU reference; metal_smoke and metal_compare excluded as in macos.yml)"
+  cmake -S kernels -B build/kernels -DLARCH_BACKEND=METAL -DLARCH_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
+  cmake --build build/kernels --config RelWithDebInfo
+  ctest --test-dir build/kernels -C RelWithDebInfo --output-on-failure --no-tests=error -E '^metal_(smoke|compare)$'
+  step "all macos checks passed"
+  exit 0
+fi
+
+export LARCH_BACKEND=CPU
+if [ "$os" = linux ]; then
+  step "cargo fmt"
+  cargo fmt --all --check
+fi
+step "cargo clippy"
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+step "cargo test"
+cargo test
+if [ "$os" = linux ]; then
+  step "fuzz harness compiles"
+  cargo check --manifest-path fuzz/Cargo.toml --all-targets
+fi
+step "ctest (CPU reference)"
+cmake -S kernels -B build/kernels -DLARCH_BACKEND=CPU -DLARCH_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build/kernels --config RelWithDebInfo
+ctest --test-dir build/kernels -C RelWithDebInfo --output-on-failure --no-tests=error
+if [ "$os" = linux ]; then
+  step "loom (1 writer, 2 readers)"
+  RUSTFLAGS="--cfg loom" CARGO_TARGET_DIR=target/loom cargo test -p larch-records --lib --release
+  step "records-schema generates"
+  schema="$(mktemp -d)/schema.json"
+  cargo run -p larch-records --features schema --bin records-schema -- "$schema"
+  python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert "EngineSample" in d["$defs"]' "$schema"
+fi
+step "all $os checks passed"

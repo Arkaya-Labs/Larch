@@ -1,0 +1,31 @@
+Riverton Power
+Electricity bill
+
+Customer: Jordan Avery
+Supply address: 42 Alder Street, Apartment 3B
+Account: 3301-7754
+Bill date: 28 September 2026
+
+Usage, 26 August to 25 September 2026: 412 kWh
+Energy charge: 412 kWh at $0.19 = $78.28
+Standing charge: 30 days at $0.42 = $12.60
+Taxes: $5.52
+Amount due: $96.40 by 20 October 2026.
+
+Your usage was 8% lower than the same month last year.
+Pay online, by phone on 555-0110, or by direct debit.
+
+Meter readings
+Previous reading: 18,204 (25 August 2026, actual)
+This reading: 18,616 (25 September 2026, actual)
+
+Ways to save
+Switch off standby at the wall, wash clothes at 30 °C, and use a lid on pans. A smart meter can
+show what you use each hour; ask us to fit one at no cost.
+
+Your tariff: Standard Variable. A fixed tariff for 12 months at $0.17 per kWh is available to
+you from 1 November.
+
+Power cut? Call 105 or check the outage map on our website. Never touch fallen power lines.
+
+Your last three bills: $104.75 (June), $88.10 (July), $91.30 (August). All paid on time.

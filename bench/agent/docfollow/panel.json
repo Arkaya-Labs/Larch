@@ -1,0 +1,27 @@
+{
+ "seed": 20261113,
+ "size": 20,
+ "rule": "`size` question ids balanced across kinds and documents: kinds in turn, each giving its next\nquestion whose document set has fewer than its share, from a shuffle seeded by `seed`.",
+ "ids": [
+  "edgar-link",
+  "ghtos-optout",
+  "inject-conclusion",
+  "kimi-limits",
+  "math2-scores",
+  "mcp-statuses",
+  "mix-grpo",
+  "mix-ordinal",
+  "mix-pronoun-1",
+  "ocr-decline",
+  "ocr-table4",
+  "r1-aha",
+  "r1-distill-where",
+  "r1-mcts",
+  "r1conflict-aime",
+  "r1edit-aime",
+  "v32-chain-4",
+  "v32-energy",
+  "v32-fig3",
+  "wch-baud"
+ ]
+}

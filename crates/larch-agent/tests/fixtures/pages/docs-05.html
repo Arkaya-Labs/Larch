@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quickstart &mdash; Quillmark 2.1 documentation</title>
+  <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=80d5e7a1" />
+  <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=e59714d7" />
+  <link rel="index" title="Index" href="genindex.html" />
+  <link rel="next" title="Configuration" href="configuration.html" />
+  <link rel="prev" title="Welcome to Quillmark" href="index.html" />
+  <script src="_static/jquery.js?v=5d32c60e"></script>
+  <script src="_static/js/theme.js"></script>
+  <script>
+    jQuery(function () { SphinxRtdTheme.Navigation.enable(true); });
+    var flyout = "<div class='rst-versions'><span class='rst-current-version'>v: latest</span></div>";
+  </script>
+  <style>.wy-nav-content{max-width:900px}</style>
+</head>
+<body class="wy-body-for-nav">
+<div class="wy-grid-for-nav">
+  <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+        <a href="index.html" class="icon icon-home">Quillmark</a>
+        <div class="version">2.1</div>
+        <div role="search"><form id="rtd-search-form" class="wy-form" action="search.html" method="get"><input type="text" name="q" placeholder="Search docs" /></form></div>
+      </div>
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+        <p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+        <ul class="current">
+          <li class="toctree-l1 current"><a class="current reference internal" href="#">Quickstart</a></li>
+          <li class="toctree-l1"><a class="reference internal" href="configuration.html">Configuration</a></li>
+          <li class="toctree-l1"><a class="reference internal" href="themes.html">Themes</a></li>
+          <li class="toctree-l1"><a class="reference internal" href="publishing.html">Publishing</a></li>
+          <li class="toctree-l1"><a class="reference internal" href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </div>
+  </nav>
+  <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+    <nav class="wy-nav-top" aria-label="Mobile navigation menu"><i data-toggle="wy-nav-top" class="fa fa-bars"></i><a href="index.html">Quillmark</a></nav>
+    <div class="wy-nav-content">
+      <div class="rst-content">
+        <div role="navigation" aria-label="Page navigation">
+          <ul class="wy-breadcrumbs">
+            <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+            <li class="breadcrumb-item active">Quickstart</li>
+            <li class="wy-breadcrumbs-aside"><a href="_sources/quickstart.rst.txt" rel="nofollow"> View page source</a></li>
+          </ul>
+          <hr/>
+        </div>
+        <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+          <div itemprop="articleBody">
+<section id="quickstart">
+<h1>Quickstart</h1>
+<p>This page walks you through installing Quillmark, converting your first notebook, and publishing the result. It assumes Python 3.10 or newer, and about five minutes of your time.</p>
+<section id="installation">
+<h2>Installation</h2>
+<p>Install the package from PyPI with pip, preferably inside a virtual environment:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span>pip<span class="w"> </span>install<span class="w"> </span>quillmark
+</pre></div>
+</div>
+<p>If you plan to export PDFs, also install the optional extras, which pull in a headless browser. This adds roughly 150&nbsp;MB to the environment, so skip it on small CI runners.</p>
+</section>
+<section id="your-first-conversion">
+<h2>Your first conversion</h2>
+<p>Run <code class="docutils literal notranslate"><span class="pre">quillmark</span> <span class="pre">build</span></code> in a folder that contains one or more notebooks. Quillmark finds every <code class="docutils literal notranslate"><span class="pre">.ipynb</span></code> file, executes it in a fresh kernel, and writes a static site to <code class="docutils literal notranslate"><span class="pre">_site/</span></code>.</p>
+<ul class="simple">
+<li><p>Cells tagged <code class="docutils literal notranslate"><span class="pre">hide</span></code> are executed but not shown.</p></li>
+<li><p>Cells that raise an error stop the build, unless you pass <code class="docutils literal notranslate"><span class="pre">--keep-going</span></code>.</p></li>
+</ul>
+<div class="admonition note"><p class="admonition-title">Note</p><p>Execution results are cached by cell content, so a second build is usually much faster than the first.</p></div>
+</section>
+<section id="publishing">
+<h2>Publishing</h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">_site/</span></code> folder is plain HTML, which means you can host it anywhere. See <a class="reference internal" href="publishing.html"><span class="doc">Publishing</span></a> for step-by-step guides for common hosts, including object storage and static site services.</p>
+</section>
+</section>
+          </div>
+        </div>
+        <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer"><a href="index.html" class="btn btn-neutral float-left" title="Welcome to Quillmark" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a><a href="configuration.html" class="btn btn-neutral float-right" title="Configuration" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a></div><hr/><div role="contentinfo"><p>&#169; Copyright 2026, The Quillmark authors.</p></div>Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.</footer>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>

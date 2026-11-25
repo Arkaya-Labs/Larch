@@ -1,0 +1,7 @@
+{
+  "fake__repo-4": {
+    "model_name_or_path": "hosted_vllm/m5",
+    "instance_id": "fake__repo-4",
+    "model_patch": ""
+  }
+}

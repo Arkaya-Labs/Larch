@@ -1,0 +1,10 @@
+# With a write folder a WriteLocal entry runs inside it, and only there.
+> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.0.0"}}}
+< {"jsonrpc":"2.0","id":1,"result":"*"}
+> {"jsonrpc":"2.0","method":"notifications/initialized"}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"write_note","arguments":{"path":"n.md","text":"hi"}}}
+< {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"wrote 2 bytes"}],"isError":false}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"write_note","arguments":{"path":"../out.md","text":"x"}}}
+< {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"access denied: '../out.md' is outside the allowed folders"}],"isError":true}}
+> {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"write_note","arguments":{"path":"/etc/out.md","text":"x"}}}
+< {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"access denied: '/etc/out.md' is outside the allowed folders"}],"isError":true}}

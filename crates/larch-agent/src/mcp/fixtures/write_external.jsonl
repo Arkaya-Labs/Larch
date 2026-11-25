@@ -1,0 +1,8 @@
+# WriteExternal and Spend entries are refused whatever the arguments; Iris asks its own user for them.
+> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.0.0"}}}
+< {"jsonrpc":"2.0","id":1,"result":"*"}
+> {"jsonrpc":"2.0","method":"notifications/initialized"}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"post_note","arguments":{"text":"x"}}}
+< {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"post_note changes something outside this computer; Iris asks its own user for that, so it is not offered over MCP"}],"isError":true}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"buy","arguments":{}}}
+< {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"buy spends money; Iris asks its own user for that, so it is not offered over MCP"}],"isError":true}}

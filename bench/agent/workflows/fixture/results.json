@@ -1,0 +1,57 @@
+{
+ "notes__search_notes": "n-1 Lantern launch plan\nn-2 Lantern pricing decision\nn-3 Retro: October outage\nn-4 Hiring: GPU engineer loop",
+ "notes__read_note": {
+  "result": "n-1 Lantern launch plan: Lantern 1.0 ships on 2026-12-03. Owner: Priya. Blockers: the Windows installer signing (issue 42) and the pricing page. Pricing (n-2): Free for personal use, Team at $12 per seat per month, decided by Marco on 2026-11-02. Retro (n-3): the October outage lasted 47 minutes; the root cause was an expired TLS certificate on the update server; action: automate renewal (issue 57). Hiring (n-4): the GPU engineer loop has 3 interviews: systems design, CUDA pairing, values.",
+  "rules": [
+   {
+    "arg": "id",
+    "regex": "^n-[1-4]$",
+    "error": "no note {value}; ids run n-1 to n-4"
+   }
+  ]
+ },
+ "notes__create_note": "created note n-5",
+ "calendar__list_events": {
+  "result": "2026-11-20: 09:30 Lantern standup (30 min); 13:00 Pricing review with Marco (1 h); 16:00 Interview: CUDA pairing (1 h). Free after 17:00.",
+  "rules": [
+   {
+    "arg": "day",
+    "regex": "^2026-11-20$",
+    "error": "no events on {value}; the calendar holds 2026-11-20 only"
+   }
+  ]
+ },
+ "calendar__create_event": "event created",
+ "issues__search_issues": "#42 Windows installer signing fails on CI (open, assignee Priya)\n#57 Automate TLS certificate renewal (open, unassigned)\n#61 Pricing page copy (closed)\n#64 Crash on resume after sleep (open, assignee Dev)",
+ "issues__get_issue": {
+  "result": "#42 Windows installer signing fails on CI. State: open. Assignee: Priya. Body: signtool rejects the timestamp server; the certificate expires 2026-11-30. Comments: Dev: the backup timestamp server works locally. #57 Automate TLS certificate renewal. State: open. Unassigned. Body: renew with a cron job and alert 14 days before expiry. #64 Crash on resume after sleep. State: open. Assignee: Dev. Body: the GPU context is lost after the laptop sleeps; repro on the 4060.",
+  "rules": [
+   {
+    "arg": "number",
+    "regex": "^(42|57|61|64)$",
+    "error": "no issue {value}"
+   }
+  ]
+ },
+ "issues__comment_issue": "comment posted",
+ "files__list_files": {
+  "result": "reports/q3-costs.csv\nreports/q3-summary.md\nreports/latency-oct.csv",
+  "rules": [
+   {
+    "arg": "folder",
+    "regex": "^/?reports/?$",
+    "error": "no folder {value}; try reports"
+   }
+  ]
+ },
+ "files__read_file": {
+  "result": "reports/q3-costs.csv: month,gpu_hours,cost_usd\nJul,410,1640\nAug,520,2080\nSep,610,2440\nreports/q3-summary.md: Q3 GPU spend rose each month, 6160 USD in all; September was the highest at 2440 USD. reports/latency-oct.csv: p50_ms,p99_ms\n38,212",
+  "rules": [
+   {
+    "arg": "path",
+    "regex": "^/?reports/(q3-costs\\.csv|q3-summary\\.md|latency-oct\\.csv)$",
+    "error": "no file {value}"
+   }
+  ]
+ }
+}

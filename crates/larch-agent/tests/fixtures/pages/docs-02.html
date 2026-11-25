@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en-US" data-theme="light dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon-48x48.png">
+<link rel="search" type="application/opensearchdescription+xml" href="/opensearch.xml" title="MDN Web Docs">
+<title>Element: requestIdleScroll() method - Web APIs | MDN</title>
+<meta name="description" content="The requestIdleScroll() method of the Element interface schedules a scroll for an idle period.">
+<meta property="og:locale" content="en_US">
+<link rel="alternate" hreflang="fr" href="https://developer.mozilla.org/fr/docs/Web/API/Element/requestIdleScroll">
+<link rel="canonical" href="https://developer.mozilla.org/en-US/docs/Web/API/Element/requestIdleScroll">
+<script>
+  try { document.documentElement.dataset.theme = localStorage.getItem("theme") || "light dark"; } catch (e) {}
+  var placementHtml = '<div class="place"><p>Ad</p></div>';
+</script>
+<style>.baseline-indicator{border:1px solid #ccc}.notecard{border-left:4px solid #1b76c4;padding:.5rem 1rem}</style>
+</head>
+<body>
+<div class="cookie-banner"><p>MDN uses cookies to analyze traffic. <a href="/en-US/privacy">Privacy</a></p><button>Accept</button></div>
+<header class="top-navigation">
+  <a href="/en-US/" class="logo" aria-label="MDN homepage"><svg width="67" height="24"><path d="M0 0h10v10z"/></svg></a>
+  <nav class="main-nav" aria-label="Main menu">
+    <ul class="main-menu">
+      <li><a href="/en-US/docs/Web">References</a></li>
+      <li><a href="/en-US/docs/Learn">Learn</a></li>
+      <li><a href="/en-US/plus">Plus</a></li>
+      <li><a href="/en-US/blog/">Blog</a></li>
+    </ul>
+  </nav>
+  <form class="search-form" role="search"><input type="search" placeholder="Search MDN"></form>
+</header>
+<div class="article-actions-container"><nav class="breadcrumbs-container"><ol><li><a href="/en-US/docs/Web">Web</a></li><li><a href="/en-US/docs/Web/API">Web APIs</a></li><li><a href="/en-US/docs/Web/API/Element">Element</a></li><li><a href="/en-US/docs/Web/API/Element/requestIdleScroll">requestIdleScroll()</a></li></ol></nav></div>
+<div class="main-wrapper">
+<aside class="sidebar">
+  <nav aria-label="Related Topics"><ol>
+    <li><strong>Element</strong></li>
+    <li><a href="/en-US/docs/Web/API/Element/after">after()</a></li>
+    <li><a href="/en-US/docs/Web/API/Element/animate">animate()</a></li>
+    <li><a href="/en-US/docs/Web/API/Element/closest">closest()</a></li>
+    <li><a href="/en-US/docs/Web/API/Element/requestIdleScroll"><em>requestIdleScroll()</em></a></li>
+    <li><a href="/en-US/docs/Web/API/Element/scrollIntoView">scrollIntoView()</a></li>
+  </ol></nav>
+</aside>
+<main id="content" class="main-content">
+<article class="main-page-content" lang="en-US">
+<header><h1>Element: requestIdleScroll() method</h1></header>
+<div class="section-content">
+<p>The <code>requestIdleScroll()</code> method of the <a href="/en-US/docs/Web/API/Element">Element</a> interface schedules a smooth scroll that starts only when the browser has an idle period, so that the scroll does not compete with input handling or layout work.</p>
+<p>It is useful for scrolling a log view or a chat panel after new content arrives, when the exact moment of the scroll does not matter.</p>
+<div class="notecard note"><p><strong>Note:</strong> This page describes a fictional API used as a test fixture, and no browser implements it.</p></div>
+</div>
+<section aria-labelledby="syntax"><h2 id="syntax"><a href="#syntax">Syntax</a></h2>
+<div class="code-example"><pre class="brush: js notranslate"><code>requestIdleScroll()
+requestIdleScroll(options)</code></pre></div></section>
+<section aria-labelledby="parameters"><h3 id="parameters"><a href="#parameters">Parameters</a></h3>
+<dl><dt><code>options</code> <span class="badge inline optional">Optional</span></dt><dd><p>An object with the following properties:</p>
+<dl><dt><code>block</code></dt><dd><p>One of <code>"start"</code>, <code>"center"</code>, or <code>"end"</code>. Defaults to <code>"end"</code>, because most callers want to reveal the newest item.</p></dd>
+<dt><code>timeout</code></dt><dd><p>A number of milliseconds after which the scroll happens even if no idle period has occurred. Defaults to <code>500</code>.</p></dd></dl></dd></dl></section>
+<section aria-labelledby="return_value"><h3 id="return_value"><a href="#return_value">Return value</a></h3><p>A <a href="/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise">Promise</a> that resolves once the scroll has finished, or rejects if the element was removed from the document before the scroll began.</p></section>
+<section aria-labelledby="examples"><h2 id="examples"><a href="#examples">Examples</a></h2>
+<div class="code-example"><pre class="brush: js notranslate"><code>const log = document.querySelector("#log");
+log.append(entry);
+log.lastElementChild.requestIdleScroll({ block: "end", timeout: 250 });</code></pre></div></section>
+<section aria-labelledby="specifications"><h2 id="specifications"><a href="#specifications">Specifications</a></h2><p>This feature is not part of any specification.</p></section>
+</article>
+<aside class="toc"><nav><h2>In this article</h2><ul><li><a href="#syntax">Syntax</a></li><li><a href="#examples">Examples</a></li></ul></nav></aside>
+</main>
+</div>
+<footer id="nav-footer" class="page-footer"><p>Visit Mozilla Corporation&#8217;s not-for-profit parent, the Mozilla Foundation.</p><p>Portions of this content are &copy;1998&ndash;2026 by individual contributors.</p></footer>
+</body>
+</html>

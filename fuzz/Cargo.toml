@@ -1,0 +1,41 @@
+[package]
+license = "Apache-2.0"
+name = "larch-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# seed.rs only: prompts.jsonl lines are JSON strings and need unescaping.
+serde_json = "1"
+larch-model = { path = "../crates/larch-model" }
+larch-records = { path = "../crates/larch-records" }
+
+# Not a member of the root workspace (members = crates/*): cargo-fuzz builds it on nightly.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "gguf"
+path = "fuzz_targets/gguf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tokenizer"
+path = "fuzz_targets/tokenizer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "knob_request"
+path = "fuzz_targets/knob_request.rs"
+test = false
+doc = false
+bench = false

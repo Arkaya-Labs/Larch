@@ -1,0 +1,2 @@
+Vendored verbatim from https://github.com/ml-explore/mlx at fc344c986c4169d99f76b5d95ae6b4a58a359a63 (MIT, LICENSE beside this file).
+Only the headers attn_full_sg.metal and attn_full_nax.metal include; refresh by copying the same paths again.

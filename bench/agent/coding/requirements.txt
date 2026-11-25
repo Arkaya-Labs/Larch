@@ -1,0 +1,5 @@
+# Installed by the README into .venv; litellm is pinned because it builds the requests the server sees
+mini-swe-agent==2.4.6
+swebench==5.0.2
+harbor==0.24.0
+litellm==1.104.0

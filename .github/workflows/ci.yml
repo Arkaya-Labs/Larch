@@ -1,0 +1,80 @@
+name: ci
+
+# Every PR and every push to dev, forks included, on GitHub-hosted runners: no secrets, no GPU, and
+# nothing kept between runs. GPU tests and model parity run by hand before a release (RELEASING.md).
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The CPU backend on Linux, Windows native (the main target) and macOS.
+  check:
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      LARCH_BACKEND: CPU
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      # The crate downloads only; the build itself starts cold.
+      - name: cache the crate downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'apps/desktop/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - run: rustup toolchain install  # the channel in rust-toolchain.toml
+      - name: learning unit tests
+        if: runner.os == 'Linux' && hashFiles('bench/agent/learning/test_*.py') != ''
+        run: python3 -m unittest discover -s bench/agent/learning -p 'test_*.py'
+      - if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked
+      # Their own workspaces, so the root build never reads their locks. Metadata resolves them without
+      # the window-system libraries the crates need.
+      - name: desktop and installer locks resolve
+        if: runner.os == 'Linux'
+        run: |
+          cargo metadata --locked --format-version 1 --manifest-path apps/desktop/Cargo.toml > /dev/null
+          cargo metadata --locked --format-version 1 --manifest-path apps/setup/Cargo.toml > /dev/null
+      # fuzz/ is its own workspace, so the build above never compiles the R9 harness.
+      - name: fuzz harness compiles
+        if: runner.os == 'Linux'
+        run: cargo check --manifest-path fuzz/Cargo.toml --all-targets
+      - name: kernel tests (ctest on the CPU reference)
+        run: |
+          cmake -S kernels -B build/kernels -DLARCH_BACKEND=CPU -DLARCH_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build/kernels --config RelWithDebInfo
+          ctest --test-dir build/kernels -C RelWithDebInfo --output-on-failure --no-tests=error
+      - name: loom (1 writer, 2 readers)
+        if: runner.os == 'Linux'
+        env:
+          RUSTFLAGS: --cfg loom
+          CARGO_TARGET_DIR: target/loom
+        run: cargo test -p larch-records --lib --release
+      - name: records-schema generates
+        if: runner.os == 'Linux'
+        run: |
+          cargo run -p larch-records --features schema --bin records-schema -- "$RUNNER_TEMP/schema.json"
+          python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert "EngineSample" in d["$defs"]' "$RUNNER_TEMP/schema.json"

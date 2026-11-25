@@ -1,0 +1,435 @@
+AQUAWAVE WM-7 FRONT-LOAD WASHER
+OWNER'S MANUAL
+
+Thank you for choosing the AquaWave WM-7. Keep this manual with the washer. Write the model and
+serial number from the label inside the door here, so you have them ready when you call service.
+
+Model: WM-7    Serial number: ____________    Date of purchase: ____________
+
+
+1. SAFETY
+
+- Read all instructions before using the washer.
+- Do not wash items soaked in petrol, solvents or other flammable liquids.
+- Keep children and pets away from the washer while it runs and check the drum before every use.
+- Do not climb or sit on the washer, and do not lean on the open door.
+- Unplug the washer before cleaning it or opening the service panel.
+- Do not install the washer outdoors or where it can freeze.
+- Use only the new hose set supplied; do not reuse old hoses.
+- Plug the washer into a grounded outlet of its own; do not use an extension cord.
+- Do not touch the plug with wet hands.
+- Keep the area under and around the washer free of lint, dust and packaging.
+- Do not open the detergent drawer while the washer is filling.
+- If the power cord is damaged, have it replaced by a qualified service technician.
+
+
+2. INSTALLATION
+
+Unpacking. Remove all packaging, including the foam block under the drum. Keep the transit bolts
+and their plastic spacers in case you move house: the drum must be locked again for transport.
+
+Transit bolts. Remove the four transit bolts on the back panel with the supplied spanner and
+cover the holes with the plastic caps. A washer run with its transit bolts in place is damaged,
+and the warranty does not cover that damage.
+
+Levelling. Place the washer on a firm, flat floor. Turn the four feet until the washer is level
+from side to side and from front to back, then tighten the lock nuts against the cabinet. A
+washer that is not level shakes and makes noise during the spin.
+
+Water supply. Connect the inlet hose to a cold water tap with a 3/4 inch thread. Tighten by hand
+only. The water pressure must be between 0.1 and 1 MPa. Open the tap and check for leaks.
+
+Drain. Hook the drain hose over a standpipe or the edge of a sink, between 60 and 100 cm above
+the floor. Do not push the hose more than 15 cm into the standpipe, and do not seal it: air must
+be able to enter, or the washer siphons.
+
+Electrical. The washer needs a grounded 220 to 240 V outlet with a 10 A fuse. Do not use an
+adapter or a power strip.
+
+First wash. Run the Cotton cycle at 60 °C with half a dose of detergent and no laundry, to
+rinse out any water left from factory testing.
+
+
+3. QUICK START
+
+1. Sort the laundry by colour, fabric and how dirty it is, following the care labels.
+2. Load the drum loosely: you should be able to put your hand in above the laundry.
+3. Add detergent to compartment II and softener to compartment III if you use it.
+4. Turn the dial to a cycle. Change the temperature or spin if you need to.
+5. Press Start/Pause. The door locks and the display shows the time left.
+6. When the display shows End and the door unlocks, take the laundry out promptly.
+
+
+4. LOADING THE WASHER
+
+Empty all pockets. Close zips and hooks, tie strings and belts, and turn jeans and printed items
+inside out. Wash small items such as socks and underwear in a mesh bag. Do not overload the
+drum: clothes need room to move to get clean, and an overloaded drum also spins less. Mix large
+and small items so the drum can balance before the spin. Wash new coloured items separately the
+first few times.
+
+
+5. CARE LABEL SYMBOLS
+
+A tub with a number: the highest water temperature in °C.
+A tub with one line under it: a gentler cycle, such as Synthetics.
+A tub with two lines under it: a very gentle cycle, such as Delicates or Wool.
+A tub with a hand: hand wash, or the Wool cycle at 30 °C.
+A crossed-out tub: do not wash in water.
+A triangle: bleach allowed. A crossed-out triangle: no bleach.
+A square with a circle: tumble drying allowed. Dots show the heat.
+
+
+6. CONTROL PANEL
+
+The cycle dial selects the wash program. The display shows the time left, the temperature, the
+spin speed and any error code. Temp and Spin change the defaults of the selected cycle. Delay
+End sets when the cycle finishes, up to 24 hours ahead. Start/Pause starts the cycle or pauses it
+to add a forgotten item. Holding Temp and Spin together for three seconds turns the child lock
+on or off.
+
+
+7. WASH CYCLES
+
+Cotton
+  Highest temperature 40 °C, spin up to 1,200 rpm, about 2 h 30 min.
+  For everyday cotton, towels and bed linen.
+  Largest load: 8 kg.
+  Tip: Wash towels and bed linen at 60 °C once a month.
+
+Cotton Eco
+  Highest temperature 40 °C, spin up to 1,400 rpm, about 3 h 20 min.
+  For normally soiled cotton, using the least energy.
+  Largest load: 8 kg.
+  Tip: The long time is how it saves energy: the water is heated less and the clothes soak longer.
+
+Synthetics
+  Highest temperature 40 °C, spin up to 1,000 rpm, about 1 h 50 min.
+  For polyester, nylon and mixed fibres.
+  Largest load: 4 kg.
+  Tip: Turn printed shirts inside out.
+
+Mixed Load
+  Highest temperature 30 °C, spin up to 1,000 rpm, about 1 h 20 min.
+  For cotton and synthetics washed together.
+  Largest load: 4 kg.
+  Tip: Separate new dark items for their first few washes.
+
+Delicates
+  Highest temperature 30 °C, spin up to 600 rpm, about 50 min.
+  For lace, viscose and fine fabrics.
+  Largest load: 2 kg.
+  Tip: Use a mesh bag for underwear and anything with hooks.
+
+Wool
+  Highest temperature 30 °C, spin up to 800 rpm, about 45 min.
+  For machine-washable wool and cashmere.
+  Largest load: 2 kg.
+  Tip: Use wool detergent and dry the items flat.
+
+Quick 15
+  Highest temperature 20 °C, spin up to 800 rpm, about 15 min.
+  For small, lightly soiled loads up to 2 kg.
+  Largest load: 2 kg.
+  Tip: Use a third of the usual detergent dose.
+
+Sportswear
+  Highest temperature 30 °C, spin up to 800 rpm, about 1 h 10 min.
+  For technical fabrics and gym clothes.
+  Largest load: 3 kg.
+  Tip: Do not use fabric softener; it blocks breathable fabrics.
+
+Bedding
+  Highest temperature 40 °C, spin up to 800 rpm, about 1 h 40 min.
+  For duvets and pillows that fit the drum.
+  Largest load: one duvet.
+  Tip: Check the care label; feather duvets may need a professional clean.
+
+Baby Care
+  Highest temperature 60 °C, spin up to 1,200 rpm, about 2 h 45 min.
+  For baby clothes, with an extra rinse.
+  Largest load: 4 kg.
+  Tip: Use a detergent for sensitive skin.
+
+Rinse and Spin
+  Highest temperature cold, spin up to 1,200 rpm, about 20 min.
+  For rinsing a load again.
+  Largest load: 8 kg.
+  Tip: Useful after hand washing, or to add softener.
+
+Drum Clean
+  Highest temperature 90 °C, spin up to 400 rpm, about 1 h 30 min.
+  For cleaning the empty drum.
+  Largest load: empty.
+  Tip: Leave the door open afterwards so the drum dries.
+
+
+8. OPTIONS
+
+Prewash adds a short wash before the main wash, for heavily soiled loads; put detergent in
+compartment I.
+Extra Rinse adds one rinse, for sensitive skin or soft water.
+Easy Iron reduces the spin and adds a slow tumble at the end to reduce creases.
+Steam adds a burst of steam before the final spin, on Cotton, Synthetics and Baby Care only.
+Delay End finishes the cycle at the time you choose.
+Spin Off leaves the water out of the last spin, for items that must not be spun.
+
+
+9. DETERGENT AND SOFTENER
+
+Use only low-foam detergent marked for front-load machines. Compartment I is for prewash
+detergent, compartment II for main wash detergent and compartment III for fabric softener. Do
+not fill past the MAX line. Liquid detergent goes in compartment II with the liquid insert in
+place. For small loads and soft water use half the dose printed on the detergent pack.
+
+
+10. ERROR CODES
+
+E01: The door lock did not respond. Close the door firmly and restart the cycle.
+E02: The water inlet valve did not respond. Turn the tap fully on and check that the inlet hose is not kinked.
+E03: The heater did not respond. Restart the cycle; if the code returns, call service.
+E04: The temperature sensor did not respond. Restart the cycle; if the code returns, call service.
+E05: The motor did not respond. Reduce the load and restart; if the code returns, call service.
+E06: The pressure sensor did not respond. Unplug the washer for one minute and restart.
+E07: The detergent pump did not respond. Check the detergent drawer is closed and restart.
+E08: The control board did not respond. Unplug the washer for five minutes and restart.
+E09: The drum speed sensor did not respond. Check the transit bolts are removed and the load is balanced.
+E10: The door switch did not respond. Close the door firmly; if the code returns, call service.
+E11: The door lock reported an open circuit. Close the door firmly and restart the cycle.
+E12: The water inlet valve reported an open circuit. Turn the tap fully on and check that the inlet hose is not kinked.
+E13: The heater reported an open circuit. Restart the cycle; if the code returns, call service.
+E14: The temperature sensor reported an open circuit. Restart the cycle; if the code returns, call service.
+E15: The motor reported an open circuit. Reduce the load and restart; if the code returns, call service.
+E16: The pressure sensor reported an open circuit. Unplug the washer for one minute and restart.
+E17: The detergent pump reported an open circuit. Check the detergent drawer is closed and restart.
+E18: The control board reported an open circuit. Unplug the washer for five minutes and restart.
+E19: The drum speed sensor reported an open circuit. Check the transit bolts are removed and the load is balanced.
+E20: The door switch reported an open circuit. Close the door firmly; if the code returns, call service.
+E21: The drum did not drain within 10 minutes. Check the drain hose for kinks and clean the drain pump filter.
+E22: The water inlet valve reported a short circuit. Turn the tap fully on and check that the inlet hose is not kinked.
+E23: The heater reported a short circuit. Restart the cycle; if the code returns, call service.
+E24: The temperature sensor reported a short circuit. Restart the cycle; if the code returns, call service.
+E25: The motor reported a short circuit. Reduce the load and restart; if the code returns, call service.
+E26: The pressure sensor reported a short circuit. Unplug the washer for one minute and restart.
+E27: The detergent pump reported a short circuit. Check the detergent drawer is closed and restart.
+E28: The control board reported a short circuit. Unplug the washer for five minutes and restart.
+E29: The drum speed sensor reported a short circuit. Check the transit bolts are removed and the load is balanced.
+E30: The door switch reported a short circuit. Close the door firmly; if the code returns, call service.
+E31: The door lock timed out. Close the door firmly and restart the cycle.
+E32: The water inlet valve timed out. Turn the tap fully on and check that the inlet hose is not kinked.
+E33: The heater timed out. Restart the cycle; if the code returns, call service.
+E34: The temperature sensor timed out. Restart the cycle; if the code returns, call service.
+E35: The motor timed out. Reduce the load and restart; if the code returns, call service.
+E36: The pressure sensor timed out. Unplug the washer for one minute and restart.
+E37: The detergent pump timed out. Check the detergent drawer is closed and restart.
+E38: The control board timed out. Unplug the washer for five minutes and restart.
+E39: The drum speed sensor timed out. Check the transit bolts are removed and the load is balanced.
+E40: The door switch timed out. Close the door firmly; if the code returns, call service.
+
+If a code is not in this list, or a code returns after you followed the steps, unplug the washer
+and call AquaWave service.
+
+
+11. CLEANING AND MAINTENANCE
+
+Drain pump filter. Clean the drain pump filter every three months. Open the small panel at the
+bottom right of the front, put a shallow tray and a towel underneath, pull out the emergency
+drain hose and let the water run out. Then turn the filter cap anticlockwise, remove lint, coins
+and hair clips, rinse it and screw it back firmly.
+
+Drum. Run the Drum Clean cycle once a month with the drum empty, or with a washing machine
+cleaner.
+
+Door seal. Wipe the door seal and the glass after each wash and leave the door open so the drum
+can dry.
+
+Detergent drawer. Pull the drawer out, press the release tab and rinse it under warm water once
+a month.
+
+Inlet filters. Once a year, turn off the tap, unscrew the inlet hose and clean the small mesh
+filter with a soft brush.
+
+
+12. TROUBLESHOOTING
+
+Problem: The washer does not start.
+What to do: Check that the plug is in, the door is closed and the child lock is off. Press Start/Pause and hold it for one second.
+
+Problem: The washer does not fill.
+What to do: Open the tap fully. Clean the small filters at the inlet end of the hose. Make sure the hose is not kinked or frozen.
+
+Problem: Water stays in the drum.
+What to do: The drain hose may be kinked or set too high. Look up any code on the display in the error code list.
+
+Problem: The washer shakes or walks.
+What to do: Make sure the four feet touch the floor and the lock nuts are tight. Remove all transit bolts. Wash small loads with a few larger items.
+
+Problem: Clothes are still very wet.
+What to do: The load may be unbalanced, so the washer reduced the spin. Add or remove items and run Rinse and Spin.
+
+Problem: There is too much foam.
+What to do: Use less detergent, and only detergent marked for front-load machines. Soft water needs less detergent.
+
+Problem: The door will not open.
+What to do: The door stays locked while there is water in the drum or the drum is hot. Wait two minutes after the cycle ends.
+
+Problem: There is a smell from the drum.
+What to do: Run the Drum Clean cycle, wipe the door seal and leave the door and the detergent drawer open between washes.
+
+Problem: Detergent stays in the drawer.
+What to do: Clean the drawer and its siphon cap. Check the water pressure and that the tap is fully open.
+
+Problem: The cycle takes longer than shown.
+What to do: The washer adds time for unbalanced loads, cold inlet water or extra foam. This is normal.
+
+Problem: Water leaks under the washer.
+What to do: Check that the hoses are tight at both ends and the drain pump filter cap is closed. Call service if the leak continues.
+
+Problem: The display shows a flashing key.
+What to do: The child lock is on. Hold Temp and Spin together for three seconds to turn it off.
+
+Problem: Clothes come out creased.
+What to do: Use a lower spin speed, a smaller load or the Easy Iron option.
+
+Problem: The washer makes a rattling noise.
+What to do: Coins or hair clips may be in the drum or the drain pump filter. Empty the pockets before washing.
+
+Problem: The display is blank.
+What to do: Check the fuse and the outlet with another appliance. The display turns off after 10 minutes without use; turn the dial to wake it.
+
+Problem: The washer stops during the cycle.
+What to do: Start/Pause may have been pressed, or the door was opened with Delay End running. Press Start/Pause to continue.
+
+Problem: Grey marks appear on clothes.
+What to do: Too little detergent, or fabric softener poured straight onto the clothes. Run Drum Clean and use the right dose.
+
+Problem: The washer beeps at the end.
+What to do: This is the end signal. Hold Spin for three seconds to turn the sound off or on.
+
+Problem: Steam does not appear.
+What to do: Steam is only on Cotton, Synthetics and Baby Care, and not with loads over 4 kg.
+
+Problem: Water drips from the detergent drawer.
+What to do: Too much detergent or a blocked siphon cap. Clean the drawer and use less detergent.
+
+
+13. STAIN GUIDE
+
+Treat stains before they dry, and always test a stain remover on a hidden seam first.
+
+Coffee and tea: rinse in cold water at once, then wash at the highest temperature the label allows.
+Red wine: blot, cover with salt or rinse with cold water, then pre-treat with stain remover.
+Grass: rub in liquid detergent and leave for 15 minutes before washing.
+Blood: rinse in cold water only; hot water sets the stain.
+Grease and oil: dab with washing-up liquid, leave for 10 minutes, wash at 40 °C or more.
+Ink: dab with rubbing alcohol on a cloth from the outside in, then wash.
+Chocolate: scrape off what you can, rinse from the back with cold water, then pre-treat.
+Make-up: rub in liquid detergent, then wash; for waterproof make-up use a little oil first.
+Mud: let it dry, brush it off, then wash as usual.
+Sweat marks: soak in warm water with a spoon of baking soda for an hour, then wash.
+Tomato sauce: rinse from the back with cold water, pre-treat, and dry in sunlight.
+Candle wax: freeze the item, chip off the wax, then iron between paper towels.
+
+
+14. QUESTIONS AND ANSWERS
+
+Q: Can I add laundry after the cycle starts?
+A: Yes, during the first 10 minutes. Press Start/Pause, wait until the door unlocks, add the item and press Start/Pause again.
+
+Q: Why is there water in the drum when it is new?
+A: Every washer is tested at the factory, and a little water stays behind. It is clean and harmless.
+
+Q: Can I use washing pods?
+A: Yes. Put the pod at the back of the empty drum, before the laundry, never in the detergent drawer.
+
+Q: How do I wash trainers?
+A: Remove the laces and insoles, put the trainers in a pillowcase with two towels, and use the Sportswear cycle at 30 °C with a low spin.
+
+Q: Can I wash a rug or a bath mat?
+A: Only if it has no rubber backing and fits the drum loosely. Use the Bedding cycle.
+
+Q: Why does the time on the display jump?
+A: The washer adjusts the time after it weighs the load and again after it checks the balance before the spin.
+
+Q: Is it safe to use the washer at night?
+A: Yes, but use Delay End so the spin does not run while you sleep, and make sure the tap and the hoses are in good order.
+
+Q: How long does the washer last?
+A: With the maintenance in section 11, about 10 to 12 years of household use.
+
+Q: Can I wash a down jacket?
+A: Yes, on Wool or Delicates with down detergent and a low spin. Dry it with two clean tennis balls in a tumble dryer so the down does not clump.
+
+Q: What does the drum light do?
+A: It turns on for two minutes when you open the door, so you can check for forgotten socks.
+
+Q: Can I turn off the end signal for good?
+A: Yes: hold Spin for three seconds when the washer is on. The setting stays until you change it again.
+
+Q: Does the washer need hot water?
+A: No. It heats its own water and must be connected to the cold supply only.
+
+Q: How much water does a cycle use?
+A: Between 40 and 60 litres for a full Cotton load, less for smaller loads and the short cycles.
+
+Q: Why does the washer pause before the spin?
+A: It turns the drum slowly to spread the laundry evenly. With a single heavy item it may try several times and then spin more slowly.
+
+
+15. SAVING ENERGY AND WATER
+
+Wash full loads where you can: the washer weighs the load and uses less water for small loads,
+but two half loads still use more than one full load. Most everyday laundry comes clean at 30 or
+40 °C. Cotton Eco uses the least energy for cotton, although it takes the longest. Use Delay End
+to run the washer when your electricity is cheaper. A high spin speed saves energy if you use a
+tumble dryer afterwards.
+
+
+16. MOVING THE WASHER
+
+Unplug the washer, turn off the tap and drain the washer through the drain pump filter. Fit the
+four transit bolts and their spacers again before moving it. Move it upright, and do not lift it
+by the door or the detergent drawer.
+
+
+17. ACCESSORIES AND SPARE PARTS
+
+Genuine AquaWave parts are sold by AquaWave service and approved dealers: inlet and drain hose
+sets, the drain pump filter cap, the detergent drawer and its liquid insert, door seals, the
+stacking kit for a matching dryer, and the anti-vibration pads. Use only genuine parts: other
+hoses may not hold the water pressure, and other seals may leak. Washing machine cleaner,
+descaler and mesh laundry bags are sold in packs of three.
+
+
+18. SERVICE
+
+Before you call, look up any code in section 10 and try the steps in section 12. When you call,
+have the model and serial number ready from the label inside the door, and the date of purchase.
+Service visits are booked on weekdays between 8:00 and 18:00. A visit inside the warranty is
+free for faults the warranty covers; outside the warranty, a fixed call-out fee applies, plus
+parts. Spare parts stay available for at least ten years after the last washer of this model is
+made.
+
+
+19. DISPOSAL
+
+Do not put an old washer in household waste. Take it to a recycling centre or ask the shop that
+delivers the new one to take it back. Cut the power cord off and remove the door lock, so that
+children cannot shut themselves inside.
+
+
+20. SPECIFICATIONS
+
+Capacity 8 kg. Size 60 x 60 x 85 cm. Weight 68 kg. Highest spin 1,400 rpm. Power 2,100 W.
+Water pressure 0.1 to 1 MPa. Energy class A. Noise 74 dB while spinning.
+
+
+21. WARRANTY
+
+The washer is covered for two years on parts and one year on labour from the date of purchase.
+Keep the receipt. The warranty does not cover damage from transport with the transit bolts out,
+from installation that does not follow this manual, or from use other than household laundry.
+To make a claim, call AquaWave service with the model, the serial number and the date of
+purchase. Repairs under the warranty are carried out at your home by an AquaWave technician;
+parts that are replaced become the property of AquaWave. A repair does not extend the warranty
+period. Your legal rights as a consumer are not affected by this warranty.

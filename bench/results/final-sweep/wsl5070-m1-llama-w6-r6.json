@@ -1,0 +1,80 @@
+{
+ "schema": "larch-bench/1",
+ "engine": "llama.cpp",
+ "driver": "llama-serve-bench",
+ "mode": "fixed",
+ "llama_cpp": {
+  "tag": "b11458",
+  "commit": "c479922ac"
+ },
+ "build": "d151f1ff29a7b1fcdbd7919e5056316f3fb9e89e83898c6efd3d4b95799027d3",
+ "system_info": "CUDA : ARCHS = 1200 | USE_GRAPHS = 1 | FA_QUANTS = q4_0-q4_0,q8_0-q8_0,f16-f16,bf16-bf16 | BLACKWELL_NATIVE_FP4 = 1 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX_VNNI = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | ",
+ "machine": "wsl5070",
+ "started_at": "2026-10-17T08:00:14Z",
+ "model": "m1.gguf",
+ "date_string": "26 Jul 2024",
+ "params": {
+  "n_ctx": 16384,
+  "n_ctx_seq": 1024,
+  "n_seq_max": 16,
+  "n_batch": 2048,
+  "n_ubatch": 1024,
+  "n_gpu_layers": 99,
+  "flash_attn": "enabled",
+  "type_k": "f16",
+  "type_v": "f16",
+  "n_threads": 4,
+  "n_threads_batch": 4,
+  "kv_unified": false
+ },
+ "fixed": [
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 1,
+   "n_kv": 640,
+   "t_pp": 0.089776835,
+   "speed_pp": 5703.03018590486,
+   "t_tg": 0.958018089,
+   "speed_tg": 133.60916820851386,
+   "t": 1.047794924,
+   "speed": 610.8065474842862
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 4,
+   "n_kv": 2560,
+   "t_pp": 0.28620786800000003,
+   "speed_pp": 7155.63836281398,
+   "t_tg": 1.114567923,
+   "speed_tg": 459.37083728543655,
+   "t": 1.400775791,
+   "speed": 1827.5587117139148
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 8,
+   "n_kv": 5120,
+   "t_pp": 0.576877143,
+   "speed_pp": 7100.298650591534,
+   "t_tg": 1.3186148809999998,
+   "speed_tg": 776.5724585357536,
+   "t": 1.895492024,
+   "speed": 2701.145631409948
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 16,
+   "n_kv": 10240,
+   "t_pp": 1.1454210089999999,
+   "speed_pp": 7151.955425675277,
+   "t_tg": 1.5620376969999998,
+   "speed_tg": 1311.1079226406148,
+   "t": 2.7074587059999997,
+   "speed": 3782.1444801012603
+  }
+ ]
+}

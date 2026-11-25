@@ -1,0 +1,177 @@
+[
+  {
+    "id": "m01",
+    "question": "What is my new address?",
+    "file": "facts/my-new-address-from-8-june.md",
+    "line": 7,
+    "value": "41 Alder Street",
+    "range": null
+  },
+  {
+    "id": "m02",
+    "question": "Which company is the van booked with?",
+    "file": "daily/2024-05-28.md",
+    "line": 1,
+    "value": "Rapid Removals",
+    "range": null
+  },
+  {
+    "id": "m03",
+    "question": "Who is my dentist?",
+    "file": "facts/the-dentist-is-dr-okafor-at.md",
+    "line": 7,
+    "value": "Okafor",
+    "range": null
+  },
+  {
+    "id": "m04",
+    "question": "When is the dentist appointment?",
+    "file": "daily/2024-06-04.md",
+    "line": 1,
+    "value": "18 June",
+    "range": null
+  },
+  {
+    "id": "m05",
+    "question": "How much is the rent?",
+    "file": "facts/the-rent-is-1-850-usd.md",
+    "line": 7,
+    "value": "850",
+    "range": null
+  },
+  {
+    "id": "m06",
+    "question": "What deposit did I pay on the lease?",
+    "file": "daily/2024-06-11.md",
+    "line": 1,
+    "value": "900",
+    "range": null
+  },
+  {
+    "id": "m07",
+    "question": "What is the plumber's phone number?",
+    "file": "facts/the-plumber-is-tomasz-nowak-phone.md",
+    "line": 7,
+    "value": "07700 900417",
+    "range": null
+  },
+  {
+    "id": "m08",
+    "question": "How much was the boiler quote in June?",
+    "file": "daily/2024-06-18.md",
+    "line": 1,
+    "value": "640",
+    "range": {
+      "from": "2024-06-01",
+      "to": "2024-06-30"
+    }
+  },
+  {
+    "id": "m09",
+    "question": "When does my car insurance renew?",
+    "file": "facts/my-car-insurance-renews-on-27.md",
+    "line": 7,
+    "value": "27 June",
+    "range": null
+  },
+  {
+    "id": "m10",
+    "question": "When does my flight to Porto leave?",
+    "file": "daily/2024-07-02.md",
+    "line": 1,
+    "value": "09:40",
+    "range": null
+  },
+  {
+    "id": "m11",
+    "question": "Am I allergic to anything?",
+    "file": "facts/i-am-vegetarian-and-allergic-to.md",
+    "line": 7,
+    "value": "peanut",
+    "range": null
+  },
+  {
+    "id": "m12",
+    "question": "Where does my sister Ines live?",
+    "file": "facts/my-sister-ines-lives-at-4.md",
+    "line": 7,
+    "value": "Rua das Flores",
+    "range": null
+  },
+  {
+    "id": "m13",
+    "question": "Where is the gym timetable?",
+    "file": "facts/the-gym-timetable-is-in-health.md",
+    "line": 7,
+    "value": "gym-times",
+    "range": null
+  },
+  {
+    "id": "m14",
+    "question": "Who is the teacher at parents evening?",
+    "file": "daily/2024-07-15.md",
+    "line": 1,
+    "value": "Adeyemi",
+    "range": null
+  },
+  {
+    "id": "m15",
+    "question": "What was on the Porto packing list last week?",
+    "file": "daily/2024-07-20.md",
+    "line": 1,
+    "value": "raincoat",
+    "range": {
+      "from": "2024-07-19",
+      "to": "2024-07-26"
+    }
+  },
+  {
+    "id": "m16",
+    "question": "Where is the dinner with Ines?",
+    "file": "daily/2024-07-20.md",
+    "line": 2,
+    "value": "Cantina 32",
+    "range": null
+  },
+  {
+    "id": "m17",
+    "question": "What did I book for the car this week?",
+    "file": "daily/2024-07-25.md",
+    "line": 1,
+    "value": "Leith Motors",
+    "range": {
+      "from": "2024-07-22",
+      "to": "2024-07-26"
+    }
+  },
+  {
+    "id": "m18",
+    "question": "What did Tomasz say about the boiler in July?",
+    "file": "daily/2024-07-09.md",
+    "line": 1,
+    "value": "180",
+    "range": {
+      "from": "2024-07-01",
+      "to": "2024-07-31"
+    }
+  },
+  {
+    "id": "m19",
+    "question": "Which car insurance did I choose in June?",
+    "file": "daily/2024-06-27.md",
+    "line": 1,
+    "value": "Harbour Mutual",
+    "range": {
+      "from": "2024-06-01",
+      "to": "2024-06-30"
+    }
+  },
+  {
+    "id": "m20",
+    "question": "What is the name of the dental practice?",
+    "file": "facts/the-dentist-is-dr-okafor-at.md",
+    "line": 7,
+    "value": "Leith Walk",
+    "range": null
+  }
+]

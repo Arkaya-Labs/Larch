@@ -1,0 +1,47 @@
+name: Bug report
+description: Something doesn't work as the docs say it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [Troubleshooting](https://github.com/Arkaya-Labs/Larch/blob/main/docs/troubleshooting.md) first.
+        Remove anything private from logs and transcripts before you paste them.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The exact command or the steps in the app, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Larch version
+      description: Output of `larch --version`, or Settings > About in the app.
+    validations:
+      required: true
+  - type: textarea
+    id: info
+    attributes:
+      label: larch info --json
+      render: json
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: OS, GPU and driver
+      placeholder: Windows 11, RTX 4060 Laptop, driver 617.14
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model file
+      description: The GGUF file name, or its alias from docs/models.md.
+  - type: textarea
+    id: log
+    attributes:
+      label: Error or log
+      render: text

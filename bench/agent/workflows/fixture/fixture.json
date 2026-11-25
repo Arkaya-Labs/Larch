@@ -1,0 +1,242 @@
+{
+ "servers": [
+  {
+   "id": "notes",
+   "tools": [
+    {
+     "name": "search_notes",
+     "agent_name": "notes__search_notes",
+     "description": "Search the team's notes by words; returns matching note ids and titles.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "query": {
+        "type": "string",
+        "description": "words to look for"
+       }
+      },
+      "required": [
+       "query"
+      ]
+     },
+     "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+     }
+    },
+    {
+     "name": "read_note",
+     "agent_name": "notes__read_note",
+     "description": "Read one note by its id.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "string",
+        "description": "the note id, like n-3"
+       }
+      },
+      "required": [
+       "id"
+      ]
+     },
+     "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+     }
+    },
+    {
+     "name": "create_note",
+     "agent_name": "notes__create_note",
+     "description": "Create a note with a title and body.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "title": {
+        "type": "string",
+        "description": "the title"
+       },
+       "body": {
+        "type": "string",
+        "description": "the text"
+       }
+      },
+      "required": [
+       "title",
+       "body"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "calendar",
+   "tools": [
+    {
+     "name": "list_events",
+     "agent_name": "calendar__list_events",
+     "description": "List the events on one day (YYYY-MM-DD).",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "day": {
+        "type": "string",
+        "description": "the day, YYYY-MM-DD"
+       }
+      },
+      "required": [
+       "day"
+      ]
+     },
+     "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+     }
+    },
+    {
+     "name": "create_event",
+     "agent_name": "calendar__create_event",
+     "description": "Add an event to the calendar.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "title": {
+        "type": "string",
+        "description": "what"
+       },
+       "day": {
+        "type": "string",
+        "description": "YYYY-MM-DD"
+       },
+       "time": {
+        "type": "string",
+        "description": "HH:MM, 24-hour"
+       }
+      },
+      "required": [
+       "title",
+       "day",
+       "time"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "issues",
+   "tools": [
+    {
+     "name": "search_issues",
+     "agent_name": "issues__search_issues",
+     "description": "Search the tracker's issues by words; returns numbers, titles and states.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "query": {
+        "type": "string",
+        "description": "words to look for"
+       }
+      },
+      "required": [
+       "query"
+      ]
+     },
+     "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+     }
+    },
+    {
+     "name": "get_issue",
+     "agent_name": "issues__get_issue",
+     "description": "Read one issue by number: its body, state, assignee and comments.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "number": {
+        "type": "integer",
+        "description": "the issue number"
+       }
+      },
+      "required": [
+       "number"
+      ]
+     },
+     "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+     }
+    },
+    {
+     "name": "comment_issue",
+     "agent_name": "issues__comment_issue",
+     "description": "Post a comment on an issue.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "number": {
+        "type": "integer",
+        "description": "the issue number"
+       },
+       "body": {
+        "type": "string",
+        "description": "the comment"
+       }
+      },
+      "required": [
+       "number",
+       "body"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "files",
+   "tools": [
+    {
+     "name": "list_files",
+     "agent_name": "files__list_files",
+     "description": "List the files in a shared folder.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "folder": {
+        "type": "string",
+        "description": "the folder, like reports"
+       }
+      },
+      "required": [
+       "folder"
+      ]
+     },
+     "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+     }
+    },
+    {
+     "name": "read_file",
+     "agent_name": "files__read_file",
+     "description": "Read one shared file by its path.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string",
+        "description": "the path, like reports/q3-costs.csv"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     },
+     "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+     }
+    }
+   ]
+  }
+ ]
+}

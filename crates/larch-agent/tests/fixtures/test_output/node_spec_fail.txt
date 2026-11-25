@@ -1,0 +1,94 @@
+✔ adds (2.723ms)
+✖ subtracts (2.5999ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  2 !== 1
+  
+      at TestContext.<anonymous> (C:\proj\math.test.js:5:32)
+      at Test.runInAsyncScope (node:async_hooks:206:9)
+      at Test.run (node:internal/test_runner/test:764:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:492:18)
+      at Test.postRun (node:internal/test_runner/test:860:19)
+      at Test.run (node:internal/test_runner/test:806:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:492:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual'
+  }
+
+▶ group
+  ✔ inner passes (0.373ms)
+  ✖ inner fails (14.1989ms)
+    AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+    
+      assert.ok(false)
+    
+        at TestContext.<anonymous> (C:\proj\math.test.js:8:44)
+        at Test.runInAsyncScope (node:async_hooks:206:9)
+        at Test.run (node:internal/test_runner/test:764:25)
+        at Test.start (node:internal/test_runner/test:668:17)
+        at TestContext.test (node:internal/test_runner/test:262:20)
+        at TestContext.<anonymous> (C:\proj\math.test.js:8:11)
+        at async Test.run (node:internal/test_runner/test:765:9)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:492:7) {
+      generatedMessage: true,
+      code: 'ERR_ASSERTION',
+      actual: false,
+      expected: true,
+      operator: '=='
+    }
+
+▶ group (15.4979ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 2
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 171.5463
+
+✖ failing tests:
+
+test at math.test.js:5:1
+✖ subtracts (2.5999ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  2 !== 1
+  
+      at TestContext.<anonymous> (C:\proj\math.test.js:5:32)
+      at Test.runInAsyncScope (node:async_hooks:206:9)
+      at Test.run (node:internal/test_runner/test:764:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:492:18)
+      at Test.postRun (node:internal/test_runner/test:860:19)
+      at Test.run (node:internal/test_runner/test:806:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:492:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual'
+  }
+
+test at math.test.js:8:11
+✖ inner fails (14.1989ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(false)
+  
+      at TestContext.<anonymous> (C:\proj\math.test.js:8:44)
+      at Test.runInAsyncScope (node:async_hooks:206:9)
+      at Test.run (node:internal/test_runner/test:764:25)
+      at Test.start (node:internal/test_runner/test:668:17)
+      at TestContext.test (node:internal/test_runner/test:262:20)
+      at TestContext.<anonymous> (C:\proj\math.test.js:8:11)
+      at async Test.run (node:internal/test_runner/test:765:9)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:492:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }

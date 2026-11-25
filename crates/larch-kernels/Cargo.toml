@@ -1,0 +1,23 @@
+[package]
+license.workspace = true
+name = "larch-kernels"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# fault_device_lost in a release build (attended recovery runs, 9.11); debug builds have it anyway.
+fault-inject = []
+
+[dependencies]
+bytemuck = "1.25"
+larch-sys = { path = "../larch-sys" }
+
+# mmap for Buffer::wrap_host (Metal's zero-copy weights). The libc package is already in Cargo.lock;
+# this adds one edge to larch-kernels' entry there, left to the lockfile consolidation.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.190"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

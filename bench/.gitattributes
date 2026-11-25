@@ -1,0 +1,2 @@
+# Workload and manifest hashes are over these bytes: LF on every checkout, Windows included.
+* text eol=lf

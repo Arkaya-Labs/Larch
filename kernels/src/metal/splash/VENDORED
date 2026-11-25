@@ -1,0 +1,16 @@
+Derived from https://github.com/incoai/splash at d8af1054aab0f97de21d043e01aa98af3754f10e (Apache-2.0, LICENSE beside
+this file), not copied verbatim: ../staged.metal takes the staged decode tile's loop shape from
+runtime/metal/kernels/common/gguf_staged_tile.h (f16 stage, next step's weights loaded during the matmul, double
+buffer, golden-ratio spread start), runtime/metal/kernels/shared/gguf_linear.metal (decode tile, per-part f32 sums)
+and runtime/metal/kernels/common/split_reduce.h (the last part to arrive adds the parts in part order).
+Changed: GGUF blocks read in place with larch's deq_<fmt> arithmetic instead of repacked planes, f16 activations
+instead of bf16, a K split fixed by the tensor shape and core count, one-simdgroup threadgroups, steps of 32, 64 or
+128 inputs within 128-input units, 8, 16 and 32-row tiles, and no other formats, epilogues or fused projections.
+crates/larch-model/src/dflash.rs (DFlash2) ports the draft's math, not its code, from runtime/model/DFlashDraft.cpp
+and DraftCheckpoint.cpp (layer order, tensor names), runtime/metal/kernels/decode/draft.metal (draft_conv's two
+stages, the block rows seeing each other over a 2048-token window) and runtime/metal/kernels/decode/sampling.metal
+(draft_select_edges, draft_select_dflash: top-16 candidates, low-rank edge from the previous guess, greedy walk);
+crates/larch-model/tests/dflash/gen.py writes the same math out as its NumPy reference and
+scripts/dflash_convert.py reads the checkpoint by those names. Changed: larch's ops and f16 activations instead of
+bf16 kernels, the selector on the host, Q8_0 weights instead of af4g64 planes, no verify budget or
+sampled proposals.

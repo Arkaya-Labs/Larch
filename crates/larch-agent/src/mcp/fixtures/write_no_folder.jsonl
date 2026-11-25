@@ -1,0 +1,6 @@
+# Without a write folder a WriteLocal entry is refused and never runs.
+> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.0.0"}}}
+< {"jsonrpc":"2.0","id":1,"result":"*"}
+> {"jsonrpc":"2.0","method":"notifications/initialized"}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"write_note","arguments":{"path":"n.md","text":"hi"}}}
+< {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"write_note changes files, and Iris was started without a write folder"}],"isError":true}}

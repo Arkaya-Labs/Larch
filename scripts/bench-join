@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Joins the `larch bench --slice K/N` parts of one row into the whole row. Python 3.11+, stdlib only.
+
+    python3 scripts/bench-join <out.json> <part>...
+
+A run longer than one bounded GPU hold runs in contiguous slices of the workload file, each its own hold. The joined
+result is the row as one run would have written it: every request, the summary recomputed by bench.rs's own rules,
+and wall time the sum of the parts' (so the gaps between holds never count). Refuses parts that are not one row's
+N slices, each once, covering the workload without a gap.
+"""
+
+import functools
+import json
+import math
+import operator
+import pathlib
+import sys
+
+# What every part must share: the same row of the same build (the binary's sha256, llama.cpp's for a driver) on the
+# same machine and device.
+SAME = ("schema", "engine", "driver", "build", "llama_cpp", "system_info", "mode", "model", "machine", "concurrency",
+        "replay", "cache_prompt", "cancel_rate", "params", "date_string")
+
+
+def die(msg):
+    sys.exit(f"bench-join: {msg}")
+
+
+def startup(p):
+    """A part's startup settings in force: the last --set of each knob (the engine applies them in order), in a
+    canonical order, so the same configuration given in another order is the same."""
+    last = {json.dumps(k.get("knob")): json.dumps(k.get("value")) for k in p.get("knob_timeline") or [] if k.get("at_s") is None}
+    return sorted(last.items())
+
+
+def stats(v):
+    """p50, p99, mean and max as bench.rs's stats(): nearest-rank percentiles, the mean summed left to right (Python
+    3.12+ sum() is compensated, Rust's is not)."""
+    if not v:
+        return None
+    v, n = sorted(v), len(v)
+    pct = lambda q: v[min(max(math.ceil(q * n), 1), n) - 1]  # noqa: E731
+    return {"p50": pct(0.50), "p99": pct(0.99), "mean": functools.reduce(operator.add, v) / n, "max": v[-1]}
+
+
+def summary(reqs, parts):
+    """bench.rs's summary() over the joined requests, with the parts' summed wall time. Failures and cancellations are
+    the parts' own counts: a request record has no cancel flag, so only its run can tell a cancellation from an error."""
+    ok = [r for r in reqs if r["error"] is None]
+    wall_s = sum(p["summary"]["wall_s"] for p in parts)
+    prompt, gen = sum(r["prompt_tokens"] for r in ok), sum(r["gen_tokens"] for r in ok)
+    # Unknown for the run when unknown for any of its requests.
+    cached = None if any(r["cached_tokens"] is None for r in ok) else sum(r["cached_tokens"] for r in ok)
+    s = {"requests": len(reqs), "failures": sum(p["summary"]["failures"] for p in parts),
+         "cancelled": sum(p["summary"]["cancelled"] for p in parts),
+         "prompt_tokens": prompt, "cached_tokens": cached, "evaluated_tokens": None if cached is None else prompt - cached,
+         "gen_tokens": gen, "wall_s": wall_s, "agg_tok_s": gen / wall_s if wall_s > 0 else 0.0}
+    for k in ("ttft_ms", "tpot_ms", "e2e_ms"):
+        s[k] = stats([r[k] for r in ok if r.get(k) is not None])
+    if ok and all(r.get("token_gaps_ms") is not None for r in ok):
+        s["token_gap_ms"] = stats([gap for r in ok for gap in r["token_gaps_ms"]])
+    if any(r.get("http_overhead_ms") is not None for r in reqs):
+        s["http_overhead_ms"] = stats([r["http_overhead_ms"] for r in ok if r.get("http_overhead_ms") is not None])
+    return s
+
+
+def join(parts):
+    """The whole row from its parts, in slice order."""
+    if any(not isinstance(p, dict) or not isinstance(p.get("slice"), dict) for p in parts):
+        die("every part must be a larch bench --slice result")
+    parts = sorted(parts, key=lambda p: p["slice"]["k"])
+    n, first = parts[0]["slice"]["n"], parts[0]
+    if [p["slice"]["k"] for p in parts] != list(range(n)) or any(p["slice"]["n"] != n for p in parts):
+        die(f"need slices 0..{n - 1} of one --slice K/{n} each once, got {[(p['slice']['k'], p['slice']['n']) for p in parts]}")
+    for p in parts[1:]:
+        bad = [k for k in SAME if p.get(k) != first.get(k)]
+        bad += [k for k in ("file", "sha256") if p["workload"][k] != first["workload"][k]]
+        bad += ["startup settings"] if startup(p) != startup(first) else []
+        if bad:
+            die(f"slice {p['slice']['k']} differs from slice 0 in {', '.join(bad)}")
+    if any(not p["requests"] or p["summary"]["requests"] != len(p["requests"]) for p in parts):
+        die("a slice ran no requests, or its summary does not count them")
+    # Each part would replay a live change from its own start: the joined row would not be one run's.
+    if any(k.get("at_s") is not None for p in parts for k in p.get("knob_timeline") or []):
+        die("a slice changed a knob live (--set k=v@S)")
+    if parts[0]["slice"]["first"] != 0 or any(a["slice"]["end"] != b["slice"]["first"] for a, b in zip(parts, parts[1:])):
+        die("the slices do not cover the workload end to end")
+    # Each part's clock starts at 0: a later part starts where the earlier ones ended, so the requests are time-ordered
+    # as one run's, and the gaps between holds never count.
+    reqs, off = [], 0.0
+    for p in parts:
+        reqs += [{**r, **{t: r[t] + off for t in ("t_submit_ms", "t_first_ms", "t_done_ms") if r.get(t) is not None}}
+                 for r in p["requests"]]
+        off = max(r["t_done_ms"] for r in reqs)
+    out = {k: v for k, v in first.items() if k not in ("slice", "telemetry", "knob_timeline", "summary", "requests")}
+    out["workload"] = {**first["workload"], "conversations": parts[-1]["slice"]["end"]}
+    # Per part: what cannot be summed (the ring's numbers, the knob timeline) and when each ran.
+    out["slices"] = [{"k": p["slice"]["k"], "started_at": p.get("started_at"), "wall_s": p["summary"]["wall_s"],
+                      "telemetry": p.get("telemetry"), "knob_timeline": p.get("knob_timeline")} for p in parts]
+    out["summary"] = summary(reqs, parts)
+    out["requests"] = reqs
+    return out
+
+
+def main(argv):
+    if len(argv) < 2:
+        die("usage: bench-join <out.json> <part>...")
+    out, paths = pathlib.Path(argv[0]), argv[1:]
+    try:
+        parts = [json.loads(pathlib.Path(p).read_text()) for p in paths]
+    except (OSError, ValueError) as e:
+        die(f"cannot read the parts: {e}")
+    joined = join(parts)
+    out.write_text(json.dumps(joined, indent=1) + "\n")
+    s = joined["summary"]
+    print(f"{out.name}: {s['requests']} requests, {s['failures']} failed, {s['agg_tok_s']:.2f} tok/s over "
+          f"{s['wall_s']:.1f} s in {len(parts)} slices")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

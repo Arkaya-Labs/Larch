@@ -1,0 +1,54 @@
+[package]
+name = "larch-desktop"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+license = "Apache-2.0"
+publish = false
+
+# Its own workspace: the root one (crates/*) builds and tests on Linux CI without a window system.
+[workspace]
+exclude = ["patches/xattr"]
+
+# As in the root workspace (#68): a stripped proc-macro dylib does not load on macOS.
+[profile.release.build-override]
+strip = false
+
+# gpui 0.2.2's http client pulls xattr 0.2.3, which names libc's Linux ENOATTR that libc 0.2.190
+# removed; patches/xattr stands in for the one function it calls, without the FFI.
+[patch.crates-io]
+xattr = { path = "patches/xattr" }
+
+[dependencies]
+# The Tasks week calendar and daily schedules in this computer's time zone; all three are already
+# in the lock through larch-task and gpui.
+chrono = "0.4"
+chrono-tz = "0.10"
+futures = "0.3"
+iana-time-zone = "0.1"
+gpui = "0.2.2"
+# A BMP or TIFF screenshot from the clipboard becomes a PNG larch decodes (gpui's own version).
+image = { version = "0.25", default-features = false, features = ["bmp", "tiff", "png", "gif"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+unicode-segmentation = "1"
+url = "2"
+larch-agent = { path = "../../crates/larch-agent" }
+larch-app = { path = "../../crates/larch-app" }
+larch-fetch = { path = "../../crates/larch-fetch" }
+# Only to name RunStatus, which TaskCard carries but larch-app does not re-export; runs are still
+# reached through larch-app's service client alone.
+larch-task = { path = "../../crates/larch-task" }
+
+[build-dependencies]
+embed-resource = "3"
+
+# Under WSL the window's X server needs a root cursor (main.rs, `wsl_display`); gpui's own version.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["cursor", "resource_manager"] }
+
+# A Print Screen on Windows is a bitmap on the clipboard, which gpui does not read.
+[target.'cfg(target_os = "windows")'.dependencies]
+arboard = { version = "3", default-features = false, features = ["image-data"] }

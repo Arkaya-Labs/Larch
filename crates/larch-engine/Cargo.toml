@@ -1,0 +1,34 @@
+[package]
+license.workspace = true
+name = "larch-engine"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Explicit opt-in for attended release bench/recovery builds.
+fault-inject = []
+
+[dependencies]
+bytemuck = "1.25"
+rand_chacha = "0.9"
+# Anchored dense DFAs for grammar masks; regex-syntax escapes JSON literals into them.
+regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "dfa-build", "unicode"] }
+regex-syntax = "0.8"
+# preserve_order: json_schema_regex keeps a schema's property order.
+serde_json = { version = "1", features = ["preserve_order"] }
+# .pin files carry a checksum a section.
+sha2 = "0.10"
+# Unnamed spill files for a reload's pin carry: the OS frees them even after a crash.
+tempfile = "3"
+larch-kernels = { path = "../larch-kernels" }
+larch-model = { path = "../larch-model" }
+larch-records = { path = "../larch-records" }
+larch-sys = { path = "../larch-sys" }
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true

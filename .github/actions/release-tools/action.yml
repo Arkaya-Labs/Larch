@@ -1,0 +1,56 @@
+name: Release tools
+description: Native compilers, package inspectors and zstd on the GitHub-hosted runners
+runs:
+  using: composite
+  steps:
+    # Installs only what the runner image lacks.
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        pkgs="cmake ninja-build libclang-dev pkg-config libxkbcommon-x11-dev libxcb-xkb-dev zstd binutils musl-tools python3"
+        # dpkg-query fails when any of them is unknown; the ones it knows still print.
+        have=$({ dpkg-query -W -f='${db:Status-Status} ${Package}\n' $pkgs 2>/dev/null || true; } | awk '$1 == "installed" {print $2}')
+        missing=$(for p in $pkgs; do grep -qx "$p" <<<"$have" || echo "$p"; done | xargs)
+        if [ -n "$missing" ]; then
+          sudo -n apt-get update -qq && sudo -n apt-get install -y --no-install-recommends $missing || {
+            echo "::error::could not install $missing"
+            exit 1
+          }
+        fi
+    - if: runner.os == 'macOS'
+      shell: bash
+      run: brew install cmake ninja zstd python@3.12
+    # `python` is the image's own Python 3.11+ (tomllib): on Windows the py launcher's, on macOS
+    # Homebrew's 3.12 from above.
+    - shell: bash
+      run: |
+        case "$RUNNER_OS" in
+          Windows) py="py -3" ;;
+          macOS) py="$(brew --prefix python@3.12)/bin/python3.12" ;;
+          *) py=python3 ;;
+        esac
+        $py -c 'import sys, tomllib; assert sys.version_info >= (3, 11), sys.version'
+        if [ "$RUNNER_OS" = Windows ]; then
+          $py -c 'import os, sys; print(os.path.dirname(sys.executable))' >> "$GITHUB_PATH"
+        else
+          mkdir -p "$RUNNER_TEMP/python"
+          ln -sf "$(command -v $py)" "$RUNNER_TEMP/python/python"
+          ln -sf "$(command -v $py)" "$RUNNER_TEMP/python/python3"
+          echo "$RUNNER_TEMP/python" >> "$GITHUB_PATH"
+        fi
+    - if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+    - if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $zip = Join-Path $env:RUNNER_TEMP zstd-v1.5.7-win64.zip
+        Invoke-WebRequest https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-v1.5.7-win64.zip -OutFile $zip
+        if ((Get-FileHash $zip -Algorithm SHA256).Hash -ine 'acb4e8111511749dc7a3ebedca9b04190e37a17afeb73f55d4425dbf0b90fad9') { throw 'zstd tool checksum mismatch' }
+        $dir = Join-Path $env:RUNNER_TEMP zstd-1.5.7
+        Expand-Archive $zip $dir -Force
+        $tool = Get-ChildItem $dir -Recurse -Filter zstd.exe | Select-Object -First 1
+        if (-not $tool) { throw 'zstd.exe missing' }
+        $tool.DirectoryName >> $env:GITHUB_PATH
+    - shell: bash
+      run: rustup show active-toolchain

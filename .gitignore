@@ -1,0 +1,9 @@
+/target/
+/kernels/build/
+/.cargo/config.local.toml
+larch-records.schema.json
+/build/
+__pycache__/
+
+# Per-developer editor settings
+/.vscode/

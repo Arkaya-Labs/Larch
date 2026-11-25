@@ -1,0 +1,6 @@
+# Without a write folder only the Read entries are listed; WriteExternal and Spend never are.
+> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.0.0"}}}
+< {"jsonrpc":"2.0","id":1,"result":"*"}
+> {"jsonrpc":"2.0","method":"notifications/initialized"}
+> {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+< {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"read_note","description":"read_note for the tests","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"execution":{"taskSupport":"optional"}},{"name":"slow","description":"slow for the tests","inputSchema":{"type":"object"},"execution":{"taskSupport":"optional"}},{"name":"count","description":"count for the tests","inputSchema":{"type":"object","properties":{"n":{"type":"integer"}},"required":["n"]},"execution":{"taskSupport":"optional"}},{"name":"big","description":"big for the tests","inputSchema":{"type":"object","properties":{"lines":{"type":"integer"}},"required":["lines"]},"execution":{"taskSupport":"optional"}},{"name":"boom","description":"boom for the tests","inputSchema":{"type":"object"},"execution":{"taskSupport":"optional"}}]}}

@@ -1,0 +1,39 @@
+[package]
+license.workspace = true
+name = "larch-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Code mode, for its tests only: no release build turns it on.
+code-mode = []
+
+[dependencies]
+anyhow = "1"
+# Utc::now for a new schedule's first occurrence; already in the lock through larch-task.
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The MCP sign-in page's host, shown before the browser opens (mcp.rs). In the lock already.
+url = "2"
+ureq = { version = "2", features = ["native-certs"] }
+larch = { path = "../larch" }
+larch-agent = { path = "../larch-agent" }
+larch-engine = { path = "../larch-engine" }
+larch-fetch = { path = "../larch-fetch" }
+larch-kernels = { path = "../larch-kernels" }
+larch-model = { path = "../larch-model" }
+larch-records = { path = "../larch-records" }
+larch-task = { path = "../larch-task" }
+
+[dev-dependencies]
+# DeviceSample::zeroed() in telemetry.rs's test.
+bytemuck = "1.25"
+sha2 = "0.11.1"
+# LARCH_FAULT injection in release test builds too (debug builds always have it).
+larch = { path = "../larch", features = ["fault-inject"] }
+
+[lints]
+workspace = true

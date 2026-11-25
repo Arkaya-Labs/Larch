@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en" data-layout="" data-local="">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Package backoff implements jittered exponential retry delays.">
+<meta class="js-gtmID" data-gtmid="GTM-W8MVQXG">
+<link rel="shortcut icon" href="/static/shared/icon/favicon.ico">
+<link rel="search" type="application/opensearchdescription+xml" href="/opensearch.xml" title="Go Packages">
+<link href="/static/frontend/frontend.min.css?version=prod-frontend-00113" rel="stylesheet">
+<title>backoff package - github.com/lanternlabs/backoff - Go Packages</title>
+<link href="/static/frontend/unit/unit.min.css?version=prod-frontend-00113" rel="stylesheet">
+<script>
+  loadScript("/static/frontend/frontend.js");
+  const tooltip = "<div class=\"go-Tooltip\"><p>Copied!</p></div>";
+</script>
+<style>.Documentation-content pre{overflow-x:auto}</style>
+</head>
+<body>
+<header class="go-Header go-Header--full js-siteHeader">
+  <div class="go-Header-inner go-Header-inner--dark">
+    <nav class="go-Header-nav">
+      <a href="https://go.dev/" class="go-Header-logoLink"><img class="go-Header-logo" src="/static/shared/logo/go-white.svg" alt="Go"></a>
+      <ul class="go-Header-menu">
+        <li class="go-Header-menuItem"><a href="https://go.dev/solutions">Why Go</a></li>
+        <li class="go-Header-menuItem"><a href="https://go.dev/learn">Learn</a></li>
+        <li class="go-Header-menuItem go-Header-menuItem--active"><a href="/">Packages</a></li>
+        <li class="go-Header-menuItem"><a href="https://go.dev/blog">Community</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<div class="go-Banner cookie-banner"><div class="go-Banner-inner"><div class="go-Banner-message">pkg.go.dev uses cookies from Google to deliver and enhance the quality of its services.</div><button class="go-Button go-Button--inline">Okay</button></div></div>
+<main class="go-Main">
+<header class="go-Main-header js-mainHeader">
+  <div class="go-Main-headerContent">
+    <div class="go-Main-headerBreadcrumb"><ol><li><a href="/">Discover Packages</a></li><li><a href="/github.com/lanternlabs/backoff">github.com/lanternlabs/backoff</a></li></ol></div>
+    <div class="go-Main-headerTitle"><h1 class="UnitHeader-titleHeading">backoff</h1><span class="go-Chip go-Chip--inverted">package</span><span class="go-Chip go-Chip--inverted">module</span></div>
+    <div class="go-Main-headerDetails"><span class="go-Main-headerDetailItem">Version: v1.3.0</span><span class="go-Main-headerDetailItem">Latest</span><span class="go-Main-headerDetailItem">Published: Sep 30, 2026</span><span class="go-Main-headerDetailItem">License: <a href="?tab=licenses">MIT</a></span><span class="go-Main-headerDetailItem">Imports: 4</span></div>
+  </div>
+</header>
+<aside class="go-Main-aside go-Main-nav js-mainNav">
+  <nav class="go-Tree"><ul><li><a href="#section-readme">README</a></li><li><a href="#section-documentation">Documentation</a><ul><li><a href="#pkg-overview">Overview</a></li><li><a href="#pkg-index">Index</a></li><li><a href="#pkg-constants">Constants</a></li><li><a href="#pkg-functions">Functions</a></li><li><a href="#pkg-types">Types</a></li></ul></li><li><a href="#section-sourcefiles">Source Files</a></li></ul></nav>
+</aside>
+<article class="go-Main-article js-mainContent">
+<section class="UnitDoc" id="section-documentation">
+<div class="Documentation js-documentation">
+<div class="Documentation-content js-docContent">
+<section class="Documentation-overview">
+<h2 tabindex="-1" id="pkg-overview" class="Documentation-overviewHeader">Overview <a class="Documentation-idLink" href="#pkg-overview" title="Go to Overview" aria-label="Go to Overview">&para;</a></h2>
+<div role="navigation" aria-label="Table of Contents"><ul class="Documentation-toc"></ul></div>
+<p>Package backoff implements jittered exponential delays for retrying operations that fail in transient ways, such as network calls, lock acquisition, or rate-limited APIs.</p>
+<p>A Policy describes the initial delay, the multiplier, the maximum delay, and the amount of random jitter. Policies are plain values, so they can be shared between goroutines and stored in configuration structs without any locking.</p>
+<p>The zero Policy is not useful on its own. Use Default for a reasonable starting point, which begins at 100 milliseconds, doubles on every attempt, and caps the delay at 30 seconds.</p>
+<pre>p := backoff.Default
+for attempt := 0; ; attempt++ {
+	if err := call(); err == nil {
+		break
+	}
+	time.Sleep(p.Delay(attempt))
+}
+</pre>
+</section>
+<h3 tabindex="-1" id="pkg-index" class="Documentation-indexHeader">Index <a class="Documentation-idLink" href="#pkg-index" title="Go to Index">&para;</a></h3>
+<ul class="Documentation-indexList">
+<li class="Documentation-indexConstants"><a href="#pkg-constants">Constants</a></li>
+<li><a href="#Retry">func Retry(ctx context.Context, p Policy, fn func() error) error</a></li>
+<li><a href="#Policy">type Policy</a></li>
+<li><a href="#Policy.Delay">func (p Policy) Delay(attempt int) time.Duration</a></li>
+</ul>
+<h4 tabindex="-1" id="Retry" data-kind="function" class="Documentation-functionHeader">func <a class="Documentation-source" href="https://github.com/lanternlabs/backoff/blob/v1.3.0/retry.go#L22">Retry</a></h4>
+<div class="Documentation-declaration"><pre>func Retry(ctx <a href="/context">context</a>.<a href="/context#Context">Context</a>, p <a href="#Policy">Policy</a>, fn func() <a href="/builtin#error">error</a>) <a href="/builtin#error">error</a></pre></div>
+<p>Retry calls fn until it returns nil, the context is cancelled, or the policy gives up. It returns the last error from fn, wrapped so that errors.Is still matches the original value.</p>
+</div>
+</div>
+</section>
+</article>
+</main>
+<footer class="go-Footer">
+  <div class="go-Footer-links"><a href="https://go.dev/doc/">Documentation</a> <a href="https://go.dev/copyright">Copyright</a> <a href="https://go.dev/tos">Terms of Service</a></div>
+</footer>
+</body>
+</html>

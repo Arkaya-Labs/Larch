@@ -1,0 +1,182 @@
+[
+  {
+    "file": "news-01.html",
+    "url": "https://www.harborgazette.com/2026/10/12/council-night-ferry-pilot",
+    "title": "Council Approves Night Ferry Pilot & New Dock Fees | The Harbor Gazette",
+    "start": "# Council Approves Night Ferry Pilot & New Dock Fees\n\nBy Marta Ilves — October 12, 2026\n\nThe city council voted 7–2 on Tuesday to fund a six-month night ferry pilot, ending a debate that has run since"
+  },
+  {
+    "file": "news-02.html",
+    "url": "https://www.northlineherald.com/science/2026/10/03/glacier-sensors",
+    "title": "Forty Sensors on the Varn Glacier Start Listening — Northline Herald",
+    "start": "[Science](https://www.northlineherald.com/science/)\n\n# Forty Sensors on the Varn Glacier Start Listening\n\nA three-summer effort to wire the ice is complete, and the first recordings are already in.\n\nI"
+  },
+  {
+    "file": "news-03.html",
+    "url": "https://dailymeridian.co.uk/business/bakery-cooperative-expands",
+    "title": "The Bakery Co-op That Outgrew Its Ovens – Daily Meridian",
+    "start": "# The Bakery Co-op That Outgrew Its Ovens\n\nBy [Tunde Oyelaran](https://dailymeridian.co.uk/authors/oyelaran) | 28 September 2026\n\nWhen the twelve members of Crumb & Co first rented a shared kitchen in"
+  },
+  {
+    "file": "news-04.html",
+    "url": "https://www.valleypost.net/news/local/library-hours.html",
+    "title": "Valley Post | Library to Extend Weekend Hours After Petition",
+    "start": "Starting in November, the main branch of the Valley Public Library will open on Sundays from 9 a.m. to 5 p.m., the library board decided on Wednesday. The change follows a petition signed by more than"
+  },
+  {
+    "file": "news-05.html",
+    "url": "https://www.coastlinewire.com/2026/10/20/storm-season-outlook",
+    "title": "Forecasters Expect a Busier Storm Season on the Coast - Coastline Wire",
+    "start": "# Forecasters Expect a Busier Storm Season on the Coast\n\nBy **Coastline Wire staff**\n\nOctober 20, 2026\n\nThe regional weather service expects between nine and twelve named storms to reach the coast thi"
+  },
+  {
+    "file": "news-06.html",
+    "url": "https://baysideobserver.com/environment/kestrel-bay-nets",
+    "title": "Kestrel Bay crews switch to quieter nets · Bayside Observer",
+    "start": "KESTREL BAY\n\nFishing crews here have started testing a new kind of net that uses lighter mesh and small acoustic pingers, in an attempt to keep porpoises and seabirds away from their catch. Six boats "
+  },
+  {
+    "file": "news-07.html",
+    "url": "https://www.thecivicledger.org/politics/transit-bond-measure",
+    "title": "Three Counties to Vote on $2.4 Billion Transit Bond — The Civic Ledger",
+    "start": "# Three Counties to Vote on $2.4 Billion Transit Bond\n\nBy [Dana Whitfield](https://www.thecivicledger.org/author/dana-whitfield/), October 2, 2026\n\nVoters in three counties will decide in November whe"
+  },
+  {
+    "file": "news-08.html",
+    "url": "https://www.ridgelinetimes.com/sports/2026/10/18/rowing-final",
+    "title": "Rowing: Ridgeline Eight Win Final by a Bow Ball | Ridgeline Times",
+    "start": "It came down to the last stroke… and then to a photograph. The Ridgeline University first eight won the autumn final on Saturday by roughly the length of a bow ball, after a race in which they trailed"
+  },
+  {
+    "file": "news-09.html",
+    "url": "https://www.coastlinedaily.example/live/storm-edda",
+    "title": "Live: Storm Edda reaches the coast – updates | Coastline Daily",
+    "start": "# Live: Storm Edda reaches the coast\n\nFollow the latest as the storm crosses the bay.\n\n[Share](https://social.example/share?u=live) Email\n\n### 11:05\n\nThe harbour master has closed the outer moorings u"
+  },
+  {
+    "file": "docs-01.html",
+    "url": "https://docs.rs/ringcask/0.4.2/ringcask/struct.RingBuffer.html",
+    "title": "RingBuffer in ringcask - Rust",
+    "start": "A fixed-capacity, single-producer ring buffer backed by a boxed slice.\n\nWrites never allocate after construction, which makes the buffer suitable for audio callbacks, interrupt handlers, and other pla"
+  },
+  {
+    "file": "docs-02.html",
+    "url": "https://developer.mozilla.org/en-US/docs/Web/API/Element/requestIdleScroll",
+    "title": "Element: requestIdleScroll() method - Web APIs | MDN",
+    "start": "# Element: requestIdleScroll() method\n\nThe `requestIdleScroll()` method of the [Element](https://developer.mozilla.org/en-US/docs/Web/API/Element) interface schedules a smooth scroll that starts only "
+  },
+  {
+    "file": "docs-03.html",
+    "url": "https://docs.python.org/3/library/tempoqueue.html",
+    "title": "tempoqueue — Rate-limited work queues — Python 3.14.0 documentation",
+    "start": "# tempoqueue — Rate-limited work queues\n\n**Source code:** [Lib/tempoqueue.py](https://github.com/python/cpython/tree/3.14/Lib/tempoqueue.py)\n\nThis module provides a queue that releases items no faster"
+  },
+  {
+    "file": "docs-04.html",
+    "url": "https://pkg.go.dev/github.com/lanternlabs/backoff",
+    "title": "backoff package - github.com/lanternlabs/backoff - Go Packages",
+    "start": "## Overview ¶\n\nPackage backoff implements jittered exponential delays for retrying operations that fail in transient ways, such as network calls, lock acquisition, or rate-limited APIs.\n\nA Policy desc"
+  },
+  {
+    "file": "docs-05.html",
+    "url": "https://quillmark.readthedocs.io/en/latest/quickstart.html",
+    "title": "Quickstart — Quillmark 2.1 documentation",
+    "start": "# Quickstart\n\nThis page walks you through installing Quillmark, converting your first notebook, and publishing the result. It assumes Python 3.10 or newer, and about five minutes of your time.\n\n## Ins"
+  },
+  {
+    "file": "docs-06.html",
+    "url": "https://man.archlinux.org/man/tallyf.1.en",
+    "title": "tallyf(1) — Arch manual pages",
+    "start": "# tallyf(1) — Linux manual page\n\n## NAME\n\ntallyf - count and summarize delimited fields\n\n## SYNOPSIS\n\n```\ntallyf [-d delim] [-f list] [--json] [file ...]\n```\n\n## DESCRIPTION\n\n**tallyf** reads lines fr"
+  },
+  {
+    "file": "docs-07.html",
+    "url": "https://docs.parcelpost.dev/api/v2/shipments/create",
+    "title": "Create a shipment | ParcelPost API Reference",
+    "start": "# Create a shipment\n\n`POST /v2/shipments`\n\nCreates a shipment and, if a rate is selected, buys the postage label in the same request. The response includes a label URL, a tracking number, and the fina"
+  },
+  {
+    "file": "docs-08.html",
+    "url": "https://docs.tidewaterdb.io/guides/replication/read-replicas",
+    "title": "Read replicas | TidewaterDB",
+    "start": "# Read replicas\n\nA read replica is a copy of your primary node that receives changes asynchronously and serves read-only queries. Replicas let you scale reads horizontally, keep reporting jobs away fr"
+  },
+  {
+    "file": "arxiv-01.html",
+    "url": "https://arxiv.org/abs/2510.01234",
+    "title": "[2510.01234] Sparse Gradient Echoes in Low-Rank Adapters",
+    "start": "[Submitted on 3 Oct 2025]\n\n# Title: Sparse Gradient Echoes in Low-Rank Adapters\n\nAuthors:[Lena Vasquez](https://arxiv.org/search/cs?searchtype=author&query=Vasquez,+L), [Oskar Brandt](https://arxiv.or"
+  },
+  {
+    "file": "arxiv-02.html",
+    "url": "https://arxiv.org/abs/2509.04417",
+    "title": "[2509.04417] Tidal Routing: Load-Aware Expert Selection for Mixture-of-Experts Inference",
+    "start": "[Submitted on 11 Sep 2025 ([v1](https://arxiv.org/abs/2509.04417v1)), last revised 2 Oct 2025 (this version, v2)]\n\n# Title: Tidal Routing: Load-Aware Expert Selection for Mixture-of-Experts Inference\n"
+  },
+  {
+    "file": "arxiv-03.html",
+    "url": "https://arxiv.org/abs/2510.00087",
+    "title": "[2510.00087] On the Stability of Checkpoint Averaging Under Learning-Rate Warm Restarts",
+    "start": "[Submitted on 1 Oct 2025]\n\n# Title: On the Stability of Checkpoint Averaging Under Learning-Rate Warm Restarts\n\nAuthors: [Chidi Okonkwo](https://arxiv.org/a/okonkwo_c_1)\n\n> Abstract: Averaging the wei"
+  },
+  {
+    "file": "github-01.html",
+    "url": "https://github.com/lanternlabs/backoff",
+    "title": "GitHub - lanternlabs/backoff: Jittered exponential backoff for Go, with context support",
+    "start": "# backoff\n\nA small Go package for retrying operations with jittered exponential backoff. It has no dependencies outside the standard library, and every delay it computes is deterministic for a given s"
+  },
+  {
+    "file": "github-02.html",
+    "url": "https://github.com/quillmark/quillmark",
+    "title": "GitHub - quillmark/quillmark: Turn Jupyter notebooks into fast static sites · GitHub",
+    "start": "# Quillmark\n\nQuillmark turns a folder of Jupyter notebooks into a static website that loads quickly, works without JavaScript, and can be hosted anywhere. It executes each notebook in a clean kernel, "
+  },
+  {
+    "file": "github-03.html",
+    "url": "https://github.com/ferrous-tide/ringcask",
+    "title": "GitHub - ferrous-tide/ringcask: Allocation-free ring buffers for real-time Rust",
+    "start": "# ringcask\n\n**Allocation-free ring buffers for real-time Rust.** Once a buffer is created, pushing and popping never touch the allocator, never lock, and never panic, so the crate is safe to use insid"
+  },
+  {
+    "file": "blog-01.html",
+    "url": "https://flourandpatience.blog/2026/09/14/rebuilding-my-sourdough-starter/",
+    "title": "What I Learned Rebuilding My Sourdough Starter Twice – Flour & Patience",
+    "start": "# What I Learned Rebuilding My Sourdough Starter Twice\n\nPosted on September 14, 2026 by [Noor](https://flourandpatience.blog/author/noor/)\n\nMy first starter died in July, during the hottest week of th"
+  },
+  {
+    "file": "blog-02.html",
+    "url": "https://engineering.loomfield.io/why-we-moved-off-cron/",
+    "title": "Why we moved our nightly jobs off cron",
+    "start": "[Infrastructure](https://engineering.loomfield.io/tag/infrastructure/)\n\n# Why we moved our nightly jobs off cron\n\nForty scheduled jobs, one overloaded box, and the boring queue that replaced them.\n\n[H"
+  },
+  {
+    "file": "blog-03.html",
+    "url": "https://tomasreyes.net/posts/coast-path-winter/",
+    "title": "Notes on walking the coast path in winter :: Tomas Reyes",
+    "start": "I walked the northern half of the coast path in February, from the estuary to the lighthouse, over eleven days. Most people walk it in summer, and for good reason: the cafés are open, the ferries run,"
+  },
+  {
+    "file": "wiki-01.html",
+    "url": "https://en.wikipedia.org/wiki/Varn_Glacier",
+    "title": "Varn Glacier - Wikipedia",
+    "start": "Varn Glacier\nLocation | Tarn Range, Norland\nArea | 41.2 km²\nLength | 14 km\nTerminus | Varn Lake\nStatus | Retreating\n\n**Varn Glacier** is a valley glacier in the Tarn Range of Norland, flowing north fr"
+  },
+  {
+    "file": "wiki-02.html",
+    "url": "https://wiki.harborcitytransit.org/wiki/MV_Linden_Star",
+    "title": "MV Linden Star — Harbor City Transit Wiki",
+    "start": "MV Linden Star\nOperator | Harbor City Transit\nBuilder | Okafor & Sons, Riverside\nLaunched | 1998\nCapacity | 240 passengers\n\nThe **MV Linden Star** is a passenger ferry operated by [Harbor City Transit"
+  },
+  {
+    "file": "forum-01.html",
+    "url": "https://devanswers.net/questions/48213/why-does-my-time-ticker-drift-when-the-handler-is-slow",
+    "title": "go - Why does my time.Ticker drift when the handler is slow? - DevAnswers",
+    "start": "I have a loop that reads from a `time.Ticker` every second and writes a metrics snapshot to disk. Most of the time it works, but when the disk is slow, the snapshots stop lining up with whole seconds,"
+  },
+  {
+    "file": "paper-01.pdf",
+    "url": "https://arxiv.org/pdf/2510.00001",
+    "title": "Attention Is Not All You Need",
+    "start": "Attention Is Not All You Need"
+  }
+]

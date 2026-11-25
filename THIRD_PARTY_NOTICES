@@ -1,0 +1,234 @@
+# Third-party notices and license scope
+
+First-party source code, documentation and configuration in this repository are
+licensed under the Apache License, Version 2.0, in `LICENSE` (copyright
+notice in `NOTICE`), except for separately
+attributed third-party material described below or in the files.
+
+Third-party code, fonts, website content, model weights and datasets retain their
+own terms. The root license does not replace their licenses or copyright notices.
+The entries below record known bundled material and reference implementations;
+they are not a complete dependency inventory or a finding that all redistribution
+rights have been obtained.
+
+## llama.cpp / ggml
+
+`kernels/src/cuda/mmq_q4.cuh` adapts packed loaders and fragments from
+`mmq-load-tiles.cuh`, `mmq-vec-dot.cuh` and `mma.cuh` in llama.cpp at commit
+`c479922ac520a08969b4c1dc154d7bbb3c386d85`. Its existing MIT header is retained.
+The terms below apply to that upstream material and its adaptations.
+
+Other files name llama.cpp as the basis they were written after:
+`crates/larch-model/src/tokenizer.rs` ports llama.cpp's byte-level BPE and SPM
+tokenizers, and the Metal mat-vec kernels in `kernels/src/metal/ops.metal` follow
+`ggml-metal.metal`'s `kernel_mul_mv_q4_K_f32`, `_q5_K_f32`, `_q6_K_f32`,
+`mul_mv_ext`, `mul_mv_mma` and `kernel_mul_mm`. The terms below apply to any
+material in them that is derived from llama.cpp.
+
+Source: https://github.com/ggml-org/llama.cpp/tree/c479922ac520a08969b4c1dc154d7bbb3c386d85/ggml/src/ggml-cuda
+License: https://github.com/ggml-org/llama.cpp/blob/c479922ac520a08969b4c1dc154d7bbb3c386d85/LICENSE
+
+```text
+MIT License
+
+Copyright (c) 2023-2026 The ggml authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+The CMake reference tools in `tools/llama-logits` and `tools/llama-serve-bench`
+fetch llama.cpp separately (currently tag `b11458`). Distribution of those built
+tools must include the licenses and notices required by that fetched tree,
+including its bundled third-party components. The notice above alone does not
+cover all of those components.
+
+## Apple MLX
+
+The `vv_gdn_chunk` kernel in `kernels/src/metal/ops.metal` identifies MLX's
+`gated_delta_fused_chunk` in `mlx/backend/metal/kernels/gated_delta_update.h`
+as its source adaptation. That section carries the upstream MIT notice; it does
+not designate the rest of `ops.metal` as Apple-owned. The `mmvq_id1n` kernel in
+`ops.metal` splits work the way MLX's `gather_qmv` does; any material derived
+from MLX there is covered by the same terms.
+
+`kernels/src/metal/mlx/` holds MLX's `steel_attention` and
+`steel_attention_nax` headers, vendored verbatim at commit
+`fc344c986c4169d99f76b5d95ae6b4a58a359a63`, with MLX's `LICENSE` beside them
+(`kernels/src/metal/mlx/LICENSE`) and a `VENDORED` note. The kernels
+`kernels/src/metal/attn_full_sg.metal` and `attn_full_nax.metal` instantiate
+them. The terms below apply to the vendored tree and those kernels.
+
+Source: https://github.com/ml-explore/mlx/blob/fc344c986c4169d99f76b5d95ae6b4a58a359a63/mlx/backend/metal/kernels/gated_delta_update.h
+License: https://github.com/ml-explore/mlx/blob/fc344c986c4169d99f76b5d95ae6b4a58a359a63/LICENSE
+The original imported revision was not recorded in this repository; these links
+identify the upstream files checked when preparing these notices.
+
+```text
+MIT License
+
+Copyright © 2023 Apple Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## DFlash reference implementation
+
+`crates/larch-model/src/dflash.rs` and
+`crates/larch-model/tests/dflash/gen.py` identify Z Lab's
+`dflash/model_mlx.py` as their implementation/reference basis. The upstream
+notice is reproduced here for material derived from that implementation; citing
+the reference does not establish that every algorithm or line was copied.
+The original reference revision was not recorded.
+
+Source: https://github.com/z-lab/dflash/blob/07ebd93db9f472af339b644bb70221ad8428328a/dflash/model_mlx.py
+License: https://github.com/z-lab/dflash/blob/07ebd93db9f472af339b644bb70221ad8428328a/LICENSE
+
+```text
+MIT License
+
+Copyright (c) 2026 Z Lab
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## gpui example code
+
+`apps/desktop/src/input.rs` is adapted from `examples/input.rs` in gpui 0.2.2
+(Zed Industries), licensed under the Apache License, Version 2.0, the same
+licence as this repository's `LICENSE`.
+
+Source: https://github.com/zed-industries/zed/tree/main/crates/gpui/examples/input.rs
+License: https://github.com/zed-industries/zed/blob/main/crates/gpui/LICENSE-APACHE
+
+## Bundled fonts
+
+These fonts remain under the SIL Open Font License, Version 1.1 (OFL-1.1).
+Their adjacent license files contain the full terms and must accompany copies of
+the fonts, including fonts embedded in application or server binaries.
+
+| Font files | Copyright notice | Full license |
+| --- | --- | --- |
+| `apps/desktop/assets/fonts/Figtree-Regular.ttf`, `Figtree-SemiBold.ttf` | Copyright 2022 The Figtree Project Authors (https://github.com/erikdkennedy/figtree) | `apps/desktop/assets/fonts/OFL.txt` |
+| `apps/desktop/assets/fonts/JetBrainsMono-Regular.ttf` | Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono) | `apps/desktop/assets/fonts/OFL.txt` |
+| `apps/desktop/assets/fonts/Fraunces-Medium.ttf` (static Medium instance, renamed family Fraunces) | Copyright 2020 The Fraunces Project Authors (https://github.com/undercasetype/Fraunces) | `apps/desktop/assets/fonts/OFL.txt` |
+
+The desktop app's fonts are compiled into its binary and into the installer
+window's, so their distributions must include `apps/desktop/assets/fonts/OFL.txt`. The console font notices are
+preserved as supplied; the original download revisions of the bundled font files
+were not recorded.
+
+## Contributor Covenant policy text
+
+When `CODE_OF_CONDUCT.md` is distributed, its adapted Contributor
+Covenant version 2.1 text remains under Creative Commons Attribution 4.0
+International (CC-BY-4.0), credited to Coraline Ada Ehmke and contributors. That
+policy's attribution and adaptation disclosure must be retained; it is not
+relicensed by the root Apache license.
+
+Source: https://www.contributor-covenant.org/version/2/1/code_of_conduct/
+Version-specific upstream license: https://github.com/EthicalSource/contributor_covenant/blob/91532d80ea5f39b6685aff4892bc6854bf2f6d6f/LICENSE.md
+License terms: https://creativecommons.org/licenses/by/4.0/
+
+## NVIDIA CUDA libraries
+
+Release builds for NVIDIA GPUs carry cuBLAS (`cublas`, `cublasLt`) and nvJitLink
+(`nvJitLink`) libraries from NVIDIA's CUDA redistributable archives, downloaded
+at release time from https://developer.download.nvidia.com/compute/cuda/redist/
+and checked against the hashes NVIDIA publishes. They are not in this
+repository and are not licensed under the Apache License. NVIDIA distributes them
+under the NVIDIA CUDA Toolkit End User License Agreement
+(https://docs.nvidia.com/cuda/eula/), whose Attachment A lists them as
+redistributable with an application. The CUDA runtime package installs them in
+Larch's own runtime folder with NVIDIA's license text beside them
+(`libcublas-LICENSE.txt`, `libnvjitlink-LICENSE.txt`).
+
+## Web fixtures, benchmark material and model assets
+
+Website-shaped HTML/PDF fixtures in
+`crates/larch-agent/tests/fixtures/pages/` include site layouts, source links
+and assorted copyright/license footers (including CC BY/CC BY-SA, GPL, MIT and
+all-rights-reserved statements). Their complete source provenance and the terms
+applicable to each reused portion have not been established. They are not
+relicensed by the root Apache license. Existing statements must be retained;
+a URL or a license footer alone is not proof of redistribution permission.
+Verify the original sources and applicable notices before redistributing these
+fixtures.
+
+`crates/larch/tests/serve-opencode.json` and `serve-qwen-code.json` hold
+request bodies captured from those tools, including their system prompts. That
+prompt text belongs to the respective tools and keeps their terms; it is test
+input only and is not relicensed by the root Apache license.
+`crates/larch/tests/serve-claude-code.json` keeps only the shape of a Claude
+Code request (its field names and tool names); every text field holds filler
+of the same length.
+
+Third-party text and data used by the benchmark downloaders and research briefs
+in `bench/agent/` likewise retain their source terms. Dataset licenses may
+differ from the licenses of included web pages. Model weights, tokenizers and
+datasets fetched by users are separately licensed; listing or loading them does
+not place them under this repository's license.
+
+## Distribution requirements
+
+Source distributions must retain `LICENSE`, this file, the relevant in-file
+notices, and the full license files listed above. Binary/application/server
+distributions must carry a readable copy of `LICENSE`, this file, and the
+applicable font licenses and other dependency licenses/notices alongside the
+distribution or in its accompanying documentation. Embedding a font or a copied
+kernel does not remove its notice requirements.
+
+Determine the exact dependencies and bundled runtime components for each target,
+backend and enabled feature before distributing a build, and include their
+required notices and license texts. This includes transitive Rust dependencies,
+any fetched reference tools, GPU/runtime components and optional tuning
+dependencies. Their full license review and notice collection remain release
+preparation work; this file does not grant rights to any private dependency or
+resolve the fixture provenance gaps above.
