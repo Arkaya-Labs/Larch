@@ -1002,11 +1002,17 @@ fn fault_flush_is_bounded() {
         e.set_fault_flush(move |_, _| {
             eprintln!("flush_entered");
             assert_ne!(mode, "panic_flush", "controlled flush panic");
-            // Held in 1 ms waits until the process ends: the last line says how long it ran.
-            let until = Instant::now() + DEADLINE;
-            while Instant::now() < until && held.recv_timeout(Duration::from_millis(1)).is_err() {
-                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
-                eprintln!("hook_ran_ns={}", now.unwrap().as_nanos());
+            // Held until the process ends, with a line each 1 ms: the last says how long it ran.
+            // Busy, as a timed wait oversleeps where macOS throttles the process (a background
+            // job, as hosted CI runs tests), and the lines would show the throttle, not the hook.
+            let (until, mut next) = (Instant::now() + DEADLINE, Instant::now());
+            while Instant::now() < until && held.try_recv().is_err() {
+                if Instant::now() >= next {
+                    next += Duration::from_millis(1);
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+                    eprintln!("hook_ran_ns={}", now.unwrap().as_nanos());
+                }
+                std::thread::yield_now();
             }
         })
         .unwrap();
