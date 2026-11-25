@@ -1,8 +1,8 @@
 # The llama.cpp baseline (architecture 16, D13): llama-serve-bench plus llama.cpp's own llama-bench,
-# llama-batched-bench and llama-server, all from one llama.cpp pin, the same tag as tools/llama-logits.
+# llama-batched-bench and llama-server, all from one llama.cpp tag: the pin below (tools/llama-logits' tag) by default.
 #   cmake -S tools/llama-serve-bench -B target/llama-serve-bench -DCMAKE_BUILD_TYPE=Release [-DGGML_CUDA=ON | -DGGML_METAL=ON]
 #   cmake --build target/llama-serve-bench --config Release --target llama-serve-bench llama-bench llama-batched-bench llama-server
-# scripts/baseline.py runs exactly this; -DFETCHCONTENT_SOURCE_DIR_LLAMA=<checkout of the same tag> skips the download.
+# scripts/baseline.py runs exactly this; -DFETCHCONTENT_SOURCE_DIR_LLAMA=<checkout on a tag> builds that tag instead.
 cmake_minimum_required(VERSION 3.21)
 project(larch_llama_serve_bench CXX)
 
@@ -13,6 +13,14 @@ set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TOOLS ON CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(llama)
+# A local checkout (-DFETCHCONTENT_SOURCE_DIR_LLAMA) may be any tag; results record that tag (with "-dirty" for local
+# edits), never the pin above. An untagged commit is refused: a ledger row names a release others can rebuild. Revisit
+# if a baseline ever has to come from an unreleased commit.
+if(FETCHCONTENT_SOURCE_DIR_LLAMA)
+    execute_process(COMMAND git -C "${FETCHCONTENT_SOURCE_DIR_LLAMA}" describe --tags --exact-match --dirty
+                    OUTPUT_VARIABLE LLAMA_TAG OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FETCHCONTENT_SOURCE_DIR_LLAMA}/.git/HEAD")
+endif()
 
 add_executable(llama-serve-bench main.cpp)
 target_link_libraries(llama-serve-bench PRIVATE llama llama-common vendor::hash)

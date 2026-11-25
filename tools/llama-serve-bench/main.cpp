@@ -133,6 +133,10 @@ static Workload load_workload(const std::string & path) {
     return w;
 }
 
+// The rendered prompt is a std::string up to the pinned b11458 and a common_chat_prompt (parts with str()) in later tags.
+static const std::string & prompt_text(const std::string & s) { return s; }
+template <class P> static std::string prompt_text(const P & p) { return p.str(); }
+
 // The GGUF's own Jinja template through common_chat_templates_apply, then the whole prompt tokenised
 // with add_special and parse_special: llama-server's chat path, done fresh for every turn.
 struct Renderer {
@@ -146,7 +150,7 @@ struct Renderer {
         in.add_generation_prompt               = true;
         in.now                                 = std::chrono::system_clock::from_time_t(DATE_NOW);
         in.chat_template_kwargs["date_string"] = json(DATE).dump();
-        return common_tokenize(vocab, common_chat_templates_apply(tmpls.get(), in).prompt, true, true);
+        return common_tokenize(vocab, prompt_text(common_chat_templates_apply(tmpls.get(), in).prompt), true, true);
     }
 };
 
