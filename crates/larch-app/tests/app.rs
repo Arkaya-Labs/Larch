@@ -538,7 +538,14 @@ fn model_list_marks_unsupported_and_skips_other_files() {
     // ponytail: BLOCKED on #123; the stand-in fit check answers Unknown. Assert `Fits` once it lands.
     assert_eq!(tiny.fit, Fit::Unknown);
     assert!(!tiny.quant.is_empty());
-    assert!(app.load_model(&list[0].path).is_err());
+    // The replies other tests stopped are process-wide (`workers::wait_stopped`): one still ending
+    // refuses an unload before the load starts, with no event, whatever the model.
+    assert!(larch_agent::workers::wait_stopped(DEADLINE));
+    let refused = app.load_model(&list[0].path).unwrap_err();
+    assert!(
+        refused.ends_with("unsupported model architecture"),
+        "{refused}"
+    );
     assert_eq!(app.app_state().health, Health::Empty);
     let health: Vec<_> = rx.try_iter().collect();
     assert_eq!(
@@ -684,12 +691,16 @@ fn agent_turn(rx: &Receiver<Event>, id: &str) -> Vec<ChatEvent> {
 /// Every chat event of `id` up to and including the one `last` picks.
 fn until(rx: &Receiver<Event>, id: &str, last: impl Fn(&ChatEvent) -> bool) -> Vec<ChatEvent> {
     let mut events = Vec::new();
-    let end = Instant::now() + AGENT_DEADLINE;
+    let (end, mut heard) = (Instant::now() + AGENT_DEADLINE, Instant::now());
     loop {
-        let e = rx
-            .recv_timeout(end - Instant::now())
-            .expect("an agent turn's end");
+        // On a miss, whether the turn was still going (a slow runner) or had stopped (a hang).
+        let e = rx.recv_timeout(end - Instant::now()).unwrap_or_else(|e| {
+            let quiet = heard.elapsed();
+            let (n, tail) = (events.len(), &events[events.len().saturating_sub(3)..]);
+            panic!("an agent turn's end: {e}; {n} events, none for {quiet:?}, the last {tail:?}")
+        });
         if let Event::Chat { id: chat, event } = e {
+            heard = Instant::now();
             assert_eq!(chat, id);
             let last = last(&event);
             events.push(event);

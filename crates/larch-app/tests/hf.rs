@@ -729,7 +729,10 @@ fn a_download_goes_into_the_hugging_face_cache() {
     );
     let at = hub.serve("org/model", name, file(model.clone()));
     let id = app.download_model("org/model", name, None).unwrap();
-    let path = repo.join("snapshots").join(COMMIT).join(name);
+    // A part at a time, as the download lays it out: a `/` joined whole stays in a Windows path.
+    let path = (name.split('/')).fold(repo.join("snapshots").join(COMMIT), |at, part| {
+        at.join(part)
+    });
     let d = done(&rx, &id);
     assert_eq!((d.path.as_str(), d.note), (&*path.to_string_lossy(), None));
     assert_eq!(fs::read(&path).unwrap(), model);
