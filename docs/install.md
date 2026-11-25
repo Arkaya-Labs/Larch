@@ -74,11 +74,11 @@ The installer already does this, but you can repeat it by hand. Each release has
 `SHA256SUMS.minisig`, signed with the Larch release key:
 
 ```sh
-minisign -Vm SHA256SUMS -P RWQVpB8j31UnNTtZdjlYzi71ZGHAvhmaa5P0NrKn5OhW0oO0eZUQRO7s
+minisign -Vm SHA256SUMS -P RWTTTXDQZCDR6gcdAISWt5CmUyoRp2fXzRv1g3e9QiDAwCrYHK0XBpA5
 sha256sum -c SHA256SUMS --ignore-missing
 ```
 
-That is the Larch release key (minisign key ID `352755DF231FA415`). Check the signature first. A
+That is the Larch release key (minisign key ID `EAD12064D0704DD3`). Check the signature first. A
 list of hashes proves nothing on its own, because anyone who can replace a file can also replace its
 line in an unsigned list.
 
