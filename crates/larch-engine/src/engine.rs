@@ -1328,7 +1328,13 @@ impl Demand {
     /// requests on `slots` seats and `waiting` behind them. It flips only once a switch loads.
     fn seats(&mut self, now: u64, running: usize, waiting: usize, slots: u32) -> Option<u32> {
         let (pressed, hold) = match self.many {
-            false => (running >= slots as usize && waiting >= 2, DEMAND_UP_NS),
+            // Two waiting on full seats, or as many chats as MANY_SEATS on fewer slots (a load the check
+            // left at 3): there, 4 chats never queue two.
+            false => {
+                let full = running >= slots as usize;
+                let many = slots < MANY_SEATS && running + waiting >= MANY_SEATS as usize;
+                (full && (waiting >= 2 || many), DEMAND_UP_NS)
+            }
             true => (running + waiting <= 1, DEMAND_DOWN_NS),
         };
         if !pressed || now < self.quiet_until {
@@ -9149,6 +9155,32 @@ mod tests {
         assert_eq!(d.seats(341 * s, 2, 2, 2), None, "still quiet");
         assert_eq!(d.seats(342 * s, 2, 2, 2), None, "the up clock starts");
         assert_eq!(d.seats(343 * s, 2, 2, 2), Some(super::MANY_SEATS));
+    }
+
+    /// A load that kept fewer than MANY_SEATS slots (3: the check after it was short of the 4th) still
+    /// switches when as many chats as MANY_SEATS want seats, though only one of them waits: 4 chats on
+    /// 3 slots never put two in the queue, and ran on 3 slots without graphs (5070 Ti, 35B, 25 Nov:
+    /// 113 tok/s, against 174 on 4 slots).
+    #[test]
+    fn many_chats_on_fewer_slots_switch_with_one_waiting() {
+        let s = 1_000_000_000;
+        let mut d = super::Demand::default();
+        assert_eq!(d.seats(0, 3, 1, 3), None);
+        assert_eq!(d.seats(s, 3, 1, 3), Some(super::MANY_SEATS));
+        let mut d = super::Demand::default();
+        assert_eq!(d.seats(0, 2, 1, 2), None);
+        assert_eq!(
+            d.seats(s, 2, 1, 2),
+            None,
+            "3 chats on 2 slots: one waiting is not demand"
+        );
+        let mut d = super::Demand::default();
+        assert_eq!(d.seats(0, 4, 1, 4), None);
+        assert_eq!(
+            d.seats(s, 4, 1, 4),
+            None,
+            "4 slots: the fast plan already seats MANY_SEATS"
+        );
     }
 
     /// A hand-set `max_batch_seqs` plans its state slots and moves the host layers they need: on a
