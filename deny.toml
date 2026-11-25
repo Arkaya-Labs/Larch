@@ -12,9 +12,6 @@ version = 2
 yanked = "deny"
 # Each entry names the advisory, why it cannot be fixed by a compatible update, and when to remove it.
 ignore = [
-    # SQLite before 3.54.0 (bundled by libsqlite3-sys): stale memory from a crafted database and -wal
-    # pair. rusqlite 0.40 pins libsqlite3-sys 0.38; remove with the rusqlite upgrade.
-    { id = "RUSTSEC-2026-0459", reason = "pinned by rusqlite 0.40; needs a rusqlite upgrade" },
     # chrono and chrono-tz are marked unmaintained, with no maintained replacement for time-zone
     # arithmetic yet; revisit when one exists or an advisory names a defect.
     { id = "RUSTSEC-2026-0543", reason = "unmaintained, no replacement yet" },
