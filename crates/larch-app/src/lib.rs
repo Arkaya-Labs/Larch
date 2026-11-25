@@ -898,13 +898,19 @@ impl App {
         // The library's own spelling, so the paths below compare with the folder's listing.
         let name = name.to_string_lossy().into_owned();
         let file = dir.join(&name);
-        // The loaded model is this file only when both resolve: two missing files are not the same.
+        // Its faster version goes with it: no library lists that copy, so nothing else could
+        // remove it. (Another library's file of the same name shares it; its card makes it again.)
+        let copy = self.inner.faster_path(&file);
+        // The loaded model is this file (or its copy) only when both resolve: two missing files are
+        // not the same.
         let in_use = |st: &State| {
             let loaded = st
                 .model
                 .as_ref()
                 .and_then(|m| fs::canonicalize(&m.path).ok());
-            loaded.is_some() && loaded == fs::canonicalize(&file).ok()
+            loaded.is_some()
+                && (loaded == fs::canonicalize(&file).ok()
+                    || loaded == fs::canonicalize(&copy).ok())
         };
         // Held from the check to the delete: no task service starts on the engine being unloaded.
         let mut tasks = self.inner.tasks();
@@ -933,12 +939,15 @@ impl App {
         // Its projector goes with it, unless another model of the folder pairs with it too: a stray
         // projector would pair with the next model that takes the folder alone.
         let projectors = projectors_named_for(&file);
-        let doomed: Vec<PathBuf> = match hf::split_part(&name) {
+        let mut doomed: Vec<PathBuf> = match hf::split_part(&name) {
             Some((stem, _, n)) => (1..=n)
                 .map(|i| dir.join(format!("{stem}-{i:05}-of-{n:05}.gguf")))
                 .collect(),
             None => vec![file.clone()],
         };
+        self.inner.stop_build(&file);
+        larch::faster::clean(&copy);
+        doomed.push(copy.clone());
         for f in doomed {
             match remove_model_file(&f) {
                 Err(e) if e.kind() != io::ErrorKind::NotFound => {

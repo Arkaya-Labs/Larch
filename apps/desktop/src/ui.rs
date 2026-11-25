@@ -2,7 +2,7 @@
 //! its popover, toasts, the GPU-stopped screen), Home, Chats and a chat. The other pages are in
 //! pages.rs.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -755,6 +755,9 @@ pub struct Ecl {
     pub dls: BTreeMap<String, Dl>,
     /// Faster versions being made, by the original's path: how far (0 to 1) and seconds so far.
     pub fasters: BTreeMap<String, (f64, f64)>,
+    /// Models whose card loads the original although a faster version is made: the person chose
+    /// it, or the faster version did not run faster here. Until the faster version is chosen again.
+    pub originals: BTreeSet<String>,
     pub toast: Option<Toast>,
     pub failed: Option<String>,
     /// A model's speed (`Prefs::tok_s`) changed since prefs were last saved: saved as a reply ends,
@@ -1040,6 +1043,7 @@ impl Ecl {
             hf: Hf::default(),
             dls: BTreeMap::new(),
             fasters: BTreeMap::new(),
+            originals: BTreeSet::new(),
             toast: None,
             loading: None,
             boot: None,
@@ -1621,26 +1625,30 @@ impl Ecl {
                         Act::Load(p.path.clone()),
                     );
                 }
-                // Where a faster version runs better on this computer, it is offered right away.
+                // Where a faster version runs better on this computer, it is offered right away:
+                // in the toast when the download loaded on its own (else the toast's "Use it"
+                // stays, and the card offers it).
                 let (path, name) = (p.path.clone(), logic::base_name(&p.file).to_owned());
-                self.try_call(
-                    cx,
-                    move |c| Ok(c.faster_for(&path).map(|f| (path, f))),
-                    move |s, offer, _| {
-                        if let Some((path, _)) =
-                            offer.filter(|(_, f)| f.copy.is_none() && !f.building)
-                        {
-                            s.say_act(
-                                format!(
-                                    "{name} is downloaded. It can run faster on this computer."
-                                ),
-                                "Make it faster",
-                                Act::Faster(path),
-                            );
-                        }
-                    },
-                    |_, _, _| {},
-                );
+                if first {
+                    self.try_call(
+                        cx,
+                        move |c| Ok(c.faster_for(&path).map(|f| (path, f))),
+                        move |s, offer, _| {
+                            if let Some((path, _)) =
+                                offer.filter(|(_, f)| f.copy.is_none() && !f.building)
+                            {
+                                s.say_act(
+                                    format!(
+                                        "{name} is downloaded. It can run faster on this computer."
+                                    ),
+                                    "Make it faster",
+                                    Act::Faster(path),
+                                );
+                            }
+                        },
+                        |_, _, _| {},
+                    );
+                }
                 self.refresh(cx);
                 self.notify_os(
                     "Download finished",
@@ -1660,9 +1668,16 @@ impl Ecl {
             }
             Event::FasterDone(p) => {
                 self.fasters.remove(&p.path);
+                // The listing has not caught up yet: the switch below loads the copy it names.
+                if let Some(m) = self.models.iter_mut().find(|m| m.path == p.path) {
+                    m.faster = Some(Faster {
+                        copy: Some(p.copy.clone()),
+                        building: false,
+                    });
+                }
                 let name = self.listed_name(&p.path);
                 // Chatting went on on the original meanwhile: it moves to the faster one now. A
-                // reply being written refuses the switch, and the toast's button tries again.
+                // reply being written refuses the switch, and the toast's "Try again" retries it.
                 if self.st.model.as_deref() == Some(p.path.as_str()) {
                     self.use_faster(p.path.clone(), true, cx);
                 } else {
@@ -2573,12 +2588,17 @@ impl Ecl {
 
     /// Starts making the faster version of the model at `path`; its card shows how far it got.
     pub fn make_faster(&mut self, path: String, cx: &mut Context<Self>) {
+        // Shown before the call: a build that fails at once (no disk space) sends its end before
+        // the call returns, and that end removes it.
+        self.fasters.insert(path.clone(), (0., 0.));
         let p = path.clone();
-        self.call(
+        self.try_call(
             cx,
             move |c| c.build_faster(&p),
-            move |s, _, cx| {
-                s.fasters.entry(path).or_insert((0., 0.));
+            |s, _, cx| s.refresh(cx),
+            move |s, e, cx| {
+                s.fasters.remove(&path);
+                s.say(e);
                 s.refresh(cx);
             },
         );
@@ -2602,10 +2622,29 @@ impl Ecl {
         self.st.health = Health::Loading;
         self.try_call(
             cx,
-            move |c| c.use_faster(&path, on),
-            |s, _, cx| s.refresh(cx),
+            {
+                let path = path.clone();
+                move |c| c.use_faster(&path, on)
+            },
+            {
+                let path = path.clone();
+                move |s, _, cx| {
+                    match on {
+                        true => s.originals.remove(&path),
+                        false => s.originals.insert(path),
+                    };
+                    s.refresh(cx)
+                }
+            },
             move |s, e, cx| {
-                s.say(e);
+                // The original runs again, or nothing changed (a reply being written): either
+                // way the person can try the faster version again from here.
+                if on {
+                    s.originals.insert(path.clone());
+                    s.say_act(e, "Try again", Act::UseFaster(path));
+                } else {
+                    s.say(e);
+                }
                 s.loading = None;
                 s.st.health = was;
                 s.refresh(cx);

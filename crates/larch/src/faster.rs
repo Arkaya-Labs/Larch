@@ -60,6 +60,8 @@ pub enum Error {
         need: u64,
         have: u64,
     },
+    /// Something that is not a faster copy is already where the copy would go.
+    Occupied(PathBuf),
     /// The caller stopped it.
     Stopped,
     /// The written copy did not pass its check.
@@ -81,6 +83,11 @@ impl fmt::Display for Error {
                 "The faster version needs {:.1} GB of free disk space and {:.1} GB is free.",
                 gb(*need),
                 gb(*have)
+            ),
+            Error::Occupied(p) => write!(
+                f,
+                "{} is already there and is not a faster version. Move it, or choose another place.",
+                p.display()
             ),
             Error::Stopped => f.write_str("Stopped."),
             Error::Check(e) => write!(f, "The faster version did not pass its check: {e}"),
@@ -136,7 +143,8 @@ pub fn clean(dst: &Path) {
 
 /// Makes the faster copy of `src` at `dst`; `progress(stage, done, total)` reports bytes, and
 /// `false` from it stops the build. `dst` appears only once the copy passed [`check`]; an existing
-/// `dst` that passes is kept as it is, and one that does not is made again.
+/// `dst` that passes is kept as it is, and any other file there is refused, never replaced: it may
+/// be the source itself, or anything else a person keeps there.
 pub fn build(
     src: &Path,
     dst: &Path,
@@ -160,10 +168,7 @@ fn build_with(
 ) -> Result<(), Error> {
     clean(dst);
     if dst.exists() {
-        if check(dst, k).is_ok() {
-            return Ok(());
-        }
-        fs::remove_file(dst)?;
+        return check(dst, k).map_err(|_| Error::Occupied(dst.to_owned()));
     }
     // The copy is smaller than its source: the source's size bounds it.
     let need = k.size + DISK_MARGIN;
@@ -178,7 +183,7 @@ fn build_with(
     if sum != k.sha256 {
         return Err(Error::NotThisFile);
     }
-    let (c, m) = shape(src)?;
+    let (_, _, c, m) = header(src)?;
     let hist = Histogram::parse(k.routes, k.size, c.n_layers, m.experts)
         .ok_or_else(|| Error::Check("the carried histogram is not this model's".into()))?;
     let part = unverified(dst);
@@ -197,28 +202,23 @@ fn build_with(
     published
 }
 
-/// The model's config and MoE shape, from `path`'s header.
-fn shape(path: &Path) -> Result<(ModelConfig, MoeCfg), Error> {
+/// `path`'s header, its length and its model's config and MoE shape.
+fn header(path: &Path) -> Result<(Gguf, u64, ModelConfig, MoeCfg), Error> {
     let file = File::open(path)?;
     let len = file.metadata()?.len();
     let bad = |e: &dyn fmt::Display| Error::Check(e.to_string());
     let g = Gguf::read(BufReader::new(file), len).map_err(|e| bad(&e))?;
     let c = ModelConfig::from_gguf(&g).map_err(|e| bad(&e))?;
     let m = MoeCfg::from_gguf(&g, c.arch).map_err(|e| bad(&e))?;
-    Ok((
-        c,
-        m.ok_or_else(|| Error::Check("no routed experts".into()))?,
-    ))
+    let m = m.ok_or_else(|| Error::Check("no routed experts".into()))?;
+    Ok((g, len, c, m))
 }
 
 /// Whether `path` is a whole faster copy of `k`'s file: it reads as a GGUF of the same model, every
 /// layer lists the cold experts the histogram picks, and each tensor lies inside the file.
 pub fn check(path: &Path, k: &Known) -> Result<(), Error> {
-    let file = File::open(path)?;
-    let len = file.metadata()?.len();
     let bad = |e: String| Err(Error::Check(e));
-    let g = Gguf::read(BufReader::new(file), len).map_err(|e| Error::Check(e.to_string()))?;
-    let (c, m) = shape(path)?;
+    let (g, len, c, m) = header(path)?;
     let Some(hist) = Histogram::parse(k.routes, k.size, c.n_layers, m.experts) else {
         return bad("another model's shape".into());
     };
@@ -391,17 +391,43 @@ mod tests {
     }
 
     #[test]
-    fn what_a_crash_left_is_cleaned_and_a_damaged_copy_made_again() {
+    fn what_a_crash_left_is_cleaned() {
         let (src, dst, k) = setup("crash");
         let dir = dst.parent().unwrap();
         fs::write(dir.join("m.faster.gguf.unverified"), b"half").unwrap();
         fs::write(dir.join("m.faster.gguf.unverified.4242.tmp"), b"half").unwrap();
-        fs::write(&dst, b"not a gguf").unwrap();
-        assert!(matches!(check(&dst, &k), Err(Error::Check(_))));
         build_with(&src, &dst, &k, u64::MAX, &mut |_, _, _| true).unwrap();
         check(&dst, &k).unwrap();
         assert_eq!(others(dir), ["m.faster.gguf"]);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A file at the copy's place that is not a copy is left alone: another file of the person's,
+    /// or the source itself (`larch faster -m m.gguf -o m.gguf`).
+    #[test]
+    fn a_file_in_the_way_is_refused_and_kept() {
+        let (src, dst, k) = setup("occupied");
+        fs::write(&dst, b"not a gguf").unwrap();
+        let e = build_with(&src, &dst, &k, u64::MAX, &mut |_, _, _| true).unwrap_err();
+        assert!(matches!(e, Error::Occupied(_)), "{e}");
+        assert_eq!(fs::read(&dst).unwrap(), b"not a gguf");
+        let before = fs::read(&src).unwrap();
+        let e = build_with(&src, &src, &k, u64::MAX, &mut |_, _, _| true).unwrap_err();
+        assert!(matches!(e, Error::Occupied(_)), "{e}");
+        assert_eq!(fs::read(&src).unwrap(), before, "the source is untouched");
+        fs::remove_dir_all(dst.parent().unwrap()).unwrap();
+    }
+
+    /// The carried row is m13's in bench/models.toml, where model identifiers live: the binary
+    /// ships without that file, so the two are kept equal here.
+    #[test]
+    fn the_known_file_is_m13_of_the_bench_models() {
+        let toml = include_str!("../../../bench/models.toml");
+        let m13 = &toml[toml.find("[m13]").unwrap()..];
+        let m13 = &m13[..m13[1..].find("\n[").map_or(m13.len(), |i| i + 1)];
+        let k = &super::KNOWN[0];
+        assert!(m13.contains(&format!("sha256 = \"{}\"", k.sha256)), "{m13}");
+        assert!(m13.contains(&format!("size = {}\n", k.size)), "{m13}");
     }
 
     #[test]

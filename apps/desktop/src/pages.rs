@@ -548,7 +548,9 @@ fn model_card(s: &Ecl, th: &Theme, m: &ModelEntry, cx: &mut Context<Ecl>) -> Div
         _ => &m.path,
     }))
     .copied();
-    let (path, del, has_copy) = (m.path.clone(), m.path.clone(), copy.is_some());
+    // A model with its faster version made loads as that, unless the original was chosen since.
+    let has_copy = copy.is_some() && !s.originals.contains(&m.path);
+    let (path, del) = (m.path.clone(), m.path.clone());
     let armed = s.armed.as_deref() == Some(m.path.as_str());
     // Larch downloads into the Hugging Face cache, so its models there delete here too.
     let deletable = matches!(m.source.as_str(), "Larch" | "Hugging Face") && !running;
@@ -704,7 +706,6 @@ fn model_card(s: &Ecl, th: &Theme, m: &ModelEntry, cx: &mut Context<Ecl>) -> Div
                                 format!("load-{}", m.path),
                                 "Load",
                                 Btn::Outline,
-                                // A model with its faster version made loads as that.
                                 click(cx, move |s, cx| match has_copy {
                                     true => s.use_faster(path.clone(), true, cx),
                                     false => s.load_model(path.clone(), cx),

@@ -2381,4 +2381,9 @@ fn a_faster_version_that_fails_or_runs_without_graphs_falls_back_to_the_original
         .map(|m| m.path)
         .collect();
     assert_eq!(listed, [model]);
+
+    // Deleting the model deletes its faster version, which no library lists, with it.
+    assert!(copy.exists());
+    app.delete_model(model).unwrap();
+    assert!(!copy.exists(), "the faster version goes with its model");
 }

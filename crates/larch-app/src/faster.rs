@@ -25,7 +25,7 @@ const DIR: &str = "faster";
 
 impl Inner {
     /// Where the copy of `src` goes.
-    fn faster_path(&self, src: &Path) -> PathBuf {
+    pub(crate) fn faster_path(&self, src: &Path) -> PathBuf {
         let name = src.file_stem().unwrap_or_default().to_string_lossy();
         self.data.join(DIR).join(format!("{name}.faster.gguf"))
     }
@@ -34,7 +34,8 @@ impl Inner {
     /// load and it was measured faster) on a GPU that cannot hold the whole original, and a file
     /// [`larch::faster`] carries a histogram for.
     // ponytail: measured on one 16 GB sm_120 card (bench/results/35b-vs-llamacpp-2026-11-25.md);
-    // narrow it by card if a smaller or older GPU measures the copy slower.
+    // elsewhere switch_or_back keeps the copy only where it loads whole with graphs. Narrow the
+    // offer by card if one passes that check and still measures the copy slower.
     pub(crate) fn faster_offer(
         &self,
         src: &Path,
@@ -73,7 +74,11 @@ impl App {
         let stop = Arc::new(AtomicBool::new(false));
         {
             let mut jobs = (self.inner.building.lock()).unwrap_or_else(PoisonError::into_inner);
-            if jobs.iter().any(|(p, _)| *p == src) {
+            // Two libraries' files of the same name share one copy: one build at a time for it.
+            if jobs
+                .iter()
+                .any(|(p, _)| self.inner.faster_path(p) == self.inner.faster_path(&src))
+            {
                 return Err("The faster version is already being made.".into());
             }
             jobs.push((src.clone(), stop.clone()));
@@ -92,11 +97,9 @@ impl App {
 
     /// Stops the faster copy of `path` being made; `faster:failed` (cancelled) follows.
     pub fn cancel_faster(&self, path: &str) -> Result<(), String> {
-        let jobs = (self.inner.building.lock()).unwrap_or_else(PoisonError::into_inner);
-        let (_, stop) = (jobs.iter().find(|(p, _)| p == Path::new(path)))
-            .ok_or("The faster version is not being made.")?;
-        stop.store(true, Ordering::Relaxed);
-        Ok(())
+        (self.inner.stop_build(Path::new(path)))
+            .then_some(())
+            .ok_or_else(|| "The faster version is not being made.".into())
     }
 
     /// Loads the faster copy of the model at `path` (`on`) or the original. A copy that does not
@@ -114,9 +117,11 @@ impl App {
 
     /// Loads `copy` in place of the original at `path`, and keeps it only when it runs as it was
     /// measured faster: loaded whole on the GPU, with its decode graphs on. A copy that fails to
-    /// load is deleted; one that loads short of room (another program holding part of the GPU) is
-    /// kept for later. Either way the original is loaded again and the error says why.
+    /// load and no longer passes its check is deleted; one that loads short of room (another
+    /// program holding part of the GPU) is kept for later. Either way the original is loaded again
+    /// and the error says why.
     pub(crate) fn switch_or_back(&self, path: &str, copy: &Path) -> Result<(), String> {
+        let before = self.app_state().model;
         let why = match self.load_model(&copy.to_string_lossy()) {
             Ok(()) if self.runs_faster() => return Ok(()),
             Ok(()) => {
@@ -124,11 +129,17 @@ impl App {
                  back to the original. Close programs using the GPU and try again."
                     .to_string()
             }
-            // A refusal before the old model was unloaded (a reply being written) leaves it
-            // running, and the copy may well load next time.
-            Err(why) if self.app_state().model.as_deref() == Some(path) => return Err(why),
+            // Refused before anything was unloaded (a reply being written, a load under way): the
+            // model that ran still runs, and the copy may well load next time.
+            Err(why) if before.is_some() && self.app_state().model == before => return Err(why),
+            // A copy that still passes its check is whole: the load failed for want of room or of
+            // the device, so it is kept for later. One that does not is deleted.
             Err(why) => {
-                let _ = std::fs::remove_file(copy);
+                let whole =
+                    faster::known(Path::new(path)).is_some_and(|k| faster::check(copy, k).is_ok());
+                if !whole {
+                    let _ = std::fs::remove_file(copy);
+                }
                 format!(
                     "The faster version did not load, so Larch went back to the original. ({why})"
                 )
@@ -179,6 +190,14 @@ impl Inner {
             }
             !stop.load(Ordering::Relaxed)
         };
+        // The copies' folder is the app's own: a copy there that no longer passes its check (a
+        // disk error since) is made again rather than refused.
+        if let Some(k) = faster::known(src)
+            && dst.is_file()
+            && faster::check(dst, k).is_err()
+        {
+            let _ = std::fs::remove_file(dst);
+        }
         let made = std::fs::create_dir_all(dst.parent().unwrap_or(dst))
             .map_err(faster::Error::from)
             .and_then(|()| faster::build(src, dst, &mut progress));
@@ -194,6 +213,14 @@ impl Inner {
                 message: e.to_string(),
             }),
         });
+    }
+
+    /// Stops the build of `src`'s copy, if one runs: whether one did.
+    pub(crate) fn stop_build(&self, src: &Path) -> bool {
+        let jobs = self.building.lock().unwrap_or_else(PoisonError::into_inner);
+        let job = jobs.iter().find(|(p, _)| p == src);
+        job.inspect(|(_, stop)| stop.store(true, Ordering::Relaxed))
+            .is_some()
     }
 
     fn end_build(&self, src: &Path) {
