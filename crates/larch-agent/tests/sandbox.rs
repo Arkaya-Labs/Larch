@@ -6,11 +6,7 @@
 //! makes that a failure.
 #![cfg(any(target_os = "linux", target_os = "macos", windows))]
 
-use std::{
-    env,
-    path::Path,
-    sync::{Mutex, PoisonError},
-};
+use std::{env, path::Path};
 #[cfg(unix)]
 use std::{
     fs,
@@ -18,20 +14,27 @@ use std::{
     net::TcpListener,
     os::unix::net::UnixListener,
     process::Command,
+    sync::{PoisonError, RwLock, RwLockReadGuard},
     thread,
     time::{Duration, Instant},
 };
 
 use larch_agent::sandbox::{Limits, Output, SandboxError, run};
 
-/// Held through each run. On macOS the process cap counts every process of our uid
-/// (`sandbox::macos`): another test's processes ending during the fork bomb's run would give it
-/// their places.
-static RUNS: Mutex<()> = Mutex::new(());
+/// The fork bomb runs alone (`write`); every other test that starts a process holds `shared`.
+/// On macOS the process cap counts every process of our uid (`sandbox::macos`), so another
+/// test's process that ended during the bomb's run gave it its place.
+#[cfg(unix)]
+static TURN: RwLock<()> = RwLock::new(());
+
+/// A turn beside the other tests but not the fork bomb.
+#[cfg(unix)]
+fn shared() -> RwLockReadGuard<'static, ()> {
+    TURN.read().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// `cmd`'s result in the sandbox, or None, with the reason printed, when this host cannot sandbox.
 fn sandboxed(cmd: &str, worktree: &Path, limits: &Limits) -> Option<Output> {
-    let _turn = RUNS.lock().unwrap_or_else(PoisonError::into_inner);
     match run(cmd, worktree, limits) {
         Err(SandboxError::Unavailable(why)) => {
             assert!(
@@ -52,6 +55,7 @@ fn text(bytes: &[u8]) -> String {
 #[cfg(unix)]
 #[test]
 fn a_tcp_connect_fails() {
+    let _turn = shared();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let served = thread::spawn(move || {
@@ -92,6 +96,7 @@ fn a_tcp_connect_fails() {
 #[cfg(unix)]
 #[test]
 fn a_unix_socket_outside_cannot_be_reached() {
+    let _turn = shared();
     let outside = tempfile::tempdir().unwrap();
     let path = outside.path().join("host.sock");
     let listener = UnixListener::bind(&path).unwrap();
@@ -121,6 +126,7 @@ fn a_unix_socket_outside_cannot_be_reached() {
 #[cfg(unix)]
 #[test]
 fn the_worktree_cannot_be_renamed_from_its_parent() {
+    let _turn = shared();
     let parent = tempfile::tempdir().unwrap();
     let worktree = parent.path().join("0");
     fs::create_dir(&worktree).unwrap();
@@ -134,6 +140,7 @@ fn the_worktree_cannot_be_renamed_from_its_parent() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_datagram_socket_outside_cannot_be_reached() {
+    let _turn = shared();
     let outside = tempfile::tempdir().unwrap();
     let path = outside.path().join("host.dgram");
     let host = std::os::unix::net::UnixDatagram::bind(&path).unwrap();
@@ -163,6 +170,7 @@ fn a_datagram_socket_outside_cannot_be_reached() {
 #[cfg(unix)]
 #[test]
 fn a_write_outside_the_worktree_fails_and_inside_works() {
+    let _turn = shared();
     let (worktree, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let escaped = outside.path().join("escaped");
     let cmd = format!(
@@ -188,6 +196,7 @@ fn a_write_outside_the_worktree_fails_and_inside_works() {
 #[cfg(unix)]
 #[test]
 fn a_read_only_run_writes_only_its_build_folders() {
+    let _turn = shared();
     let (worktree, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let w = worktree.path();
     fs::write(w.join("src.txt"), "mine\n").unwrap();
@@ -238,6 +247,7 @@ fn a_read_only_run_writes_only_its_build_folders() {
 #[cfg(target_os = "linux")]
 #[test]
 fn ownership_and_xattr_changes_fail() {
+    let _turn = shared();
     let worktree = tempfile::tempdir().unwrap();
     fs::write(worktree.path().join("f"), "").unwrap();
     // Both are no-ops that still make the syscall, so the control proves only that the call
@@ -270,6 +280,7 @@ fn ownership_and_xattr_changes_fail() {
 #[cfg(unix)]
 #[test]
 fn a_fork_bomb_hits_the_process_cap() {
+    let _alone = TURN.write().unwrap_or_else(PoisonError::into_inner);
     let worktree = tempfile::tempdir().unwrap();
     let limits = Limits {
         max_procs: 16,
@@ -296,6 +307,7 @@ fn a_fork_bomb_hits_the_process_cap() {
 #[cfg(unix)]
 #[test]
 fn a_stop_ends_a_running_command_before_its_timeout() {
+    let _turn = shared();
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -328,6 +340,7 @@ fn a_stop_ends_a_running_command_before_its_timeout() {
 #[cfg(unix)]
 #[test]
 fn a_sleep_past_the_timeout_kills_the_whole_group() {
+    let _turn = shared();
     let worktree = tempfile::tempdir().unwrap();
     let limits = Limits {
         timeout: Duration::from_secs(1),
@@ -372,6 +385,7 @@ const SECRET: &str = "LARCH_SANDBOX_TEST_KEY";
 #[cfg(unix)]
 #[test]
 fn the_env_holds_no_key_or_token() {
+    let _turn = shared();
     // Our own environment cannot be changed without unsafe, so a copy of this binary runs the
     // check with a key and a token in its environment.
     if env::var_os(SECRET).is_none() {
@@ -421,6 +435,7 @@ fn the_env_holds_no_key_or_token() {
 #[cfg(unix)]
 #[test]
 fn output_past_the_cap_is_truncated_and_flagged() {
+    let _turn = shared();
     let worktree = tempfile::tempdir().unwrap();
     let limits = Limits {
         max_output_bytes: 1000,

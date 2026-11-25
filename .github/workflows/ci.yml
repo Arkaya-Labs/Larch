@@ -84,9 +84,12 @@ jobs:
         run: |
           cargo run -p larch-records --features schema --bin records-schema -- "$RUNNER_TEMP/schema.json"
           python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert "EngineSample" in d["$defs"]' "$RUNNER_TEMP/schema.json"
+      # numpy is the one package beyond the standard library they import (scripts/dflash_convert.py);
+      # the runner's Python has none. apt's lists were updated by the desktop step above.
       - name: Python tests (release scripts and agent benchmarks)
         if: runner.os == 'Linux'
         run: |
+          sudo apt-get install -y --no-install-recommends python3-numpy
           python3 -m unittest discover -s scripts -p 'test_*.py'
           for dir in public research coding; do
             python3 -m unittest discover -s "bench/agent/$dir" -p 'test_*.py'
