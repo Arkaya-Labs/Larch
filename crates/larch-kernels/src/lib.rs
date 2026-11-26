@@ -371,6 +371,13 @@ impl Device {
         })))
     }
 
+    /// The threads a CPU device's ops may use; 0, the default, is one per logical CPU. A GPU device
+    /// answers `Unsupported`.
+    pub fn set_threads(&self, threads: u32) -> Result<(), KError> {
+        // SAFETY: the device is open.
+        check(unsafe { sys::larch_device_set_threads(self.raw(), threads) })
+    }
+
     /// Current properties (`vram_free` changes as memory is allocated).
     pub fn props(&self) -> Result<DeviceProps, KError> {
         // SAFETY: larch_device_props is plain old data; all zeros is a valid value.

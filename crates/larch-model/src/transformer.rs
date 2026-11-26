@@ -864,6 +864,16 @@ fn streams_step(
     from > 0 && pool && prefill >= from && !check && !capturing && !adapters
 }
 
+/// The CPU device's threads beside a GPU: every logical CPU but two, which the engine's thread (it
+/// waits on the GPU between host layers) and the GPU driver's keep. All of them measured a host-expert
+/// layer at one row 415 us against 334 us at 6 of 8 (the hybrid MoE target, 9800X3D, WSL2: 8 logical
+/// CPUs), +5 % at W4@1, the same at 4 rows.
+// ponytail: two, measured on one 8-CPU host; re-derive on a host with more cores, or where the
+// engine's own work per step grows.
+fn beside_gpu_threads(logical: usize) -> u32 {
+    logical.saturating_sub(2).max(1) as u32
+}
+
 /// The token embedding in host memory, as llama.cpp keeps it beside a GPU's MoE: the table `w`
 /// (`[vocab, d]` as the GGUF stores it) on the CPU device, which gathers a step's rows into `out`
 /// (f32 `[rows, d]`) by `ids` (i32 `[rows]`), staged in `x` for one upload into the scratch x.
@@ -2057,7 +2067,13 @@ impl Transformer {
                 };
                 let cpu = match host.is_empty() && embd.is_none() {
                     true => None,
-                    false => Some(Device::open(CPU_COMPUTE).map_err(backend)?),
+                    false => {
+                        let cpu = Device::open(CPU_COMPUTE).map_err(backend)?;
+                        let logical = std::thread::available_parallelism().map_or(1, |n| n.get());
+                        cpu.set_threads(beside_gpu_threads(logical))
+                            .map_err(backend)?;
+                        Some(cpu)
+                    }
                 };
                 let on_cpu = || cpu.as_ref().ok_or(backend(KError::InvalidArg));
                 let calloc = |bytes: u64| {
@@ -4437,6 +4453,16 @@ mod tests {
     }
     use crate::{Arch, tiny};
     use larch_kernels::CPU;
+
+    /// Two logical CPUs stay with the engine's thread and the GPU driver's; never fewer than one.
+    #[test]
+    fn host_experts_leave_two_cpus_to_the_engine_and_the_driver() {
+        assert_eq!(beside_gpu_threads(8), 6);
+        assert_eq!(beside_gpu_threads(16), 14);
+        assert_eq!(beside_gpu_threads(3), 1);
+        assert_eq!(beside_gpu_threads(2), 1);
+        assert_eq!(beside_gpu_threads(1), 1);
+    }
 
     fn linear_fixture(rows: u32, name: &str) -> (Device, Stream, Transformer) {
         let path = std::env::temp_dir().join(format!("larch-{name}-{}.gguf", std::process::id()));
