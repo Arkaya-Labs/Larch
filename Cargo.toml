@@ -21,3 +21,9 @@ undocumented_unsafe_blocks = "deny"
 # with a misaligned LINKEDIT string pool that rustc cannot load (E0463, #68). Binaries are still stripped.
 [profile.release.build-override]
 strip = false
+
+# A chat title's grammar (larch-app's NAME_PATTERN) builds its DFA in about 0.5 s optimized and
+# 5.6 s unoptimized, past the 5 s an unload waits for a naming job. Debug builds, and so the
+# tests, optimize the DFA builder.
+[profile.dev.package.regex-automata]
+opt-level = 3

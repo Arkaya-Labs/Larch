@@ -375,6 +375,10 @@ pub(crate) fn text_in(file: &Path, bytes: &[u8], stop: &AtomicBool) -> Result<St
         return Ok(String::from_utf8_lossy(bytes).into_owned());
     }
     let mut poppler = || {
+        // Another pdftotext gives no reason worth showing: the built-in reader's error is.
+        if !ocr::poppler() {
+            return Err(String::new());
+        }
         let mut cmd = Command::new("pdftotext");
         crate::tool::no_window(&mut cmd)
             .args(["-q", "-enc", "UTF-8"])

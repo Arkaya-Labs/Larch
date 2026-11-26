@@ -1240,7 +1240,10 @@ mod tests {
             [&fits[..fits.len() - 5]]
         );
         // Only the starts within `MAX_URL` of the page's end reach an end: the text's.
-        let hostile = "http://".repeat(300_000);
+        // 60,000 starts read at most 123M chars, about 4 s in a debug build; read to the page's
+        // end, they would read 100 times that. 300,000 starts took over 20 s in a debug build on
+        // a hosted CI Mac.
+        let hostile = "http://".repeat(60_000);
         let started = std::time::Instant::now();
         let n = urls_in(&hostile).count();
         assert!(n <= MAX_URL / "http://".len() + 1, "{n}");

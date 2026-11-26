@@ -1745,7 +1745,11 @@ mod tests {
         let error = transcript
             .write_with(&reset, |file, line| {
                 file.write_all(&line[..17])?;
-                // A read-only descriptor makes rollback fail with a real I/O error.
+                // A read-only descriptor makes rollback fail with a real I/O error. Unlock the
+                // locked one first, as Drop would: a fork in another test can hold its
+                // description open until exec, and the lock with it, so resume below would
+                // see the transcript as in use.
+                file.unlock()?;
                 *file = File::open(&path)?;
                 Err(std::io::ErrorKind::StorageFull.into())
             })

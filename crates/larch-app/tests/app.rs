@@ -33,6 +33,9 @@ const DEADLINE: Duration = Duration::from_secs(30);
 /// a fast desktop, over 30 s on the Windows CI laptop.
 const AGENT_DEADLINE: Duration = Duration::from_secs(120);
 static NEXT: AtomicU64 = AtomicU64::new(0);
+/// A projector beside a model turns its images on, except on macOS, where the app reads none
+/// (`mmproj_beside`).
+const READS_IMAGES: bool = !cfg!(target_os = "macos");
 
 struct Temp(PathBuf);
 impl Temp {
@@ -535,7 +538,14 @@ fn model_list_marks_unsupported_and_skips_other_files() {
     // ponytail: BLOCKED on #123; the stand-in fit check answers Unknown. Assert `Fits` once it lands.
     assert_eq!(tiny.fit, Fit::Unknown);
     assert!(!tiny.quant.is_empty());
-    assert!(app.load_model(&list[0].path).is_err());
+    // The replies other tests stopped are process-wide (`workers::wait_stopped`): one still ending
+    // refuses an unload before the load starts, with no event, whatever the model.
+    assert!(larch_agent::workers::wait_stopped(DEADLINE));
+    let refused = app.load_model(&list[0].path).unwrap_err();
+    assert!(
+        refused.ends_with("unsupported model architecture"),
+        "{refused}"
+    );
     assert_eq!(app.app_state().health, Health::Empty);
     let health: Vec<_> = rx.try_iter().collect();
     assert_eq!(
@@ -681,12 +691,16 @@ fn agent_turn(rx: &Receiver<Event>, id: &str) -> Vec<ChatEvent> {
 /// Every chat event of `id` up to and including the one `last` picks.
 fn until(rx: &Receiver<Event>, id: &str, last: impl Fn(&ChatEvent) -> bool) -> Vec<ChatEvent> {
     let mut events = Vec::new();
-    let end = Instant::now() + AGENT_DEADLINE;
+    let (end, mut heard) = (Instant::now() + AGENT_DEADLINE, Instant::now());
     loop {
-        let e = rx
-            .recv_timeout(end - Instant::now())
-            .expect("an agent turn's end");
+        // On a miss, whether the turn was still going (a slow runner) or had stopped (a hang).
+        let e = rx.recv_timeout(end - Instant::now()).unwrap_or_else(|e| {
+            let quiet = heard.elapsed();
+            let (n, tail) = (events.len(), &events[events.len().saturating_sub(3)..]);
+            panic!("an agent turn's end: {e}; {n} events, none for {quiet:?}, the last {tail:?}")
+        });
         if let Event::Chat { id: chat, event } = e {
+            heard = Instant::now();
             assert_eq!(chat, id);
             let last = last(&event);
             events.push(event);
@@ -715,7 +729,7 @@ fn a_generic_projector_serves_every_quant_of_its_model() {
     .unwrap();
     let list = app.list_models().unwrap();
     assert_eq!(list.len(), 2);
-    assert!(list.iter().all(|m| m.vision), "{list:?}");
+    assert!(list.iter().all(|m| m.vision == READS_IMAGES), "{list:?}");
     let projector = models.join("mmproj-F16.gguf");
     app.delete_model(&list[0].path).unwrap();
     assert!(projector.exists(), "the other quant still reads with it");
@@ -748,6 +762,7 @@ fn an_image_that_pushes_out_an_older_one_names_it() {
 
 /// A projector beside the model that does not load with it (another model's width): the model loads
 /// alone, the app says why, and the listing stops saying the model reads images.
+#[cfg(not(target_os = "macos"))] // READS_IMAGES
 #[test]
 fn a_projector_that_does_not_load_says_why() {
     let dir = Temp::new();
@@ -801,6 +816,7 @@ fn a_projector_that_does_not_load_says_why() {
 /// Image paste end to end on the CPU: a projector beside the model turns images on; an image is taken
 /// as it is added, goes with its message, stays with the chat (its reference, its bytes), and goes
 /// with the chat. Without a projector, images are refused before any step.
+#[cfg(not(target_os = "macos"))] // READS_IMAGES
 #[test]
 fn images_go_with_a_message_and_stay_with_the_chat() {
     let dir = Temp::new();
@@ -1059,9 +1075,12 @@ fn a_name_that_cannot_be_saved_is_tried_again_after_the_next_answer() {
     app.agent_send(&id, "hello", None, Some(Intent::Chat), &[])
         .unwrap();
     agent_turn(&rx, &id);
+    let asked = Instant::now();
     let named = until(&rx, &id, |e| {
         matches!(e, ChatEvent::Title { .. } | ChatEvent::TitleFailed { .. })
     });
+    // The quiet retry below names the same message, so it takes about as long.
+    let naming = asked.elapsed();
     assert!(
         matches!(named.last(), Some(ChatEvent::TitleFailed { .. })),
         "{named:?}"
@@ -1069,10 +1088,11 @@ fn a_name_that_cannot_be_saved_is_tried_again_after_the_next_answer() {
     assert!(!saved.exists());
     assert_eq!(app.list_chats().unwrap()[0].title, "hello");
     // The same failure after the next answer is retried quietly: the user was told once. The
-    // tiny model names a chat in well under the wait.
+    // wait covers the retry three times over, and at least 3 s: on a slow runner (hosted
+    // Windows) a fixed 3 s ended first, the folder went, and the retry saved its name.
     (app.agent_send(&id, "still", None, Some(Intent::Chat), &[])).unwrap();
     agent_turn(&rx, &id);
-    let end = Instant::now() + Duration::from_secs(3);
+    let end = Instant::now() + (3 * naming).max(Duration::from_secs(3));
     while let Ok(e) = rx.recv_timeout(end.saturating_duration_since(Instant::now())) {
         assert!(
             !matches!(

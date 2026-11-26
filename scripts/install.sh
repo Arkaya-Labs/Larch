@@ -6,8 +6,8 @@ fail() { echo "larch setup: $1" >&2; exit 1; }
 case "$(uname -s):$(uname -m)" in
   Linux:x86_64|Linux:amd64)
     [ "$(getconf LONG_BIT)" = 64 ] || fail '32-bit Linux is unsupported'
-    target=x86_64-unknown-linux-gnu ;;
-  Darwin:arm64|Darwin:aarch64) target=aarch64-apple-darwin ;;
+    target=x86_64-unknown-linux-gnu os=Linux ;;
+  Darwin:arm64|Darwin:aarch64) target=aarch64-apple-darwin os=macOS ;;
   Darwin:*) fail 'Intel Mac is unsupported; Apple silicon is required' ;;
   *) fail 'unsupported OS or CPU; use 64-bit x86 Linux or Apple silicon macOS' ;;
 esac
@@ -61,12 +61,15 @@ if [ -n "${LARCH_RELEASES_TOKEN:-}" ]; then
 else
   get "https://raw.githubusercontent.com/$repo/channels/$channel.json" "$temp/pointer.json" application/json
 fi
-python3 - "$temp/pointer.json" "$target" "$channel" "$repo" > "$temp/selected" <<'PY'
+python3 - "$temp/pointer.json" "$target" "$channel" "$repo" "$os" > "$temp/selected" <<'PY'
 import json,re,sys
 def require(ok):
  if not ok: raise SystemExit('larch setup: invalid channel pointer')
-p=json.load(open(sys.argv[1]));a=p['setup'][sys.argv[2]]
-require(p['schema']==1 and p['channel']==sys.argv[3])
+p=json.load(open(sys.argv[1]))
+require(p['schema']==1 and p['channel']==sys.argv[3] and isinstance(p['setup'],dict))
+# A release that does not build this target has no setup for it in its pointer.
+if sys.argv[2] not in p['setup']: raise SystemExit('larch setup: Larch for '+sys.argv[5]+' is coming soon; this release does not include it. See https://github.com/'+sys.argv[4])
+a=p['setup'][sys.argv[2]]
 require(re.fullmatch('[0-9a-fA-F]{64}',a['sha256']) and isinstance(a['size'],int) and a['size']>0)
 url=a['url'];prefix='https://github.com/'+sys.argv[4]+'/releases/download/'
 require(url.startswith(prefix))

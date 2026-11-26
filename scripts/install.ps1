@@ -12,6 +12,7 @@ $repo = 'Arkaya-Labs/Larch'
 $repoPattern = [regex]::Escape($repo)
 $target = 'x86_64-pc-windows-msvc'
 $channel = 'stable'
+$comingSoon = $false
 # With no options but --channel, setup opens its window; --terminal or any other option keeps it
 # here. --terminal is this script's own and is not passed on.
 $terminal = $false
@@ -50,6 +51,8 @@ try {
     $pointer = Get-Content -Raw -LiteralPath $pointerFile | ConvertFrom-Json
     if ($pointer.schema -ne 1 -or $pointer.channel -cne $channel) { throw 'unsupported pointer or wrong channel' }
     $setup = $pointer.setup.$target
+    # A release that does not build Windows has no Windows setup in its pointer.
+    if ($null -ne $pointer.setup -and $null -eq $setup) { $comingSoon = $true; throw 'no Windows build' }
     if ($null -eq $setup -or $setup.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or $setup.size -le 0) { throw 'channel has no valid setup for this target' }
     $url = [string]$setup.url
     if ($url -notmatch ('^https://github\.com/' + $repoPattern + '/releases/download/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$')) { throw 'setup URL is outside the release repository' }
@@ -73,7 +76,7 @@ try {
     if ($terminal) { & $exe install --bootstrap @pass }
     $result = $LASTEXITCODE
 } catch {
-    [Console]::Error.WriteLine('larch setup: download or verification failed; check the release source and retry')
+    if ($comingSoon) { [Console]::Error.WriteLine("larch setup: Larch for Windows is coming soon; this release does not include it. See https://github.com/$repo") } else { [Console]::Error.WriteLine('larch setup: download or verification failed; check the release source and retry') }
     $result = 1
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force

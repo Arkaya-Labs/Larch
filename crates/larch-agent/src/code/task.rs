@@ -1711,6 +1711,7 @@ mod tests {
 
     /// Python sources get one import of the changed modules the base has and one compile of the
     /// new ones, and nothing when none changed.
+    #[cfg(not(windows))]
     #[test]
     fn python_is_imported_in_one_run() {
         let checks = checks(&names(&["pkg/a.py", "README.md"]));
@@ -1731,6 +1732,7 @@ mod tests {
     }
 
     /// JavaScript gets node --check on each changed .js file.
+    #[cfg(not(windows))]
     #[test]
     fn javascript_is_checked_file_by_file() {
         let checks = checks(&names(&["web/app.js", "index.html"]));
@@ -1742,6 +1744,7 @@ mod tests {
     }
 
     /// A Go module gets go vet on each folder of a changed .go file, once; no go.mod, no check.
+    #[cfg(not(windows))]
     #[test]
     fn go_is_vetted_by_changed_package() {
         let checks = checks(&names(&["go.mod", "ledger.go", "sub/x.go"]));
@@ -1755,6 +1758,7 @@ mod tests {
 
     /// Java compiles from the Maven or Gradle source folder with a build file, without one only
     /// a few loose files, never running an annotation processor.
+    #[cfg(not(windows))]
     #[test]
     fn java_needs_a_build_file_or_a_few_files() {
         let built = checks(&names(&["build.gradle", "src/main/java/a/A.java"]));
@@ -1770,6 +1774,7 @@ mod tests {
     }
 
     /// C++ gets a syntax-only compile of the changed .cpp files, in a folder of a few sources.
+    #[cfg(not(windows))]
     #[test]
     fn cpp_is_compiled_syntax_only_in_a_small_folder() {
         let small = checks(&names(&["adder.cpp", "adder.h", "CMakeLists.txt"]));
@@ -1778,6 +1783,21 @@ mod tests {
         assert!(run.ends_with(" 'adder.cpp'"), "{run}");
         let many: Vec<String> = (0..=LOOSE).map(|n| format!("a{n}.cpp")).collect();
         assert!(checks(&many).is_empty());
+    }
+
+    /// Windows gets no build checks: cmd.exe neither takes their quotes nor expands $TMPDIR.
+    #[cfg(windows)]
+    #[test]
+    fn windows_gets_no_build_checks() {
+        let files = names(&[
+            "pkg/a.py",
+            "web/app.js",
+            "go.mod",
+            "a.go",
+            "pom.xml",
+            "adder.cpp",
+        ]);
+        assert!(checks(&files).is_empty());
     }
 
     /// Django runs the apps of the tests near the change, pytest the test files, a small suite

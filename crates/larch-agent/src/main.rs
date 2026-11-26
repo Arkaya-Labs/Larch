@@ -1413,7 +1413,17 @@ fn data_dir() -> Result<PathBuf> {
         .join("larch"))
 }
 
+/// `run` on a thread with an 8 MB stack, Linux's main one: its arms share one frame, which in a
+/// debug build overflows the 1 MB of Windows' main thread.
 fn main() -> Result<ExitCode> {
+    let cli = (thread::Builder::new().name("main".into()))
+        .stack_size(8 << 20)
+        .spawn(run)?;
+    cli.join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+fn run() -> Result<ExitCode> {
     match Cli::parse().cmd {
         Cmd::Task {
             data_dir: directory,

@@ -42,7 +42,18 @@ impl Temp {
 }
 impl Drop for Temp {
     fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
+        // A program the test started can still be exiting (the app setup relaunched, which ends
+        // once it writes its marker): Windows refuses to delete its file until it has.
+        let mut tries = 0;
+        while let Err(e) = fs::remove_dir_all(&self.0) {
+            tries += 1;
+            assert!(
+                e.kind() == std::io::ErrorKind::PermissionDenied && tries < 50,
+                "{}: {e}",
+                self.0.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
 }
 /// Generates fresh primary and backup keys for this test.

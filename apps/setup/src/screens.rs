@@ -23,6 +23,10 @@ use crate::engine::{self, Failure, Msg};
 use crate::kit::{Btn, bar, button, card, eyebrow, icon, mono, print, serif, u};
 use crate::theme::{Dark, Light, Theme, fade};
 
+/// The fonts' license. The SIL Open Font License must go with each copy of the fonts, and on
+/// Windows and Linux this window is downloaded as a single file, so it carries the text itself.
+const FONT_LICENSE: &str = include_str!("../../desktop/assets/fonts/OFL.txt");
+
 /// The plan larch-setup prints for a `--dry-run`: what it would download and install, and where.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Plan {
@@ -201,6 +205,8 @@ pub struct Setup {
     checking: bool,
     uninstalling: bool,
     dark: bool,
+    /// The licenses page is open over the current screen.
+    licenses: bool,
 }
 
 /// A screen's scrolling content, and the buttons pinned under it.
@@ -256,6 +262,7 @@ impl Setup {
             checking: false,
             uninstalling,
             dark: dark(window.appearance()),
+            licenses: false,
         };
         s.boot(cx);
         s
@@ -679,6 +686,7 @@ impl Render for Setup {
         let th = self.theme();
         let step = self.step();
         let (body, foot) = match self.screen.clone() {
+            _ if self.licenses => self.licenses_page(&th, cx),
             Screen::Loading => self.loading(&th),
             Screen::Choose => self.choose(&th, cx),
             Screen::Model => self.model_screen(&th, cx),
@@ -705,7 +713,16 @@ impl Render for Setup {
             .text_color(th.ink)
             .font_family("Figtree")
             .text_size(u(14.))
-            .child(side(&th, step))
+            .child(side(
+                &th,
+                step,
+                div()
+                    .id("licenses")
+                    .underline()
+                    .cursor_pointer()
+                    .on_click(on(cx, |s, _| s.licenses = true))
+                    .child("Licenses"),
+            ))
             .child(
                 div()
                     .flex_1()
@@ -749,6 +766,25 @@ impl Setup {
             Screen::Done { fresh: true, .. } => Some(4),
             _ => None,
         }
+    }
+
+    /// The licenses of what this window is built from, over whatever screen is on show.
+    fn licenses_page(&self, th: &Theme, cx: &mut Context<Self>) -> Page {
+        let body = screen(
+            th,
+            "Licenses",
+            "Larch is under the Apache License 2.0. This window includes the fonts below, \
+             under their own license.",
+        )
+        .child(mono(FONT_LICENSE).text_color(th.ink2).line_height(u(18.)));
+        let back = button(
+            th,
+            "licenses-back",
+            "Back",
+            Btn::Ghost,
+            on(cx, |s, _| s.licenses = false),
+        );
+        (body, Some(footer(th, "", vec![back])))
     }
 
     fn loading(&self, th: &Theme) -> Page {
@@ -1457,8 +1493,9 @@ impl Setup {
 
 // ---------- pieces ----------
 
-/// The side: the Larch mark and name, the fresh install's steps, and the license line.
-fn side(th: &Theme, step: Option<usize>) -> Div {
+/// The side: the Larch mark and name, the fresh install's steps, and the license line with the
+/// link to the licenses page.
+fn side(th: &Theme, step: Option<usize>, licenses: impl IntoElement) -> Div {
     let mut steps = div().flex().flex_col().gap(u(6.));
     if let Some(at) = step {
         for (i, s) in STEPS.iter().enumerate() {
@@ -1529,9 +1566,13 @@ fn side(th: &Theme, step: Option<usize>) -> Div {
         .child(div().flex_1())
         .child(
             div()
+                .flex()
+                .flex_col()
+                .gap(u(8.))
                 .text_size(u(12.5))
                 .text_color(th.ink3)
-                .child("Free and open source under the Apache License 2.0."),
+                .child("Free and open source under the Apache License 2.0.")
+                .child(licenses),
         )
 }
 
@@ -1816,6 +1857,23 @@ mod tests {
     }
 
     /// A later row's progress finishes every row before it, and a finished row moves on.
+    /// The window carries the license of every font built into it, as the OFL asks.
+    #[test]
+    fn the_licenses_page_holds_the_license_of_every_built_in_font() {
+        assert!(FONT_LICENSE.contains("SIL Open Font License, Version 1.1"));
+        for font in crate::FILES.iter().filter_map(|f| f.strip_prefix("fonts/")) {
+            let family = font
+                .split('-')
+                .next()
+                .unwrap()
+                .replace("JetBrainsMono", "JetBrains Mono");
+            assert!(
+                FONT_LICENSE.contains(&format!("The {family} Project Authors")),
+                "{font}"
+            );
+        }
+    }
+
     #[test]
     fn progress_moves_down_the_rows_by_bytes() {
         let mut r = run(&[("app", 100.), ("cli", 300.), ("apply", 32.)]);

@@ -1041,17 +1041,20 @@ fn read_adds_a_pages_pictures_and_tables_or_says_this_machine_cannot() {
             );
         }
     }
+    // The room left comes last: after the table, or after the note that says why there is none.
     match table::available() {
         true => {
             let rows = r"| Level | Response | Fix |\n|---|---|---|\n| Severe | 1 hour | 8 hours |";
             assert!(fed.contains(rows), "{fed}");
+            assert!(fed.contains(r"| 10 days |\nRoom left: about"), "{fed}");
         }
-        false => assert!(
-            fed.contains("Tables cannot be read: word boxes need"),
-            "{fed}"
-        ),
+        false => {
+            let note = "Tables cannot be read: word boxes need";
+            assert!(fed.contains(note), "{fed}");
+            let last = r"which is not installed on this machine.\nRoom left: about";
+            assert!(fed.contains(last), "{fed}");
+        }
     }
-    assert!(fed.contains(r"| 10 days |\nRoom left: about"), "{fed}");
 }
 
 #[test]
@@ -1249,13 +1252,33 @@ fn a_scanned_pdf_links_summary_reads_its_pictures_and_a_followup_quotes_them() {
     let mut agent = fake.agent();
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pages/scanned.pdf");
-    let url = common::serve_as("application/pdf", fs::read(fixture).unwrap());
+    let bytes = fs::read(fixture).unwrap();
+    let sha256 = larch::bench::hex(&larch::bench::sha256(&bytes));
+    let url = common::serve_as("application/pdf", bytes);
     fake.say(&call("read_papers", json!({"papers": [url]})));
     fake.say("A services agreement.");
     let got = events(agent.turn(&format!("summarize {url}")).unwrap());
     let said = larch_agent::AgentEvent::Progress("Reading scanned pages: 2 of 2".into());
     assert!(got.contains(&said), "{got:?}");
-    assert!(fake.fed().contains("The warranty lasts seven years"));
+    let fed = fake.fed();
+    // A page whose OCR failed keeps its text layer without a word of why: on a miss, the link's
+    // kept original and what OCR says of its first page tell a failed read from a lost one.
+    let why = || {
+        let blob = source::blob(&fake.data(), &sha256);
+        let page = ocr::read(
+            Some(&blob),
+            &sha256,
+            0,
+            &fake.data(),
+            &AtomicBool::new(false),
+        );
+        let kept = blob.is_file();
+        format!(
+            "{} kept: {kept}; OCR of page 1: {page:?}\n{fed}",
+            blob.display()
+        )
+    };
+    assert!(fed.contains("The warranty lasts seven years"), "{}", why());
     // The follow-up reopens the link with its pictures' text, and its check matches the quote.
     let question = "How long is the warranty?";
     fake.say(&call(

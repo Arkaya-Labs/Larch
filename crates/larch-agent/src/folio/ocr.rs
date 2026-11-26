@@ -3,7 +3,7 @@
 use std::{
     collections::HashMap,
     env, fs,
-    path::Path,
+    path::{Path, PathBuf},
     process::Command,
     sync::{
         LazyLock, Mutex,
@@ -153,6 +153,21 @@ pub(super) fn installed(program: &str) -> bool {
     env::var_os("PATH").is_some_and(|path| env::split_paths(&path).any(|d| d.join(&name).is_file()))
 }
 
+/// Whether the `pdftotext` on PATH is poppler's, which the readers here are written for, as its
+/// `-v` says. Another program of that name (the Windows CI runner's) joined a page's lines into
+/// one, so no page label was found, and has no `-bbox-layout`. Asked once in a process.
+pub(crate) fn poppler() -> bool {
+    static POPPLER: LazyLock<bool> = LazyLock::new(|| {
+        let mut cmd = Command::new("pdftotext");
+        no_window(&mut cmd).arg("-v");
+        cmd.output().is_ok_and(|out| {
+            let said = [out.stdout, out.stderr].concat();
+            String::from_utf8_lossy(&said).contains("Poppler")
+        })
+    });
+    *POPPLER
+}
+
 /// Page `page`'s lines by this OS's engine. Every branch is compiled on every OS, so each is
 /// checked wherever the crate builds.
 // ponytail: the file is an absolute path from every caller, so no "-" can start it.
@@ -160,11 +175,15 @@ fn engine(pdf: &Path, page: usize, stop: &AtomicBool) -> Result<Vec<Word>, Strin
     let out = if cfg!(target_os = "macos") {
         return vision(pdf, page, "lines", stop);
     } else if cfg!(windows) {
-        // In the environment, as -Command takes the rest of its line as script text.
+        // In the environment, as -Command takes the rest of its line as script text. Its
+        // StorageFile.GetFileFromPathAsync refuses a `/`, which a path joined from "a/b" keeps
+        // (a link's blob, under "agent/docs/blobs"): out of its verbatim form, where a `/` is
+        // no separator, the components rejoin with `\`.
+        let pdf: PathBuf = crate::tool::plain(pdf.to_path_buf()).components().collect();
         let mut cmd = Command::new("powershell.exe");
         no_window(&mut cmd)
             .args(["-NoProfile", "-NonInteractive", "-Command", WINDOWS])
-            .env("LARCH_OCR_PDF", crate::tool::plain(pdf.to_path_buf()))
+            .env("LARCH_OCR_PDF", pdf)
             .env("LARCH_OCR_PAGE", page.to_string())
             .env("LARCH_OCR_SCALE", (DPI / 96.0).to_string());
         output_until(cmd, LIMIT, stop)?
