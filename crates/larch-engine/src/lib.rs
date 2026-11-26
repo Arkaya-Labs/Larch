@@ -1578,16 +1578,16 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                 if free >= need(slots) || !c.arch.hybrid() {
                     return fits_after_load(m, planned, before.vram_free, free, need(slots));
                 }
-                let freed = |k: u32| free + u64::from(slots - k) * t.slot_bytes;
-                let low = settle_low(slots, floor);
-                match settle_slots(free, slots, floor, t.slot_bytes, need) {
-                    Some(k) => slots = k,
+                // Only a planned GPU load with a layer left to move can trade one for a slot.
+                let keep = planned && !last && before.backend == larch_kernels::Backend::Cuda;
+                let low = settle_low(slots, floor, keep);
+                match settle_slots(free, slots, low, t.slot_bytes, need) {
+                    Ok(k) => slots = k,
                     // Short even at the floor: the host layers cover what it leaves.
-                    None if planned || slots == low => {
-                        let (free, need) = (freed(low), need(low));
-                        return fits_after_load(m, planned, before.vram_free, free, need);
+                    Err(freed) if planned || slots == low => {
+                        return fits_after_load(m, planned, before.vram_free, freed, need(low));
                     }
-                    None => slots = low,
+                    Err(_) => slots = low,
                 }
             }
         };
@@ -2156,31 +2156,34 @@ fn graphs_paid(planned: bool, seats: u32, layers: u32, total: usize) -> bool {
     planned && seats != 0 && layers > 0 && (layers as usize) < total
 }
 
-/// The fewest state slots the check after a load gives up to: the plan's `floor`, but never below
+/// The fewest state slots the check after a load gives up to: the plan's `floor`, but where the
+/// load can move another layer (`keep`: planned, on CUDA, a layer left) never below
 /// [`engine::MANY_SEATS`] when the plan gave that many. Four chats on three seats queue one (W4@4
-/// on the hybrid MoE target, 5070 Ti: 112.7 against 174 tok/s, its graphs eager), so a load short
-/// of its fourth slot refuses with the shortfall and moves one more host layer instead.
-fn settle_low(slots: u32, floor: u32) -> u32 {
-    match slots >= engine::MANY_SEATS {
+/// on the hybrid MoE target, 5070 Ti: 112.7 against 174 tok/s, its graphs eager), so such a load
+/// short of its fourth slot refuses with the shortfall and moves one more host layer instead, at
+/// one chat's cost of that layer.
+fn settle_low(slots: u32, floor: u32, keep: bool) -> u32 {
+    match keep && slots >= engine::MANY_SEATS {
         true => floor.max(engine::MANY_SEATS),
         false => floor,
     }
     .min(slots)
 }
 
-/// The most state slots, from `slots` down to [`settle_low`], whose freed state (`slot_bytes`
-/// each) leaves `free` at least `need` of them; None when even that many are short.
+/// The most state slots, from `slots` down to `low`, whose freed state (`slot_bytes` each) leaves
+/// `free` at least `need` of them; else what `low` slots would leave free.
 fn settle_slots(
     free: u64,
     slots: u32,
-    floor: u32,
+    low: u32,
     slot_bytes: u64,
     need: impl Fn(u32) -> u64,
-) -> Option<u32> {
+) -> Result<u32, u64> {
     let freed = |k: u32| free + u64::from(slots - k) * slot_bytes;
-    (settle_low(slots, floor)..slots)
+    (low..slots)
         .rev()
         .find(|&k| freed(k) >= need(k))
+        .ok_or(freed(low))
 }
 
 /// A refused load: its error, and the bytes more host layers must free when a load fitted but left
@@ -3410,18 +3413,32 @@ mod tests {
             k => 608_244_358 - u64::from(3 - k) * 28_912_940,
         };
         let free = 630_738_944;
+        let low = |slots, floor| super::settle_low(slots, floor, true);
         // Planned 4, floor 1: the check may not drop below the 4 seats the plan gave.
-        assert_eq!(super::settle_slots(free, 4, 1, slot, need), None);
+        assert_eq!(
+            super::settle_slots(free, 4, low(4, 1), slot, need),
+            Err(free)
+        );
         // Planned 7 (the faster copy): dropping to 5 still seats 4 chats.
         let roomy = |k: u32| 500_000_000 + u64::from(k) * 30_000_000;
-        assert_eq!(super::settle_slots(600_000_000, 7, 1, slot, roomy), Some(5));
+        assert_eq!(
+            super::settle_slots(600_000_000, 7, low(7, 1), slot, roomy),
+            Ok(5)
+        );
         // A plan of fewer slots than MANY_SEATS gives them up to its floor, as before.
         assert_eq!(
-            super::settle_slots(free - 64_389_120, 3, 1, slot, need),
-            Some(2)
+            super::settle_slots(free - slot, 3, low(3, 1), slot, need),
+            Ok(2)
+        );
+        // A load that cannot move a layer (not planned, every layer on the host, not CUDA) gives
+        // slots up to its floor as before.
+        assert_eq!(super::settle_low(4, 1, false), 1);
+        assert_eq!(
+            super::settle_slots(free, 4, super::settle_low(4, 1, false), slot, need),
+            Ok(3)
         );
         // The floor itself is never dropped below; short there, the load refuses.
-        assert_eq!(super::settle_slots(100, 2, 2, slot, need), None);
+        assert_eq!(super::settle_slots(100, 2, low(2, 2), slot, need), Err(100));
     }
 
     #[test]

@@ -2455,7 +2455,8 @@ impl Transformer {
         }
     }
 
-    /// Prefill steps that streamed their host experts ([`Placement::stream_rows`]); 0 without a pool.
+    /// Steps whose prefill chunk streamed its host experts, mixed steps too ([`Placement::stream_rows`]);
+    /// 0 without a pool.
     pub fn streamed_steps(&self) -> u64 {
         self.stream.as_ref().map_or(0, |p| p.borrow().steps)
     }
@@ -4342,7 +4343,7 @@ impl Transformer {
         if self.streaming
             && let Some(p) = &self.stream
         {
-            p.borrow_mut().begin(s, rows)?;
+            p.borrow_mut().begin(s, i64::from(b.prefill_rows))?;
         }
         if let Some(b) = state {
             self.route_state(s, b)?;
