@@ -54,8 +54,8 @@ Switching models unloads the current one first. Chats keep their history but sta
 Some models are larger than the GPU. For those Larch knows how to speed up, the model's card offers
 **Faster on this computer** on an NVIDIA GPU that cannot hold the whole file. **Make it faster** writes
 a second copy of the model in which the experts it rarely uses are stored in less detail, so all of
-it fits on the GPU. Quality is slightly lower; the copy takes a few minutes and about as much disk as
-the model. Chats keep running on the original meanwhile, and the app switches to the copy when it is
+it fits on the GPU. Quality is slightly lower; the copy takes a few minutes and about 17 GB of disk
+for the 35B, in Larch's data folder (on Windows usually the system drive), not the model's folder. Chats keep running on the original meanwhile, and the app switches to the copy when it is
 ready. **Use the original** switches back. The original file is never changed.
 
 ![The faster version on a model card: offered, being made, and in use](assets/app-faster-light.png#gh-light-mode-only)
