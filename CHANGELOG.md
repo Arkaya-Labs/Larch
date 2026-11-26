@@ -5,7 +5,8 @@ before 1.0, a minor version can change interfaces and file formats.
 
 ## 0.1.0 (unreleased)
 
-The first public release.
+The first public release, for Apple silicon Macs (Metal and CPU). Windows and Linux builds are
+coming soon; until then their install commands say so and stop.
 
 ### Engine
 - Runs GGUF models of the `llama`, `qwen2`, `qwen3`, `qwen3moe`, `qwen35` and `qwen35moe`

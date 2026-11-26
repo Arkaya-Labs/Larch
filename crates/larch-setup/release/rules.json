@@ -6,8 +6,6 @@
   ],
   "amd_ids": {},
   "flavours": {
-    "x86_64-unknown-linux-gnu":["cpu","cuda","hip"],
-    "x86_64-pc-windows-msvc":["cpu","cuda"],
     "aarch64-apple-darwin":["cpu","metal"]
   },
   "hip_targets":["gfx1030","gfx1100","gfx1101","gfx1102","gfx1200","gfx1201"],

@@ -35,6 +35,14 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
+      # What this release builds, from the `flavours` table in rules.json (the manifest declares the
+      # same table, and the draft refuses a declared flavour that was not built).
+      targets: ${{ steps.version.outputs.targets }}
+      cpu: ${{ steps.version.outputs.cpu }}
+      runtimes: ${{ steps.version.outputs.runtimes }}
+      runners: ${{ steps.version.outputs.runners }}
+      backends: ${{ steps.version.outputs.backends }}
+      metal: ${{ steps.version.outputs.metal }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -44,7 +52,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           python3 - <<'PY'
-          import importlib.util, os
+          import importlib.util, json, os
           from pathlib import Path
           spec=importlib.util.spec_from_file_location('release', 'scripts/release-manifest.py')
           release=importlib.util.module_from_spec(spec);spec.loader.exec_module(release)
@@ -53,7 +61,18 @@ jobs:
           if os.environ['GITHUB_REPOSITORY'] != release.REPO: raise SystemExit('releases are built only in '+release.REPO+', not '+os.environ['GITHUB_REPOSITORY'])
           tag=os.environ['RELEASE_TAG']
           if not tag.startswith('v') or not release.valid_version(tag[1:]): raise SystemExit('invalid release tag')
-          with Path(os.environ['GITHUB_OUTPUT']).open('a') as stream: stream.write('version='+tag[1:]+'\ntag='+tag+'\n')
+          flavours=json.loads(Path('crates/larch-setup/release/rules.json').read_text())['flavours']
+          runner={'x86_64-unknown-linux-gnu':'ubuntu-24.04','x86_64-pc-windows-msvc':'windows-2025','aarch64-apple-darwin':'macos-26'}
+          out={'version':tag[1:], 'tag':tag,
+               'targets':[{'runner':runner[t], 'target':t} for t in flavours],
+               'cpu':[{'runner':runner[t], 'target':t} for t, fs in flavours.items() if 'cpu' in fs],
+               'runtimes':[{'runner':runner[t], 'target':t, 'flavour':f} for t, fs in flavours.items() for f in fs if f in ('cuda', 'hip')],
+               'runners':sorted({runner[t] for t in flavours}),
+               # backend-builds.yml builds every CUDA and HIP flavour together, so any one of them runs it.
+               'backends':any(f in ('cuda', 'hip') for fs in flavours.values() for f in fs),
+               'metal':'metal' in flavours.get('aarch64-apple-darwin', [])}
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as stream:
+            for key, value in out.items(): stream.write(key+'='+(value if isinstance(value, str) else json.dumps(value))+'\n')
           PY
       # The jobs below hand files to each other as this draft's assets, not as Actions artifacts:
       # one release outgrows the artifact quota. A re-tag starts from an empty draft; a dispatch from a
@@ -70,7 +89,7 @@ jobs:
     needs: version
     permissions:
       contents: write
-    if: ${{ !inputs.from || inputs.from == 'build' }}
+    if: ${{ (!inputs.from || inputs.from == 'build') && needs.version.outputs.backends == 'true' }}
     uses: ./.github/workflows/backend-builds.yml
     with:
       release: true
@@ -80,7 +99,7 @@ jobs:
     needs: version
     permissions:
       contents: write
-    if: ${{ !inputs.from || inputs.from == 'build' }}
+    if: ${{ (!inputs.from || inputs.from == 'build') && needs.version.outputs.metal == 'true' }}
     uses: ./.github/workflows/macos.yml
     with:
       release: true
@@ -88,17 +107,11 @@ jobs:
       version: ${{ needs.version.outputs.version }}
   cpu:
     needs: version
-    if: ${{ !inputs.from || inputs.from == 'build' }}
+    if: ${{ (!inputs.from || inputs.from == 'build') && needs.version.outputs.cpu != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-          - runner: macos-15
-            target: aarch64-apple-darwin
+        include: ${{ fromJSON(needs.version.outputs.cpu) }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
@@ -134,13 +147,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-          - runner: macos-15
-            target: aarch64-apple-darwin
+        include: ${{ fromJSON(needs.version.outputs.targets) }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
@@ -176,20 +183,11 @@ jobs:
           python scripts/release-manifest.py --version "$VERSION" --stage dist/setup-*.tar.zst dist/larch-setup-* dist/larch-installer-*
   runtimes:
     needs: [version, cpu, setup, backends, metal]
-    if: ${{ !failure() && !cancelled() && (!inputs.from || inputs.from == 'build' || inputs.from == 'runtimes') }}
+    if: ${{ !failure() && !cancelled() && (!inputs.from || inputs.from == 'build' || inputs.from == 'runtimes') && needs.version.outputs.runtimes != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            flavour: cuda
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-            flavour: cuda
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            flavour: hip
+        include: ${{ fromJSON(needs.version.outputs.runtimes) }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
@@ -248,7 +246,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, windows-2025, macos-15]
+        runner: ${{ fromJSON(needs.version.outputs.runners) }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
