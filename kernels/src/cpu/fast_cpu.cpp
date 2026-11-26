@@ -349,13 +349,13 @@ larch_status fast_fused_moe_gate_up(larch_stream* s, const larch_tensor* gate_w,
     const view x = c.gate.x, ids = c.gate.ids, o = c.gate.out;
     const view w[2] = {c.gate.w, c.up.w};
     const int64_t rows = x.rows, slots = ids.cols, k = w[0].cols, n = o.shape[o.ndim - 1], experts = w[0].rows / n;
-    for (int64_t r = 0; r < rows; ++r)
-      for (int64_t j = 0; j < slots; ++j) need(ids.i32(r, j) >= 0 && ids.i32(r, j) < experts, "expert id out of range");
     thread_local id_scratch sc;
     std::vector<int32_t>& iv = sc.iv;
     iv.resize(size_t(rows * slots));
-    for (int64_t r = 0; r < rows; ++r)
-      for (int64_t j = 0; j < slots; ++j) iv[size_t(r * slots + j)] = ids.i32(r, j);
+    for (int64_t p = 0; p < rows * slots; ++p) {
+      iv[size_t(p)] = ids.i32(p / slots, p % slots);
+      need(iv[size_t(p)] >= 0 && iv[size_t(p)] < experts, "expert id out of range");
+    }
     std::vector<int64_t>& used = sc.used;
     used.assign(iv.begin(), iv.end());
     std::sort(used.begin(), used.end());

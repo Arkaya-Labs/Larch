@@ -2259,12 +2259,9 @@ impl Transformer {
                 }
                 // From here the weights are read-only: the pool's copy thread reads them too.
                 let src = host_experts.as_mut().and_then(|h| h.weights.share_host());
-                let at = match src {
-                    Some(_) => (layers.iter())
-                        .map(|l| l.map(|p| held_at(&host_at, p.0 - g.data_offset, p.1)))
-                        .collect(),
-                    None => Vec::new(),
-                };
+                let at = (layers.iter())
+                    .map(|l| l.map(|p| held_at(&host_at, p.0 - g.data_offset, p.1)))
+                    .collect();
                 Some(StreamPlan {
                     layers,
                     slot_bytes,
