@@ -387,9 +387,132 @@ fn size_tag(name: &str) -> Option<String> {
     ))
 }
 
+/// The card's "Faster on this computer" section: the offer, the copy being made, or the switch
+/// between the faster version and the original. None where no faster version is offered.
+fn faster_el(s: &Ecl, th: &Theme, m: &ModelEntry, cx: &mut Context<Ecl>) -> Option<Div> {
+    let f = m.faster.as_ref()?;
+    let on = f.copy.is_some() && s.st.model == f.copy;
+    let making = s
+        .fasters
+        .get(&m.path)
+        .copied()
+        .or(f.building.then_some((0., 0.)));
+    let (path, th2) = (m.path.clone(), *th);
+    let head = div().flex().flex_wrap().items_center().gap(u(8.)).child(
+        div()
+            .font_weight(FontWeight::SEMIBOLD)
+            .child("Faster on this computer"),
+    );
+    let note = |t: String| div().text_size(u(13.)).text_color(th2.ink2).child(t);
+    let body =
+        if let Some((frac, secs)) = making {
+            let p = path.clone();
+            div()
+            .flex()
+            .flex_col()
+            .gap(u(8.))
+            .child(
+                head.child(
+                    div()
+                        .text_size(u(13.))
+                        .text_color(th.ink2)
+                        .child(logic::making_left(frac, secs)),
+                ),
+            )
+            .child(bar(th, &[(frac as f32, th.sun.into())], 6.))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap(u(8.))
+                    .child(div().flex_1().min_w(u(200.)).child(note(
+                        "You can keep chatting meanwhile. It switches over when it is ready."
+                            .into(),
+                    )))
+                    .child(button(
+                        th,
+                        format!("faster-cancel-{path}"),
+                        "Cancel",
+                        Btn::Ghost,
+                        click(cx, move |s, cx| {
+                            let p = p.clone();
+                            s.call(cx, move |c| c.cancel_faster(&p), |_, _, _| {})
+                        }),
+                    )),
+            )
+        } else if f.copy.is_some() {
+            let p = path.clone();
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .gap(u(8.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(u(4.))
+                        .child(head.child(tag(th, if on { "On" } else { "Off" })))
+                        .child(note(match on {
+                            true => "Running the faster version.".into(),
+                            false => "The faster version is ready.".into(),
+                        })),
+                )
+                .child(button(
+                    th,
+                    format!("faster-use-{path}"),
+                    if on {
+                        "Use the original"
+                    } else {
+                        "Use the faster version"
+                    },
+                    if on { Btn::Outline } else { Btn::Primary },
+                    click(cx, move |s, cx| s.use_faster(p.clone(), !on, cx)),
+                ))
+        } else {
+            let p = path.clone();
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .gap(u(8.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(u(4.))
+                        .flex_1()
+                        .min_w(u(200.))
+                        .child(head.child(tag(th, "Recommended")))
+                        .child(note(logic::FASTER_NOTE.into())),
+                )
+                .child(button(
+                    th,
+                    format!("faster-make-{path}"),
+                    "Make it faster",
+                    Btn::Primary,
+                    click(cx, move |s, cx| s.make_faster(p.clone(), cx)),
+                ))
+        };
+    Some(
+        div()
+            .pt(u(12.))
+            .border_t_1()
+            .border_color(th.line)
+            .child(body),
+    )
+}
+
 fn model_card(s: &Ecl, th: &Theme, m: &ModelEntry, cx: &mut Context<Ecl>) -> Div {
     let th2 = *th;
-    let running = s.st.model.as_ref() == Some(&m.path);
+    // Its faster version running is this model running.
+    let copy = m.faster.as_ref().and_then(|f| f.copy.as_ref());
+    let running =
+        s.st.model.as_ref() == Some(&m.path) || (copy.is_some() && s.st.model.as_ref() == copy);
     let loading = running && s.st.health == Health::Loading;
     let have = s.gpu_bytes();
     let (fit, fit_c, right, frac) = match &m.fit {
@@ -420,7 +543,13 @@ fn model_card(s: &Ecl, th: &Theme, m: &ModelEntry, cx: &mut Context<Ecl>) -> Div
         }
         Fit::Unknown => ("Not checked", th.ink3, String::new(), None),
     };
-    let tok = s.prefs.tok_s.get(&m.path).copied();
+    let tok = (s.prefs.tok_s.get(match copy.filter(|_| running) {
+        Some(c) if s.st.model.as_ref() == Some(c) => c,
+        _ => &m.path,
+    }))
+    .copied();
+    // A model with its faster version made loads as that, unless the original was chosen since.
+    let has_copy = copy.is_some() && !s.originals.contains(&m.path);
     let (path, del) = (m.path.clone(), m.path.clone());
     let armed = s.armed.as_deref() == Some(m.path.as_str());
     // Larch downloads into the Hugging Face cache, so its models there delete here too.
@@ -507,6 +636,7 @@ fn model_card(s: &Ecl, th: &Theme, m: &ModelEntry, cx: &mut Context<Ecl>) -> Div
                 )
                 .child(div().min_w_0().text_color(th.ink2).child(right)),
         )
+        .children(faster_el(s, th, m, cx))
         .child(div().flex_1().min_h(u(16.)))
         .child(
             div()
@@ -576,7 +706,10 @@ fn model_card(s: &Ecl, th: &Theme, m: &ModelEntry, cx: &mut Context<Ecl>) -> Div
                                 format!("load-{}", m.path),
                                 "Load",
                                 Btn::Outline,
-                                click(cx, move |s, cx| s.load_model(path.clone(), cx)),
+                                click(cx, move |s, cx| match has_copy {
+                                    true => s.use_faster(path.clone(), true, cx),
+                                    false => s.load_model(path.clone(), cx),
+                                }),
                             ))
                         })
                         .when(deletable && m.supported && !armed, |d| {

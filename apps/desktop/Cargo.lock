@@ -3333,6 +3333,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "fs2",
  "larch-engine",
  "larch-fetch",
  "larch-kernels",

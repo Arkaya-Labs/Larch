@@ -6,6 +6,7 @@ pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("LARCH_C
 pub mod api;
 pub mod bench;
 pub mod chat;
+pub mod faster;
 pub mod info;
 pub mod knob;
 pub mod parity;

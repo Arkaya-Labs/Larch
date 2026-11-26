@@ -3,6 +3,7 @@
 
 pub mod connections;
 pub mod contract;
+mod faster;
 pub mod handoff;
 mod hf;
 pub use hf::is_moe;
@@ -74,6 +75,12 @@ pub enum Event {
     DownloadDone(DownloadDone),
     /// `download:failed`.
     DownloadFailed(DownloadFailed),
+    /// `faster:progress`.
+    FasterProgress(FasterProgress),
+    /// `faster:done`.
+    FasterDone(FasterDone),
+    /// `faster:failed`.
+    FasterFailed(FasterFailed),
     /// `code:allowed`.
     Allowed(FolderAllowed),
     /// `mcp:status`.
@@ -92,6 +99,9 @@ impl Event {
             Event::DownloadProgress(_) => "download:progress".into(),
             Event::DownloadDone(_) => "download:done".into(),
             Event::DownloadFailed(_) => "download:failed".into(),
+            Event::FasterProgress(_) => "faster:progress".into(),
+            Event::FasterDone(_) => "faster:done".into(),
+            Event::FasterFailed(_) => "faster:failed".into(),
             Event::Allowed(_) => "code:allowed".into(),
             Event::Mcp(_) => "mcp:status".into(),
         }
@@ -108,6 +118,9 @@ impl Event {
             Event::DownloadProgress(p) => serde_json::to_value(p),
             Event::DownloadDone(d) => serde_json::to_value(d),
             Event::DownloadFailed(f) => serde_json::to_value(f),
+            Event::FasterProgress(p) => serde_json::to_value(p),
+            Event::FasterDone(d) => serde_json::to_value(d),
+            Event::FasterFailed(f) => serde_json::to_value(f),
             Event::Allowed(a) => serde_json::to_value(a),
             Event::Mcp(m) => serde_json::to_value(m),
         }
@@ -263,6 +276,8 @@ struct Inner {
     tasks: Mutex<Option<task::Hosted>>,
     state: Mutex<State>,
     hub: hf::Hub,
+    /// The faster copies being made ([`faster`]): each original's path and its stop flag.
+    building: Mutex<Vec<(PathBuf, Arc<AtomicBool>)>>,
     /// Other apps' model folders that list_models also reads: (app, folder, levels below it).
     others: Mutex<Vec<(String, PathBuf, usize)>>,
     /// The GPU's name, total and free memory, read the first time the UI asks (before a model
@@ -732,6 +747,7 @@ impl App {
                 emit,
                 state: Mutex::default(),
                 hub: hf::Hub::new(),
+                building: Mutex::default(),
                 others: Mutex::new(other_model_dirs()),
                 gpu: OnceLock::new(),
                 libraries: Mutex::new(libraries),
@@ -759,15 +775,7 @@ impl App {
             Some(m) if m.larch.health().state == HealthState::Failed => Health::Failed,
             Some(_) => Health::Ready,
         };
-        let device = self.inner.device;
-        let gpu = self.inner.gpu.get_or_init(|| {
-            let p = (device != larch_kernels::CPU).then(|| {
-                larch_kernels::Device::open(device)
-                    .and_then(|d| d.props())
-                    .ok()
-            })??;
-            Some((p.name, p.vram_total, p.vram_free))
-        });
+        let gpu = self.inner.gpu();
         AppState {
             health,
             model: st.model.as_ref().map(|m| m.path.clone()),
@@ -890,13 +898,19 @@ impl App {
         // The library's own spelling, so the paths below compare with the folder's listing.
         let name = name.to_string_lossy().into_owned();
         let file = dir.join(&name);
-        // The loaded model is this file only when both resolve: two missing files are not the same.
+        // Its faster version goes with it: no library lists that copy, so nothing else could
+        // remove it. (Another library's file of the same name shares it; its card makes it again.)
+        let copy = self.inner.faster_path(&file);
+        // The loaded model is this file (or its copy) only when both resolve: two missing files are
+        // not the same.
         let in_use = |st: &State| {
             let loaded = st
                 .model
                 .as_ref()
                 .and_then(|m| fs::canonicalize(&m.path).ok());
-            loaded.is_some() && loaded == fs::canonicalize(&file).ok()
+            loaded.is_some()
+                && (loaded == fs::canonicalize(&file).ok()
+                    || loaded == fs::canonicalize(&copy).ok())
         };
         // Held from the check to the delete: no task service starts on the engine being unloaded.
         let mut tasks = self.inner.tasks();
@@ -925,12 +939,15 @@ impl App {
         // Its projector goes with it, unless another model of the folder pairs with it too: a stray
         // projector would pair with the next model that takes the folder alone.
         let projectors = projectors_named_for(&file);
-        let doomed: Vec<PathBuf> = match hf::split_part(&name) {
+        let mut doomed: Vec<PathBuf> = match hf::split_part(&name) {
             Some((stem, _, n)) => (1..=n)
                 .map(|i| dir.join(format!("{stem}-{i:05}-of-{n:05}.gguf")))
                 .collect(),
             None => vec![file.clone()],
         };
+        self.inner.stop_build(&file);
+        larch::faster::clean(&copy);
+        doomed.push(copy.clone());
         for f in doomed {
             match remove_model_file(&f) {
                 Err(e) if e.kind() != io::ErrorKind::NotFound => {
@@ -1065,6 +1082,11 @@ impl App {
                 && !(self.inner.projector_errors.lock())
                     .unwrap_or_else(PoisonError::into_inner)
                     .contains_key(path.to_string_lossy().as_ref()),
+            faster: (self.inner).faster_offer(
+                &path,
+                size_bytes,
+                self.inner.gpu().as_ref().map(|g| g.1),
+            ),
         })
     }
 
@@ -2326,6 +2348,19 @@ impl Inner {
 
     fn tasks(&self) -> MutexGuard<'_, Option<task::Hosted>> {
         self.tasks.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The GPU's name, total and free memory, read once ([`Inner::gpu`]'s field).
+    fn gpu(&self) -> &Option<(String, u64, u64)> {
+        let device = self.device;
+        self.gpu.get_or_init(|| {
+            let p = (device != larch_kernels::CPU).then(|| {
+                larch_kernels::Device::open(device)
+                    .and_then(|d| d.props())
+                    .ok()
+            })??;
+            Some((p.name, p.vram_total, p.vram_free))
+        })
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {

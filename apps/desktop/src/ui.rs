@@ -2,7 +2,7 @@
 //! its popover, toasts, the GPU-stopped screen), Home, Chats and a chat. The other pages are in
 //! pages.rs.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -577,6 +577,10 @@ pub enum Act {
     Undo(Receipt),
     Load(String),
     DownloadAnyway(String, String),
+    /// Make the faster version of the model at this path.
+    Faster(String),
+    /// Switch the model at this path to its faster version.
+    UseFaster(String),
 }
 
 /// A short message at the bottom, with at most one button.
@@ -749,6 +753,11 @@ pub struct Ecl {
     pub editing: Option<(String, String)>,
     pub hf: Hf,
     pub dls: BTreeMap<String, Dl>,
+    /// Faster versions being made, by the original's path: how far (0 to 1) and seconds so far.
+    pub fasters: BTreeMap<String, (f64, f64)>,
+    /// Models whose card loads the original although a faster version is made: the person chose
+    /// it, or the faster version did not run faster here. Until the faster version is chosen again.
+    pub originals: BTreeSet<String>,
     pub toast: Option<Toast>,
     pub failed: Option<String>,
     /// A model's speed (`Prefs::tok_s`) changed since prefs were last saved: saved as a reply ends,
@@ -1033,6 +1042,8 @@ impl Ecl {
             editing: None,
             hf: Hf::default(),
             dls: BTreeMap::new(),
+            fasters: BTreeMap::new(),
+            originals: BTreeSet::new(),
             toast: None,
             loading: None,
             boot: None,
@@ -1606,12 +1617,36 @@ impl Ecl {
                     if !note.is_empty() {
                         self.say(note.trim_start().to_owned());
                     }
-                    self.load_model(p.path, cx);
+                    self.load_model(p.path.clone(), cx);
                 } else {
                     self.say_act(
                         format!("{} is downloaded.{note}", logic::base_name(&p.file)),
                         "Use it",
-                        Act::Load(p.path),
+                        Act::Load(p.path.clone()),
+                    );
+                }
+                // Where a faster version runs better on this computer, it is offered right away:
+                // in the toast when the download loaded on its own (else the toast's "Use it"
+                // stays, and the card offers it).
+                let (path, name) = (p.path.clone(), logic::base_name(&p.file).to_owned());
+                if first {
+                    self.try_call(
+                        cx,
+                        move |c| Ok(c.faster_for(&path).map(|f| (path, f))),
+                        move |s, offer, _| {
+                            if let Some((path, _)) =
+                                offer.filter(|(_, f)| f.copy.is_none() && !f.building)
+                            {
+                                s.say_act(
+                                    format!(
+                                        "{name} is downloaded. It can run faster on this computer."
+                                    ),
+                                    "Make it faster",
+                                    Act::Faster(path),
+                                );
+                            }
+                        },
+                        |_, _, _| {},
                     );
                 }
                 self.refresh(cx);
@@ -1627,6 +1662,45 @@ impl Ecl {
                 } else {
                     self.say_act(p.message, "Try again", Act::DownloadAnyway(p.repo, p.file));
                 }
+            }
+            Event::FasterProgress(p) => {
+                self.fasters.insert(p.path, (p.fraction, p.seconds));
+            }
+            Event::FasterDone(p) => {
+                self.fasters.remove(&p.path);
+                // The listing has not caught up yet: the switch below loads the copy it names.
+                if let Some(m) = self.models.iter_mut().find(|m| m.path == p.path) {
+                    m.faster = Some(Faster {
+                        copy: Some(p.copy.clone()),
+                        building: false,
+                    });
+                }
+                let name = self.listed_name(&p.path);
+                // Chatting went on on the original meanwhile: it moves to the faster one now. A
+                // reply being written refuses the switch, and the toast's "Try again" retries it.
+                if self.st.model.as_deref() == Some(p.path.as_str()) {
+                    self.use_faster(p.path.clone(), true, cx);
+                } else {
+                    self.say_act(
+                        format!("The faster version of {name} is ready."),
+                        "Use it",
+                        Act::UseFaster(p.path.clone()),
+                    );
+                }
+                self.notify_os(
+                    "Faster version ready",
+                    &format!("{name} now runs faster on this computer."),
+                );
+                self.refresh(cx);
+            }
+            Event::FasterFailed(p) => {
+                self.fasters.remove(&p.path);
+                self.say(if p.cancelled {
+                    "Stopped making the faster version.".to_owned()
+                } else {
+                    p.message
+                });
+                self.refresh(cx);
             }
             Event::Allowed(_) => {}
             // A server connected, failed, signed in or was turned off.
@@ -2446,6 +2520,8 @@ impl Ecl {
             Act::Undo(r) => self.call_undo(r, cx),
             Act::Load(p) => self.load_model(p, cx),
             Act::DownloadAnyway(repo, file) => self.download(repo, file, true, cx),
+            Act::Faster(p) => self.make_faster(p, cx),
+            Act::UseFaster(p) => self.use_faster(p, true, cx),
         }
     }
 
@@ -2503,6 +2579,77 @@ impl Ecl {
                 logic::base_name(last)
             ));
         }
+    }
+
+    /// A listed model's name (its faster version's too), else its file's.
+    fn listed_name(&self, path: &str) -> String {
+        listing(&self.models, path).map_or(logic::base_name(path).to_owned(), |m| m.name.clone())
+    }
+
+    /// Starts making the faster version of the model at `path`; its card shows how far it got.
+    pub fn make_faster(&mut self, path: String, cx: &mut Context<Self>) {
+        // Shown before the call: a build that fails at once (no disk space) sends its end before
+        // the call returns, and that end removes it.
+        self.fasters.insert(path.clone(), (0., 0.));
+        let p = path.clone();
+        self.try_call(
+            cx,
+            move |c| c.build_faster(&p),
+            |s, _, cx| s.refresh(cx),
+            move |s, e, cx| {
+                s.fasters.remove(&path);
+                s.say(e);
+                s.refresh(cx);
+            },
+        );
+    }
+
+    /// Runs the model at `path` as its faster version (`on`) or as the original. A faster version
+    /// that does not load is deleted and the original loaded again; the toast says so.
+    pub fn use_faster(&mut self, path: String, on: bool, cx: &mut Context<Self>) {
+        let target = match on {
+            true => (self.models.iter().find(|m| m.path == path))
+                .and_then(|m| m.faster.as_ref()?.copy.clone())
+                .unwrap_or_else(|| path.clone()),
+            false => path.clone(),
+        };
+        self.say(match on {
+            true => "Switching to the faster version",
+            false => "Switching to the original",
+        });
+        let was = self.st.health;
+        self.loading = Some((target, Instant::now()));
+        self.st.health = Health::Loading;
+        self.try_call(
+            cx,
+            {
+                let path = path.clone();
+                move |c| c.use_faster(&path, on)
+            },
+            {
+                let path = path.clone();
+                move |s, _, cx| {
+                    match on {
+                        true => s.originals.remove(&path),
+                        false => s.originals.insert(path),
+                    };
+                    s.refresh(cx)
+                }
+            },
+            move |s, e, cx| {
+                // The original runs again, or nothing changed (a reply being written): either
+                // way the person can try the faster version again from here.
+                if on {
+                    s.originals.insert(path.clone());
+                    s.say_act(e, "Try again", Act::UseFaster(path));
+                } else {
+                    s.say(e);
+                }
+                s.loading = None;
+                s.st.health = was;
+                s.refresh(cx);
+            },
+        );
     }
 
     /// Loads the model at `path`.
@@ -3084,13 +3231,7 @@ impl Ecl {
 
     /// The running model's name.
     pub fn model_name(&self) -> Option<String> {
-        let p = self.st.model.as_ref()?;
-        Some(
-            self.models
-                .iter()
-                .find(|m| &m.path == p)
-                .map_or(logic::base_name(p).to_owned(), |m| m.name.clone()),
-        )
+        Some(self.listed_name(self.st.model.as_ref()?))
     }
 
     /// Keeps papers for the next message, which attaches them before it goes; `tell`, in an open
@@ -3317,17 +3458,24 @@ pub fn loads(quant: &str) -> bool {
     .any(|p| quant.starts_with(p))
 }
 
+/// The listed model whose file is `path`, or whose faster version is: that version is not listed,
+/// and its original's card stands for it.
+pub fn listing<'a>(models: &'a [ModelEntry], path: &str) -> Option<&'a ModelEntry> {
+    let copy = |m: &ModelEntry| m.faster.as_ref().and_then(|f| f.copy.as_deref()) == Some(path);
+    models.iter().find(|m| m.path == path || copy(m))
+}
+
 /// The model a launch loads again (path, name, expected ms): the last one loaded, while it is still
 /// in a library and runs. The expected time is its last load's, else about 1 GB/s from disk plus
 /// the engine's start.
 pub fn relaunch(prefs: &Prefs, models: &[ModelEntry]) -> Option<(String, String, f64)> {
     let last = prefs.last_model.as_ref()?;
-    let m = models.iter().find(|m| &m.path == last && m.supported)?;
+    let m = listing(models, last).filter(|m| m.supported)?;
     let expect = prefs
         .load_ms
-        .get(&m.path)
+        .get(last)
         .map_or(m.size_bytes as f64 / 1e6 + 3000., |&ms| ms as f64);
-    Some((m.path.clone(), m.name.clone(), expect))
+    Some((last.clone(), m.name.clone(), expect))
 }
 
 /// The file a repo's row offers: the best-liked quant that fits in `have` bytes, single files
@@ -7341,6 +7489,7 @@ mod tests {
             source: String::new(),
             library: String::new(),
             vision: false,
+            faster: None,
         };
         let mut p = Prefs::default();
         let models = [entry("a.gguf", true), entry("b.gguf", false)];
@@ -7356,6 +7505,21 @@ mod tests {
         assert_eq!(relaunch(&p, &models), None);
         p.last_model = Some("gone.gguf".into());
         assert_eq!(relaunch(&p, &models), None);
+        // A faster version, which is not listed, loads again through its original's entry.
+        let mut a = entry("a.gguf", true);
+        a.faster = Some(Faster {
+            copy: Some("a.faster.gguf".into()),
+            building: false,
+        });
+        p.last_model = Some("a.faster.gguf".into());
+        assert_eq!(
+            listing(std::slice::from_ref(&a), "a.faster.gguf").map(|m| &m.path),
+            Some(&a.path)
+        );
+        assert_eq!(
+            relaunch(&p, &[a]),
+            Some(("a.faster.gguf".into(), "a.gguf".into(), 8000.))
+        );
     }
 
     /// The row offers the best-liked quant that fits, single files first, else the smallest; never a

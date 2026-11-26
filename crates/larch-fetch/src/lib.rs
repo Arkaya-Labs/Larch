@@ -479,6 +479,27 @@ pub fn sha256_file(path: &Path) -> io::Result<String> {
     Ok(hex(&hash.finalize()))
 }
 
+/// [`sha256_file`] that reports the bytes hashed so far after each read; `false` from `progress`
+/// stops it with [`io::ErrorKind::Interrupted`].
+pub fn sha256_file_progress(
+    path: &Path,
+    progress: &mut dyn FnMut(u64) -> bool,
+) -> io::Result<String> {
+    let (mut file, mut hash) = (File::open(path)?, Sha256::new());
+    let (mut buf, mut done) = (vec![0; 1 << 20], 0u64);
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            return Ok(hex(&hash.finalize()));
+        }
+        hash.update(&buf[..n]);
+        done += n as u64;
+        if !progress(done) {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+    }
+}
+
 fn hash_into(mut reader: impl Read, hash: &mut Sha256) -> io::Result<()> {
     let mut buf = vec![0; 1 << 20];
     loop {

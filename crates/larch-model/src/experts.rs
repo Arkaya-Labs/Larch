@@ -91,7 +91,16 @@ impl Histogram {
         if fs::metadata(path).ok()?.len() != want as u64 {
             return None;
         }
-        let b = fs::read(path).ok().filter(|b| b.len() == want)?;
+        Histogram::parse(&fs::read(path).ok()?, file_len, layers, experts)
+    }
+
+    /// [`Histogram::read`] of bytes already in memory: a histogram the binary carries.
+    pub fn parse(b: &[u8], file_len: u64, layers: u32, experts: u32) -> Option<Histogram> {
+        let n = (layers as usize).checked_mul(experts as usize)?;
+        let want = n.checked_mul(8)?.checked_add(HEADER)?;
+        if b.len() != want {
+            return None;
+        }
         let u32_at = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().expect("4 bytes"));
         let u64_at = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().expect("8 bytes"));
         if b[..8] != MAGIC || u64_at(8) != file_len || u32_at(16) != layers || u32_at(20) != experts
