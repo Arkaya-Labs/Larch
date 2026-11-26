@@ -3,6 +3,7 @@
 // the target (fast_*_avx2.cpp on x86-64 with AVX2 and FMA, fast_*_neon.cpp on ARM64). Without one, or for a
 // dtype it lacks, an op runs the reference's code.
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <atomic>
 #include <chrono>
@@ -179,6 +180,9 @@ pool& threads_pool() {
   return p;
 }
 
+// Pairs per distinct expert from which mmvq_id groups a call's pairs by expert (mmvq_id_on).
+constexpr int64_t GROUPED = 4;
+
 // A calling thread's mmvq_id scratch, kept between calls: once a step of the largest shape has run, a step
 // allocates nothing.
 struct id_scratch {
@@ -241,7 +245,6 @@ larch_status mmvq_id_on(larch_stream* s, const larch_tensor* w_quant, const larc
     const int64_t n_pairs = rows * slots, blocks = (n + FAST_COLS - 1) / FAST_COLS;
     // The pairs by expert (a counting sort). Past GROUPED pairs per expert used (a prefill), each expert's rows
     // are decoded once and dotted with every x that chose it, where the per-pair GEMV decodes them for each.
-    constexpr int64_t GROUPED = 4;
     std::vector<int64_t>&start = sc.start, &order = sc.order, &used = sc.used;
     start.assign(size_t(experts + 1), 0);
     used.clear();
@@ -330,6 +333,67 @@ larch_status fast_mmvq_id(larch_stream* s, const larch_tensor* w_quant, const la
                            const larch_tensor* ids_i32, const larch_tensor* bias_or_null,
                            const larch_tensor* weights_or_null, const larch_tensor* out) {
   return mmvq_id_on(s, w_quant, x_f16, ids_i32, bias_or_null, weights_or_null, out, true);
+}
+
+// fused_moe_gate_up (larch.h) on the fast kernels, for the per-pair shapes of a decode step: the sequence's bytes
+// (mmvq_id's f16 g and u, then ops.cpp's silu_mul) with x prepared once and one pool job, in which each chunk of
+// (row, slot, column block) items runs its gate items, the same up items, then silu_mul on those columns. Shapes
+// mmvq_id groups by expert (a prefill), an x per slot, and dtypes without a fast kernel run the sequence.
+larch_status fast_fused_moe_gate_up(larch_stream* s, const larch_tensor* gate_w, const larch_tensor* up_w,
+                                    const larch_tensor* x_f16, const larch_tensor* ids_i32, const larch_tensor* out) {
+  if (!has_isa() || !gate_w || !up_w || !fast_id_supports(gate_w->dtype) || !fast_id_supports(up_w->dtype))
+    return fused_moe_gate_up(s, gate_w, up_w, x_f16, ids_i32, out);
+  bool ran = false;
+  const larch_status st = run("fused_moe_gate_up", [&] {
+    const fused_gate_up_checked c = check_fused_moe_gate_up(buffer_bytes, gate_w, up_w, x_f16, ids_i32, out);
+    const view x = c.gate.x, ids = c.gate.ids, o = c.gate.out;
+    const view w[2] = {c.gate.w, c.up.w};
+    const int64_t rows = x.rows, slots = ids.cols, k = w[0].cols, n = o.shape[o.ndim - 1], experts = w[0].rows / n;
+    for (int64_t r = 0; r < rows; ++r)
+      for (int64_t j = 0; j < slots; ++j) need(ids.i32(r, j) >= 0 && ids.i32(r, j) < experts, "expert id out of range");
+    thread_local id_scratch sc;
+    std::vector<int32_t>& iv = sc.iv;
+    iv.resize(size_t(rows * slots));
+    for (int64_t r = 0; r < rows; ++r)
+      for (int64_t j = 0; j < slots; ++j) iv[size_t(r * slots + j)] = ids.i32(r, j);
+    std::vector<int64_t>& used = sc.used;
+    used.assign(iv.begin(), iv.end());
+    std::sort(used.begin(), used.end());
+    const int64_t distinct = std::unique(used.begin(), used.end()) - used.begin();
+    if (x.ndim == 3 || rows * slots >= GROUPED * distinct) return;  // ran stays false: the sequence
+    std::vector<float>&xf = sc.xf, &y = sc.y;
+    xf.resize(size_t(rows * k));
+    for (int64_t r = 0; r < rows; ++r) to_f32(LARCH_F16, x.row(r), k, xf.data() + r * k);
+    const int64_t per = rows * slots * n;
+    y.resize(size_t(2 * per));  // g then u, f32 as mmvq_id's y
+    fast_id_args a[2];
+    for (int i = 0; i < 2; ++i) {
+      a[i] = {w[i].dtype, w[i].row(0), w[i].row_bytes, xf.data(), k, 0, iv.data(), slots, nullptr, nullptr, slots,
+              y.data() + i * per, n, k, slots};
+      a[i].w_rows = w[i].rows;
+    }
+    const size_t nx = xf.size();
+    if (has_vnni() && (fast_vnni_supports(w[0].dtype) || fast_vnni_supports(w[1].dtype))) {
+      sc.xl.resize(3 * nx), sc.xs.resize(nx / 4), sc.xm.resize(nx / 32), sc.xe.resize(nx / 256);
+      if (fast_vnni_prep(xf.data(), int64_t(nx), sc.xl.data(), sc.xs.data(), sc.xm.data(), sc.xe.data()))
+        for (fast_id_args& v : a)
+          if (fast_vnni_supports(v.dtype)) v.xl = sc.xl.data(), v.xs = sc.xs.data(), v.xm = sc.xm.data(), v.xe = sc.xe.data();
+    }
+    const int64_t blocks = (n + FAST_COLS - 1) / FAST_COLS;
+    threads_pool().run(rows * slots * blocks, 4, stream_threads(s), [&](int64_t first, int64_t last) {
+      for (const fast_id_args& v : a) v.xl ? fast_mmvq_id_vnni(v, first, last) : fast_mmvq_id_isa(v, first, last);
+      // ops.cpp's silu_mul on mmvq_id's f16 g and u: each read back as f32, the result rounded to f16 once.
+      for (int64_t i = first; i < last; ++i) {
+        const int64_t pair = i / blocks, c0 = i % blocks * FAST_COLS, c1 = std::min(n, c0 + FAST_COLS);
+        for (int64_t col = pair * n + c0; col < pair * n + c1; ++col) {
+          const float g = f16_to_f32(f32_to_f16(y[size_t(col)])), u = f16_to_f32(f32_to_f16(y[size_t(per + col)]));
+          o.set(pair / slots, pair % slots * n + col % n, g / (1.0f + expf(-g)) * u);
+        }
+      }
+    });
+    ran = true;
+  });
+  return st != LARCH_OK || ran ? st : fused_moe_gate_up(s, gate_w, up_w, x_f16, ids_i32, out);
 }
 
 // The mixed call: the hot pairs through this device's own mmvq_id, one row a pair, so below its grouped threshold (as a

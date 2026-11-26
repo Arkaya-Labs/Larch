@@ -283,6 +283,8 @@ larch_status draft_conv(larch_stream*, const larch_tensor*, const larch_tensor*,
 // fast_cpu.cpp (lane c1)
 larch_status fast_mmvq_id(larch_stream*, const larch_tensor*, const larch_tensor*, const larch_tensor*,
                            const larch_tensor*, const larch_tensor*, const larch_tensor*);
+larch_status fast_fused_moe_gate_up(larch_stream*, const larch_tensor*, const larch_tensor*, const larch_tensor*,
+                                    const larch_tensor*, const larch_tensor*);
 larch_status fast_mmvq_id_mixed(larch_stream*, const larch_tensor*, const larch_tensor*, const larch_tensor*,
                                  const larch_tensor*, const larch_tensor*, const larch_tensor*, const larch_tensor*);
 // gdn.cpp
@@ -372,6 +374,7 @@ static constexpr vv_ops cpu_device = [] {
   vv_ops o = table;
   o.mmvq_id = cpu::fast_mmvq_id;
   o.mmvq_id_mixed = cpu::fast_mmvq_id_mixed;
+  o.fused_moe_gate_up = cpu::fast_fused_moe_gate_up;
   return o;
 }();
 

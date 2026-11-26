@@ -1161,6 +1161,33 @@ fn routed(
     mmvq_id(s, check, &down, &act, ids, Some(weights), out)
 }
 
+/// [`routed`] on the CPU device of the host experts: outside a check step, one-tensor gate and up run
+/// as its `fused_moe_gate_up`, the same bytes as their sequence in one pool job (the sequence where the
+/// device refuses it).
+#[allow(clippy::too_many_arguments)] // routed's
+fn host_routed(
+    s: &Stream,
+    check: i64,
+    [gate, up, down]: [Experts; 3],
+    [gb, ub, ab]: [&Buffer; 3],
+    m: MoeCfg,
+    h: &Tensor,
+    ids: &Tensor,
+    weights: &Tensor,
+    out: &Tensor,
+) -> Result<(), KError> {
+    let act = Tensor::new(ab, 0, DType::F16, &[h.shape()[0], ids.shape()[1], i64::from(m.ffn)])?;
+    let fused = match (&gate, &up, check) {
+        (Experts::One(g), Experts::One(u), 0) => ops::fused_moe_gate_up(s, g, u, h, ids, &act),
+        _ => Err(KError::Unsupported),
+    };
+    let act = match fused {
+        Err(KError::Unsupported) => routed_act(s, check, [&gate, &up], [gb, ub, ab], m, h, ids)?,
+        r => r.map(|()| act)?,
+    };
+    mmvq_id(s, check, &down, &act, ids, Some(weights), out)
+}
+
 /// [`routed`]'s gate and up per chosen expert into `gb` and `ub`, and their silu_mul into `ab`, returned
 /// (`[rows, chosen, expert ffn]`).
 fn routed_act<'a>(
@@ -3159,7 +3186,7 @@ impl Transformer {
         let sc = [&x.gate, &x.up, &x.act];
         let table = self.cold_tables.get(layer).and_then(Option::as_ref);
         let experts = Experts::of([gate, up, down], cold, table, |w| w.t(&x.weights))?;
-        routed(&x.s, host_rows, experts, sc, m, &xh, &xi, &xw, &xo)?;
+        host_routed(&x.s, host_rows, experts, sc, m, &xh, &xi, &xw, &xo)?;
         let act = [&x.act, &x.gate, &x.up];
         let y = ad
             .map(|ad| adapt(&x.s, host_rows, ad, act, m, &xi, &xw, live, d))
@@ -3347,7 +3374,7 @@ impl Transformer {
                 xo.rows(at, n)?,
             );
             let experts = [Experts::One(g), Experts::One(u), Experts::One(dn)];
-            routed(&x.s, host_rows, experts, sc, m, &xh, &xi, &xw, &xo)?;
+            host_routed(&x.s, host_rows, experts, sc, m, &xh, &xi, &xw, &xo)?;
         }
         let mut y = vec![0f32; miss.len() * d as usize];
         x.s.download(&x.out, 0, &mut y)?;

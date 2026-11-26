@@ -318,7 +318,8 @@ void pool_back_to_back() {
 // the hybrid target's expert shapes above, gate and up Q3_K [512, 2048] then down [2048, 512] weighted, Q3_K and Q4_K as
 // its layers mix them, 8 of 256 experts, other experts each rep so the weights come from RAM (0.5 GB, past any L3);
 // then the same experts each rep (warm), on all threads and on one (threads 0 is all). Median and best per phase;
-// the silu_mul between up and down is ops.cpp's, not timed here.
+// the silu_mul between up and down is ops.cpp's, not timed here, but the fused gate and up (the device's
+// fused_moe_gate_up, as the host experts run them) include theirs.
 void bench_section(const dev& dut, bool warm, uint32_t threads) {
   const int64_t experts = 256, d = 2048, ef = 512, slots = 8, reps = 40;
   larch_device_set_threads(dut.d, threads);
@@ -351,7 +352,7 @@ void bench_section(const dev& dut, bool warm, uint32_t threads) {
     const larch_tensor gout = {gb, 0, LARCH_F16, 3, {rows, slots, ef}, {slots * ef, ef, 1}};
     const larch_tensor at = {ab, 0, LARCH_F16, 3, {rows, slots, ef}, {slots * ef, ef, 1}};
     const larch_tensor ot = {ob, 0, LARCH_F16, 2, {rows, d}, {d, 1}};
-    std::vector<double> t[4];  // gate, up, down Q3_K, down Q4_K
+    std::vector<double> t[5];  // gate, up, down Q3_K, down Q4_K, gate and up fused (with their silu_mul)
     for (int64_t rep = 0; rep < reps; ++rep) {
       std::vector<int32_t> ids(size_t(rows * slots));
       if (warm) g.seed(13);
@@ -376,16 +377,19 @@ void bench_section(const dev& dut, bool warm, uint32_t threads) {
       time(t[1], ut, xt, false, gout);
       time(t[2], dt[0], at, true, ot);
       time(t[3], dt[1], at, true, ot);
+      const auto t0 = std::chrono::steady_clock::now();
+      if (larch_fused_moe_gate_up(dut.s, &gt, &ut, &xt, &it, &gout) != LARCH_OK) ++wrong;  // not down's x
+      t[4].push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() * 1e6);
     }
-    double med[4], best[4];
-    for (int i = 0; i < 4; ++i) {
+    double med[5], best[5];
+    for (int i = 0; i < 5; ++i) {
       std::sort(t[i].begin(), t[i].end());
       med[i] = t[i][t[i].size() / 2], best[i] = t[i][0];
     }
     std::printf("bench %s %u threads rows %lld: gate %.0f (%.0f) up %.0f (%.0f) down q3_k %.0f (%.0f) q4_k %.0f (%.0f)"
-                " us median (best); section q3_k %.0f us, q4_k %.0f us\n",
+                " us median (best); section q3_k %.0f us, q4_k %.0f us; gate and up fused %.0f (%.0f) us\n",
                 warm ? "warm" : "cold", threads, (long long)rows, med[0], best[0], med[1], best[1], med[2], best[2],
-                med[3], best[3], med[0] + med[1] + med[2], med[0] + med[1] + med[3]);
+                med[3], best[3], med[0] + med[1] + med[2], med[0] + med[1] + med[3], med[4], best[4]);
   }
   for (larch_buffer* b : {gate, up, down3, down4, xb, ab, ib, wb, gb, ob}) larch_buffer_free(b);
 }
