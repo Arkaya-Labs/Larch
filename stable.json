@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "channel": "stable",
+  "version": "0.1.0",
+  "manifest_url": "https://github.com/Arkaya-Labs/Larch/releases/download/v0.1.0/manifest.json",
+  "manifest_sha256": "edde335251e87879a80b5aa4ceaedd4e5b1d71ee812e8a598cd8fe16dab21ee1",
+  "setup": {
+    "aarch64-apple-darwin": {
+      "url": "https://github.com/Arkaya-Labs/Larch/releases/download/v0.1.0/larch-setup-aarch64-apple-darwin",
+      "sha256": "8ea8e8c169b2b2954bf7db9f885ddda54b1e9b34efce1e3798e403fee1680064",
+      "size": 5158624
+    }
+  }
+}
