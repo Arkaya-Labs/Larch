@@ -144,7 +144,9 @@ pub fn load<T, E>(
     import: impl FnOnce(&mut File, Option<&[u8]>) -> Result<Option<T>, E>,
 ) -> Result<Option<T>, Failed<E>> {
     let path = dir.join(key);
-    let mut file = match File::open(&path) {
+    // Open to write as well: a hit sets the file's time, which Windows refuses through a handle
+    // opened only to read ("Access is denied"). `source::touch` opens its blobs the same way.
+    let mut file = match File::options().read(true).write(true).open(&path) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(Failed::Io(e)),

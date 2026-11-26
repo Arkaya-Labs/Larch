@@ -23,9 +23,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
+        # macos-26: larch-setup's Metal flavour needs macOS 26, as the Metal workflow's Xcode does.
+        os: [ubuntu-24.04, windows-2025, macos-26]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    # Windows runs the debug tests slower: there the test step alone took 85 to 100+ minutes.
+    timeout-minutes: ${{ matrix.os == 'windows-2025' && 180 || 120 }}
     env:
       LARCH_BACKEND: CPU
       CARGO_TERM_COLOR: always
@@ -44,20 +46,25 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'apps/desktop/Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
       - run: rustup toolchain install  # the channel in rust-toolchain.toml
-      - name: learning unit tests
-        if: runner.os == 'Linux' && hashFiles('bench/agent/learning/test_*.py') != ''
-        run: python3 -m unittest discover -s bench/agent/learning -p 'test_*.py'
+      # The runner's TMPDIR (/var/folders/...) leaves a test's UNIX socket path past macOS's 104
+      # bytes (SUN_LEN): the larch-task host tests could not listen.
+      - name: short TMPDIR
+        if: runner.os == 'macOS'
+        run: echo "TMPDIR=/tmp" >> "$GITHUB_ENV"
       - if: runner.os == 'Linux'
         run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --locked
-      # Their own workspaces, so the root build never reads their locks. Metadata resolves them without
-      # the window-system libraries the crates need.
-      - name: desktop and installer locks resolve
+      # Every test binary runs, so one failure does not hide the rest.
+      - run: cargo test --locked --no-fail-fast
+      # Their own workspaces, so the root build never reads their locks. The app links the X11
+      # keyboard libraries; its tests open no window.
+      - name: desktop app and installer tests
         if: runner.os == 'Linux'
         run: |
-          cargo metadata --locked --format-version 1 --manifest-path apps/desktop/Cargo.toml > /dev/null
-          cargo metadata --locked --format-version 1 --manifest-path apps/setup/Cargo.toml > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxkbcommon-x11-dev libxcb-xkb-dev
+          cargo test --locked --no-fail-fast --manifest-path apps/desktop/Cargo.toml
+          cargo test --locked --no-fail-fast --manifest-path apps/setup/Cargo.toml
       # fuzz/ is its own workspace, so the build above never compiles the R9 harness.
       - name: fuzz harness compiles
         if: runner.os == 'Linux'
@@ -78,3 +85,13 @@ jobs:
         run: |
           cargo run -p larch-records --features schema --bin records-schema -- "$RUNNER_TEMP/schema.json"
           python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert "EngineSample" in d["$defs"]' "$RUNNER_TEMP/schema.json"
+      # numpy is the one package beyond the standard library they import (scripts/dflash_convert.py);
+      # the runner's Python has none. apt's lists were updated by the desktop step above.
+      - name: Python tests (release scripts and agent benchmarks)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends python3-numpy
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          for dir in public research coding; do
+            python3 -m unittest discover -s "bench/agent/$dir" -p 'test_*.py'
+          done

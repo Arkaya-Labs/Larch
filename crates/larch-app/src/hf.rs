@@ -110,7 +110,9 @@ impl Target {
             Target::Cache(dir, commit) => (
                 dir.join("blobs")
                     .join(p.sha256.as_deref().unwrap_or_default()),
-                dir.join("snapshots").join(commit).join(&p.path),
+                // The Hub's path a part at a time: one `/` joined whole stays in a Windows path.
+                (p.path.split('/'))
+                    .fold(dir.join("snapshots").join(commit), |at, part| at.join(part)),
             ),
         }
     }

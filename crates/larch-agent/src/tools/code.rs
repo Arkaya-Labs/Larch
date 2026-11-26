@@ -1711,12 +1711,15 @@ fn judged(ran: Ran) -> Judged {
 
 /// Python's `sitecustomize` for a base run (`on_base`): at its end it names each module it
 /// loaded from `FOLDERS`, the folders the change is in, which a test's own traceback rarely does.
-/// An installed package is never the project's code, even in a virtualenv inside the folder.
-const LOADED: &str = "import atexit, os, sys\nFOLDERS = {folders}\nSKIP = tuple(os.path.join(p, '') \
-for p in {sys.prefix, sys.base_prefix, sys.exec_prefix})\ndef named():\n for m in \
-list(sys.modules.values()):\n  f = getattr(m, '__file__', None) or ''\n  if f.startswith(FOLDERS) \
-and not f.startswith(SKIP) and 'site-packages' not in f and 'dist-packages' not in f: \
-print('loaded ' + f, file=sys.stderr)\natexit.register(named)\n";
+/// An installed package is never the project's code, even in a virtualenv inside the folder. A
+/// module is looked up by its path and by its real one: `FOLDERS` are real paths, and a .pth may
+/// name the folder through a symlink (macOS's /var and /tmp are links to /private).
+const LOADED: &str = "import atexit, os, sys\nFOLDERS = {folders}\nSKIP = tuple(os.path.join(q, '') \
+for p in {sys.prefix, sys.base_prefix, sys.exec_prefix} for q in {p, os.path.realpath(p)})\n\
+def named():\n for m in list(sys.modules.values()):\n  f = getattr(m, '__file__', None) or ''\n  \
+for g in ({f, os.path.realpath(f)} if f else ()):\n   if g.startswith(FOLDERS) and not \
+g.startswith(SKIP) and 'site-packages' not in g and 'dist-packages' not in g: \
+print('loaded ' + g, file=sys.stderr)\natexit.register(named)\n";
 
 /// The folder of a run's `sitecustomize` (`python_first`), inside the folder it runs in.
 const SITE: &str = ".larch-site";
@@ -2036,6 +2039,38 @@ fn node(out: &str) -> Option<Counts> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A module a run loads through a symlink to the change's folder (a .pth that names it so;
+    /// macOS's /var is a link to /private/var) is named under the folder's real path.
+    #[cfg(unix)]
+    #[test]
+    fn a_module_loaded_through_a_symlink_is_named() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = fs::canonicalize(tmp.path()).unwrap();
+        let folder = real.join("proj");
+        fs::create_dir_all(folder.join("lib/calc")).unwrap();
+        fs::write(folder.join("lib/calc/__init__.py"), "").unwrap();
+        std::os::unix::fs::symlink(&folder, real.join("link")).unwrap();
+        let run = real.join("run");
+        fs::create_dir(&run).unwrap();
+        let lib = real.join("link/lib");
+        let cmd = format!(
+            "PYTHONPATH=\"$PYTHONPATH:{}\" python3 -c 'import calc'",
+            lib.display()
+        );
+        let cmd = python_first(&cmd, &run, &[&folder]).unwrap();
+        let out = match std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .output()
+        {
+            Ok(out) if out.status.code() != Some(127) => out,
+            _ => return println!("skipped: no python3"),
+        };
+        let text = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{text}");
+        assert_eq!(named(&text, &[&folder]), Some(folder.as_path()), "{text}");
+    }
 
     /// A read-only run's command writes an existing build folder but no file of the project,
     /// and a cargo build of a project with no target/ yet goes to the private tmp.

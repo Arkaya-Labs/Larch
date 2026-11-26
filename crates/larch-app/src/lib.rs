@@ -4575,8 +4575,11 @@ mod tests {
         {
             t.ggml_type = 10;
         }
-        assert!(runnable(&g));
-        assert!(unloadable(&g.tensors).is_empty());
+        // This build's backend decides, as for any file.
+        let here = matches!(larch_kernels::BACKEND, "cuda" | "cpu");
+        assert_eq!(runnable(&g), here);
+        let refused: &[&str] = if here { &[] } else { &["Q2_K"] };
+        assert_eq!(unloadable(&g.tensors), refused);
         let exps = g.tensors.iter().find(|t| t.ggml_type == 10).unwrap();
         for (backend, runs) in [
             ("cuda", true),
@@ -4744,9 +4747,19 @@ mod tests {
             app.agent_send(&id, text, None, Some(Intent::Chat), &[])
                 .unwrap();
             let (mut events, end) = (Vec::new(), Instant::now() + Duration::from_secs(300));
+            let mut heard = Instant::now();
             loop {
                 let left = end.saturating_duration_since(Instant::now());
-                if let Event::Chat { id: chat, event } = rx.recv_timeout(left).expect("an end") {
+                // On a miss, whether the turn was still going (a slow runner) or had stopped.
+                let e = rx.recv_timeout(left).unwrap_or_else(|e| {
+                    let (n, quiet) = (events.len(), heard.elapsed());
+                    let tail = &events[n.saturating_sub(3)..];
+                    panic!(
+                        "an end of {text:?}: {e}; {n} events, none for {quiet:?}, the last {tail:?}"
+                    )
+                });
+                if let Event::Chat { id: chat, event } = e {
+                    heard = Instant::now();
                     assert_eq!(chat, id);
                     let last = matches!(
                         event,

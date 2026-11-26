@@ -2,7 +2,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, sync_channel};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -563,7 +563,12 @@ pub(crate) fn fault(sh: &Shared, (code, error): (FaultCode, EngineError), on_fau
             }
             let _ = tx.send(());
         });
-    let _ = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    // Spun on, not slept on: a timed wait can wake long past this deadline where macOS throttles
+    // the process (a background job, as hosted CI runs tests). The spin lasts at most the hook's
+    // budget, once, on a fault that ends the engine.
+    while Instant::now() < deadline && matches!(rx.try_recv(), Err(TryRecvError::Empty)) {
+        std::thread::yield_now();
+    }
     if on_fault == OnFault::Exit {
         std::process::exit(3);
     }

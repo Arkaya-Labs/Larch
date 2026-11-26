@@ -1002,7 +1002,18 @@ fn fault_flush_is_bounded() {
         e.set_fault_flush(move |_, _| {
             eprintln!("flush_entered");
             assert_ne!(mode, "panic_flush", "controlled flush panic");
-            let _ = held.recv_timeout(DEADLINE);
+            // Held until the process ends, with a line each 1 ms: the last says how long it ran.
+            // Busy, as a timed wait oversleeps where macOS throttles the process (a background
+            // job, as hosted CI runs tests), and the lines would show the throttle, not the hook.
+            let (until, mut next) = (Instant::now() + DEADLINE, Instant::now());
+            while Instant::now() < until && held.try_recv().is_err() {
+                if Instant::now() >= next {
+                    next += Duration::from_millis(1);
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+                    eprintln!("hook_ran_ns={}", now.unwrap().as_nanos());
+                }
+                std::thread::yield_now();
+            }
         })
         .unwrap();
         let _request = e.submit(Request::new(vec![1], 1)).unwrap();
@@ -1028,8 +1039,16 @@ fn fault_flush_is_bounded() {
             .expect("fault detection timestamp");
         assert!(exited_ns >= detected, "exit before detection");
         let gap = exited_ns - detected;
+        let ran: Vec<u128> = (stderr.lines())
+            .filter_map(|line| line.strip_prefix("hook_ran_ns=")?.parse().ok())
+            .collect();
+        let last = ran.last().map_or(0, |at| at.saturating_sub(detected));
+        let pause = ran.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
         // Past libtest's capture, so each CI log carries the measured exit cost (the hook budget).
-        let _ = writeln!(std::io::stderr(), "{mode} exit gap {gap} ns");
+        let _ = writeln!(
+            std::io::stderr(),
+            "{mode} exit gap {gap} ns; the held hook last ran {last} ns after detection, its longest pause {pause} ns"
+        );
         assert!(gap <= 100_000_000, "exit gap {gap} ns");
     }
 }

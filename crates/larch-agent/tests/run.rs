@@ -6786,6 +6786,12 @@ fn a_text_only_model_answers_an_image_with_the_fixed_text_and_stores_nothing() {
         history.iter().any(|m| m.content.contains("what is this?")),
         "{history:?}"
     );
+    assert!(!agent.untrusted());
+    fake.say("Hi.");
+    let got = events(agent.turn_images("hello", Vec::new(), None).unwrap());
+    assert_eq!(text(&got).trim(), "Hi.");
+    // Closed first: Windows refuses to read a transcript while its open chat holds the lock.
+    drop(agent);
     let chat = fake.data().join("chat");
     let mut saved = String::new();
     for e in std::fs::read_dir(&chat).unwrap().flatten() {
@@ -6801,10 +6807,6 @@ fn a_text_only_model_answers_an_image_with_the_fixed_text_and_stores_nothing() {
     }
     assert!(saved.contains("can't see images"), "{saved}");
     assert!(!saved.contains("\"images\":[\""), "{saved}");
-    assert!(!agent.untrusted());
-    fake.say("Hi.");
-    let got = events(agent.turn_images("hello", Vec::new(), None).unwrap());
-    assert_eq!(text(&got).trim(), "Hi.");
 }
 
 /// Documents as a chat on them takes them.
