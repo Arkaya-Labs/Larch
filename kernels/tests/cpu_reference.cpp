@@ -885,6 +885,36 @@ static void cpu_device() {
     larch_device* gpu = nullptr;
     OK(larch_device_open(0, &gpu));
     CHECK(larch_device_set_threads(gpu, 2) == LARCH_ERR_UNSUPPORTED);
+    // A GPU's host buffer (page-locked on CUDA): a CPU device's stream writes it as its own; the GPU's copies
+    // refuse it as their buffer and copy from inside it (straight, up to its last byte) and from other host
+    // memory (through the staging), the bytes the same.
+    larch_buffer* gh = nullptr;
+    void* gp = nullptr;
+    const larch_status hs = larch_buffer_alloc_host(gpu, 64, &gh, &gp);
+    CHECK(hs == LARCH_OK || hs == LARCH_ERR_UNSUPPORTED);
+    if (hs == LARCH_OK) {
+      std::vector<uint8_t> src(64);
+      for (int i = 0; i < 64; ++i) src[size_t(i)] = uint8_t(i * 7 + 1);
+      OK(larch_upload(cs, gh, 0, src.data(), 64));
+      CHECK(std::memcmp(gp, src.data(), 64) == 0);
+      larch_stream* gs = nullptr;
+      larch_buffer* db = nullptr;
+      OK(larch_stream_create(gpu, &gs));
+      OK(larch_buffer_alloc(gpu, 128, &db));
+      const auto* p = static_cast<const uint8_t*>(gp);
+      OK(larch_upload(gs, db, 0, p + 8, 56));      // inside, to its last byte: straight
+      OK(larch_upload(gs, db, 64, src.data(), 64));  // other host memory: staged
+      BAD(larch_upload(gs, gh, 0, src.data(), 8));   // the GPU's copies refuse it as their buffer
+      std::vector<uint8_t> back(128), dl(8);
+      BAD(larch_download(gs, gh, 0, dl.data(), 8));
+      OK(larch_download(gs, db, 0, back.data(), 128));
+      OK(larch_stream_sync(gs));
+      CHECK(std::memcmp(back.data(), src.data() + 8, 56) == 0);
+      CHECK(std::memcmp(back.data() + 64, src.data(), 64) == 0);
+      larch_buffer_free(db);
+      larch_stream_destroy(gs);
+      larch_buffer_free(gh);
+    }
     larch_device_close(gpu);
   }
   larch_stream_destroy(cs);

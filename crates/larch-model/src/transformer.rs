@@ -1189,6 +1189,10 @@ fn routed(
     mmvq_id(s, check, &down, &act, ids, Some(weights), out)
 }
 
+/// The most rows [`host_routed`] runs as one fused gate and up: a decode step's, up to the hybrid's
+/// most seats.
+const FUSED_HOST_ROWS: i64 = 8;
+
 /// [`routed`] on the CPU device of the host experts: outside a check step, one-tensor gate and up run
 /// as its `fused_moe_gate_up`, the same bytes as their sequence in one pool job (the sequence where the
 /// device refuses it).
@@ -1210,8 +1214,12 @@ fn host_routed(
         DType::F16,
         &[h.shape()[0], ids.shape()[1], i64::from(m.ffn)],
     )?;
+    // Decode shapes: past a few rows the pairs group by expert, which the fused entry leaves to the
+    // sequence through scratch of its own (routed_act reuses the host experts').
     let fused = match (&gate, &up, check) {
-        (Experts::One(g), Experts::One(u), 0) => ops::fused_moe_gate_up(s, g, u, h, ids, &act),
+        (Experts::One(g), Experts::One(u), 0) if h.shape()[0] <= FUSED_HOST_ROWS => {
+            ops::fused_moe_gate_up(s, g, u, h, ids, &act)
+        }
         _ => Err(KError::Unsupported),
     };
     let act = match fused {
@@ -2131,9 +2139,13 @@ impl Transformer {
                     true => None,
                     false => {
                         let cpu = Device::open(CPU_COMPUTE).map_err(backend)?;
-                        let logical = std::thread::available_parallelism().map_or(1, |n| n.get());
-                        cpu.set_threads(beside_gpu_threads(logical))
-                            .map_err(backend)?;
+                        // Beside a GPU only: a CPU backend's host layers have no driver to spare.
+                        if s.device().props().map_err(backend)?.backend != Backend::Cpu {
+                            let logical =
+                                std::thread::available_parallelism().map_or(1, |n| n.get());
+                            cpu.set_threads(beside_gpu_threads(logical))
+                                .map_err(backend)?;
+                        }
                         Some(cpu)
                     }
                 };
@@ -2158,9 +2170,15 @@ impl Transformer {
                         // Where the pool may stream them, in host memory the GPU copies from at
                         // full speed (page-locked: 57 against 22 GB/s through the file map and
                         // the staging on a 5070 Ti); plain memory where the device has none.
-                        let pinned = (place.stream_rows > 0 && !split)
-                            .then(|| Buffer::alloc_host(s.device(), held).ok())
-                            .flatten();
+                        // As the pool below asks: no expert-cache plan, no split layer.
+                        let pinned = match place.stream_rows > 0 && plan.is_none() && !split {
+                            false => None,
+                            true => match Buffer::alloc_host(s.device(), held) {
+                                Ok(b) => Some(b),
+                                Err(KError::Unsupported | KError::Oom) => None,
+                                Err(e) => return Err(backend(e)),
+                            },
+                        };
                         Some(HostExperts {
                             weights: pinned.map_or_else(|| calloc(held), Ok)?,
                             h: cbuf(DType::F16, if split { k * d } else { d })?,

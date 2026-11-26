@@ -265,9 +265,9 @@ static larch_status buffer_wrap_host(larch_device*, void*, uint64_t, larch_buffe
 }
 
 // Host buffers (larch.h): page-locked host memory at larch_buffer::host, which every CPU device's ops take as
-// their own. Their ordinal is -1, so this backend's ops and copies refuse one as their buffer; upload and
-// download find a source or target inside one (pinned_holds) and copy straight from or to it, asynchronously,
-// where other host memory goes through the stream's staging.
+// their own. Their ordinal is -1, so this backend's ops and copies refuse one as their buffer; upload finds a
+// source inside one (pinned_holds) and copies straight from it, asynchronously, where other host memory goes
+// through the stream's staging (download copies into any host memory directly already).
 static std::mutex pinned_m;
 static std::vector<std::pair<const uint8_t*, uint64_t>> pinned;
 

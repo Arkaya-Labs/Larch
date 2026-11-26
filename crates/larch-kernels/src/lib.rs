@@ -440,9 +440,11 @@ unsafe impl Sync for RawBuffer {}
 
 impl Drop for RawBuffer {
     fn drop(&mut self) {
-        // SAFETY: made by larch_buffer_alloc or larch_buffer_wrap_host on a device that is still open
-        // (self.dev). Work still queued on it must keep it alive in the backend: Metal command buffers
-        // retain it, CUDA's cudaFree waits for the device, and the CPU reference queues nothing.
+        // SAFETY: made by larch_buffer_alloc, larch_buffer_wrap_host or larch_buffer_alloc_host on a
+        // device that is still open (self.dev). Work still queued on it must keep it alive in the
+        // backend: Metal command buffers retain it, CUDA's cudaFree waits for the device (and
+        // cudaFreeHost, a host buffer's, for the copies still reading it: Stream::upload_from), and
+        // the CPU reference queues nothing.
         // larch.h does not say so yet (an A1 contract item); a backend that frees asynchronously
         // breaks this.
         unsafe { sys::larch_buffer_free(self.raw) }
@@ -815,7 +817,8 @@ impl Stream {
         Ok(())
     }
 
-    /// `b` is on this stream's device; inside a capture, the graph now holds it.
+    /// `b` is on this stream's device, or a host buffer of any device on a CPU device's stream
+    /// ([`Buffer::alloc_host`]); inside a capture, the graph now holds it.
     fn uses(&self, b: &Buffer) -> Result<(), KError> {
         let host = self.dev.0.cpu && !b.inner.host.is_null();
         if !b.inner.dev.same(&self.dev) && !host {
