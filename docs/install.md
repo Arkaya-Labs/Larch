@@ -47,6 +47,9 @@ The installer then:
 
 Everything installs for your user only. No administrator rights are needed.
 
+On a new Mac, macOS may first ask to install its command line developer tools, which the installer
+needs for `python3`. Click Install, wait for it to finish, then run the install command again.
+
 To answer the same questions in the terminal instead, add `--terminal`. The installer also stays in
 the terminal when there is no desktop to show a window on, such as over SSH, or when the window
 cannot start, after saying why. To ask for the terminal yourself:
