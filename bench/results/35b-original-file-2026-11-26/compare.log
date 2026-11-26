@@ -1,0 +1,32 @@
+== compare llama3-r1 vs orig-r1 at 1
+exit 0
+== compare llama3-r1 vs orig-r2 at 1
+exit 0
+== compare llama3-r2 vs orig-r1 at 1
+exit 0
+== compare llama3-r2 vs orig-r2 at 1
+exit 0
+== compare llama4-r1 vs orig-r1 at 1
+exit 0
+== compare llama4-r1 vs orig-r2 at 1
+exit 0
+== compare llama4-r2 vs orig-r1 at 1
+exit 0
+== compare llama4-r2 vs orig-r2 at 1
+exit 0
+== compare llama3-r1 vs orig-r1 at 4
+exit 0
+== compare llama3-r1 vs orig-r2 at 4
+exit 0
+== compare llama3-r2 vs orig-r1 at 4
+exit 0
+== compare llama3-r2 vs orig-r2 at 4
+exit 0
+== compare llama4-r1 vs orig-r1 at 4
+exit 0
+== compare llama4-r1 vs orig-r2 at 4
+exit 0
+== compare llama4-r2 vs orig-r1 at 4
+exit 0
+== compare llama4-r2 vs orig-r2 at 4
+exit 0
