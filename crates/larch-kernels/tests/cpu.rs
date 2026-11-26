@@ -700,3 +700,42 @@ fn column_views_keep_the_row_stride() {
     assert_eq!(c.reshape(&[4]).err(), Some(KError::InvalidArg));
     assert_eq!(xt.cols(5, 2).err(), Some(KError::InvalidArg));
 }
+
+/// A host buffer of one device ([`Buffer::alloc_host`]) is any CPU device's stream's own until it is
+/// shared ([`Buffer::share_host`]); then it is read-only, and a copy source by range for its own
+/// device's streams ([`Stream::upload_from`]). A plain buffer is never shared, and a range past the
+/// end is refused before the backend.
+#[test]
+fn a_host_buffer_is_every_cpu_streams_own_then_a_copy_source() {
+    let (reference, rs) = cpu();
+    let mut host = Buffer::alloc_host(&reference, 64).unwrap();
+    let compute = Device::open(CPU_COMPUTE).unwrap();
+    let cs = Stream::new(&compute).unwrap();
+    let data: Vec<u8> = (0..64).collect();
+    cs.upload(&host, 0, &data).unwrap();
+    let src = host.share_host().unwrap();
+    assert_eq!(cs.upload(&host, 0, &data), Err(KError::InvalidArg));
+    let dst = Buffer::alloc(&reference, 32).unwrap();
+    rs.upload_from(&dst, 0, &src, 8..40).unwrap();
+    rs.sync().unwrap();
+    let mut got = vec![0u8; 32];
+    rs.download(&dst, 0, &mut got).unwrap();
+    rs.sync().unwrap();
+    assert_eq!(got, data[8..40]);
+    // Its CPU readers still take it, as an op's input.
+    let mut back = vec![0u8; 64];
+    cs.download(&host, 0, &mut back).unwrap();
+    assert_eq!(back, data);
+    let mut plain = Buffer::alloc(&reference, 64).unwrap();
+    assert!(plain.share_host().is_none());
+    assert_eq!(
+        rs.upload_from(&dst, 0, &src, 40..72),
+        Err(KError::InvalidArg)
+    );
+    assert_eq!(
+        rs.upload_from(&dst, 8, &src, 0..32),
+        Err(KError::InvalidArg)
+    );
+    // Another device's plain buffer is not a CPU stream's own.
+    assert_eq!(cs.upload(&plain, 0, &data), Err(KError::InvalidArg));
+}

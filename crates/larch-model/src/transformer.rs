@@ -17,8 +17,8 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use larch_kernels::{
-    Backend, Buffer, CPU_COMPUTE, DType, Device, DeviceProps, KError, KvPool, Mmap, Stream, Tensor,
-    ops,
+    Backend, Buffer, CPU_COMPUTE, DType, Device, DeviceProps, HostCopy, KError, KvPool, Mmap,
+    Stream, Tensor, ops,
 };
 use larch_records::LoadError;
 
@@ -624,10 +624,28 @@ fn expert_span(g: &Gguf, i: u32, p: &str) -> Option<(u64, u64, u64, Option<u64>)
     Some((g.data_offset + lo, hi - lo, at(hot), cold.map(at)))
 }
 
-/// A slot on its way to the copy thread, to be filled with one expert tensor.
+/// Where file bytes `start..start + bytes` lie in the host experts' weights: the host tensors
+/// `held` (file start, bytes, offset there, in file order) that cover them back to back in both.
+/// `None` where they do not, so the copy reads the file map.
+fn held_at(held: &[(u64, u64, u64)], start: u64, bytes: u64) -> Option<u64> {
+    let i = held.iter().position(|h| h.0 == start)?;
+    let mut end = held[i];
+    for h in &held[i + 1..] {
+        if end.0 + end.1 >= start + bytes {
+            break;
+        }
+        (h.0 == end.0 + end.1 && h.2 == end.2 + end.1).then_some(())?;
+        end = *h;
+    }
+    (end.0 + end.1 >= start + bytes).then_some(held[i].2)
+}
+
+/// A slot on its way to the copy thread, to be filled with one expert tensor: from the file map's
+/// bytes `piece`, or from the host experts' weights at `held` where they hold it.
 struct CopyJob {
     slot: Buffer,
     piece: (u64, u64),
+    held: Option<u64>,
 }
 
 /// A slot back from the copy thread; `ns` is the copy's wall time when profiling, else 0.
@@ -638,18 +656,22 @@ struct Copied {
 }
 
 /// What [`Placement::stream_rows`] found at load: where each host layer's experts lie and a
-/// slot's size, until the fit admits a pool and [`Model::alloc_stream_pool`] builds it.
+/// slot's size, until the fit admits a pool and [`Model::alloc_stream_pool`] builds it. `src`: the
+/// host experts' weights shared as a copy source, with each tensor's offset there ([`held_at`]).
 struct StreamPlan {
     layers: Vec<StreamLayer>,
     slot_bytes: u64,
     slots: usize,
     map: Mmap,
+    src: Option<(HostCopy, Vec<[Option<u64>; 3]>)>,
 }
 
 /// One or two tensor-sized slots passed between copy and compute threads in gate, up, down order.
 /// The compute stream syncs before a slot is reused, so the next copy cannot overwrite a reader.
 struct StreamPool {
     layers: Vec<StreamLayer>,
+    /// Each tensor's offset in the copy thread's host source, where it has one.
+    held: Vec<[Option<u64>; 3]>,
     idle: Vec<Buffer>,
     slots: usize,
     /// Slots at the copy thread. Jobs go and come back in layer order, and `begin` drains any a
@@ -685,7 +707,9 @@ impl StreamPool {
             map,
             slot_bytes: _,
             slots: _,
+            src,
         } = plan;
+        let (src, held) = src.map_or((None, Vec::new()), |(c, at)| (Some(c), at));
         let slots = idle.len();
         let copy = Stream::new(s.device())?;
         let (tx, jobs) = channel::<CopyJob>();
@@ -697,9 +721,11 @@ impl StreamPool {
                     let t = profile.then(Instant::now);
                     let (file, bytes) = j.piece;
                     // ponytail: a GGUF truncated or rewritten while serving raises SIGBUS here.
-                    let copied = copy
-                        .upload_map(&j.slot, 0, &map, file..file + bytes)
-                        .and_then(|()| copy.sync());
+                    let copied = match (&src, j.held) {
+                        (Some(src), Some(at)) => copy.upload_from(&j.slot, 0, src, at..at + bytes),
+                        _ => copy.upload_map(&j.slot, 0, &map, file..file + bytes),
+                    }
+                    .and_then(|()| copy.sync());
                     let ns = t.map_or(0, |t| t.elapsed().as_nanos() as u64);
                     let back = Copied {
                         slot: j.slot,
@@ -715,6 +741,7 @@ impl StreamPool {
             .map_err(|_| KError::Oom)?;
         Ok(StreamPool {
             layers,
+            held,
             idle,
             slots,
             queued: 0,
@@ -741,6 +768,7 @@ impl StreamPool {
                 let p = self.layers[tensor / 3][tensor % 3];
                 (p.0, p.1)
             },
+            held: self.held.get(tensor / 3).and_then(|h| h[tensor % 3]),
         };
         let tx = self.tx.as_ref().ok_or(KError::Launch)?;
         tx.send(job).map_err(|_| KError::Launch)?;
@@ -1176,7 +1204,12 @@ fn host_routed(
     weights: &Tensor,
     out: &Tensor,
 ) -> Result<(), KError> {
-    let act = Tensor::new(ab, 0, DType::F16, &[h.shape()[0], ids.shape()[1], i64::from(m.ffn)])?;
+    let act = Tensor::new(
+        ab,
+        0,
+        DType::F16,
+        &[h.shape()[0], ids.shape()[1], i64::from(m.ffn)],
+    )?;
     let fused = match (&gate, &up, check) {
         (Experts::One(g), Experts::One(u), 0) => ops::fused_moe_gate_up(s, g, u, h, ids, &act),
         _ => Err(KError::Unsupported),
@@ -2031,6 +2064,8 @@ impl Transformer {
         let r = max_rows as i64;
         let mut host_experts = None;
         let mut host_embd = None;
+        // Each host tensor's (file start, bytes, offset in the host experts' weights).
+        let mut host_at: Vec<(u64, u64, u64)> = Vec::new();
         let mut cache_dev = None;
         let (weights, hi) = match mapped {
             Some(b) => b,
@@ -2120,8 +2155,14 @@ impl Transformer {
                             true => (held_len, cbuf(DType::F32, k * d)?),
                             false => (host_bytes, cbuf(DType::F16, d)?),
                         };
+                        // Where the pool may stream them, in host memory the GPU copies from at
+                        // full speed (page-locked: 57 against 22 GB/s through the file map and
+                        // the staging on a 5070 Ti); plain memory where the device has none.
+                        let pinned = (place.stream_rows > 0 && !split)
+                            .then(|| Buffer::alloc_host(s.device(), held).ok())
+                            .flatten();
                         Some(HostExperts {
-                            weights: calloc(held)?,
+                            weights: pinned.map_or_else(|| calloc(held), Ok)?,
                             h: cbuf(DType::F16, if split { k * d } else { d })?,
                             route: cbuf(DType::F32, 2 * k)?,
                             gate: cbuf(DType::F16, cols)?,
@@ -2177,6 +2218,7 @@ impl Transformer {
                         }
                         (Some(he), ..) => {
                             copy(start, bytes, &he.s, &[(&he.weights, 0)], cpu_at)?;
+                            host_at.push((start, bytes, cpu_at));
                             cpu_at += bytes;
                         }
                         (None, _, _, Some(e)) if embd == Some((start, bytes)) => {
@@ -2215,11 +2257,20 @@ impl Transformer {
                     }
                     layers.push(pieces);
                 }
+                // From here the weights are read-only: the pool's copy thread reads them too.
+                let src = host_experts.as_mut().and_then(|h| h.weights.share_host());
+                let at = match src {
+                    Some(_) => (layers.iter())
+                        .map(|l| l.map(|p| held_at(&host_at, p.0 - g.data_offset, p.1)))
+                        .collect(),
+                    None => Vec::new(),
+                };
                 Some(StreamPlan {
                     layers,
                     slot_bytes,
                     slots: stream_slots(),
                     map,
+                    src: src.map(|src| (src, at)),
                 })
             }
             None => None,
@@ -5538,7 +5589,26 @@ mod tests {
         // a_mixed_step_streams_its_prefill_rows_and_keeps_the_decode_rows_bits.
     }
 
-    /// Five layers through one and two tensor slots, twice; failure leaves the pool usable.
+    /// The host tensors' places in the weights: one tensor, two back to back, and none where a
+    /// span starts off a tensor or crosses a gap in either.
+    #[test]
+    fn a_span_lies_in_the_host_weights_only_back_to_back() {
+        let held = [(100, 40, 0), (140, 60, 40), (300, 50, 100), (350, 10, 200)];
+        assert_eq!(held_at(&held, 100, 40), Some(0));
+        assert_eq!(
+            held_at(&held, 100, 100),
+            Some(0),
+            "two tensors back to back"
+        );
+        assert_eq!(held_at(&held, 140, 60), Some(40));
+        assert_eq!(held_at(&held, 120, 20), None, "inside a tensor");
+        assert_eq!(held_at(&held, 140, 210), None, "a gap in the file");
+        assert_eq!(held_at(&held, 300, 60), None, "a gap in the weights");
+        assert_eq!(held_at(&held, 350, 20), None, "past the last");
+    }
+
+    /// Five layers through one and two tensor slots, twice; failure leaves the pool usable. With
+    /// a host source, a tensor with a place there comes from it, the others from the map.
     #[test]
     fn the_pool_delivers_every_tensor_in_order() {
         let path = std::env::temp_dir().join(format!("larch-pool-{}.gguf", std::process::id()));
@@ -5567,23 +5637,39 @@ mod tests {
                 ]
             })
             .collect();
-        for slots in [1, 2] {
+        // The host source holds each byte's complement, so a slot shows where it came from;
+        // layers 0 to 2 have a place there (at file offset + 1), 3 and 4 none.
+        let flipped: Vec<u8> = bytes.iter().map(|b| !b).collect();
+        let held: Vec<[Option<u64>; 3]> = (layers.iter().enumerate())
+            .map(|(i, l)| l.map(|p| (i < 3).then_some(p.0 + 1)))
+            .collect();
+        for (slots, host) in [(1, false), (2, false), (1, true), (2, true)] {
             let mut idle = Vec::new();
             for _ in 0..slots {
                 slot(&mut idle);
             }
+            let src = host.then(|| {
+                let mut h = Buffer::alloc_host(&dev, 2049).unwrap();
+                s.upload(&h, 1, &flipped).unwrap();
+                (h.share_host().unwrap(), held.clone())
+            });
             let plan = StreamPlan {
                 layers: layers.clone(),
                 slot_bytes: 72,
                 slots,
                 map: map.clone(),
+                src,
             };
             let mut pool = StreamPool::spawn(&s, plan, idle, false).unwrap();
             let check = |i: usize, slot: &Buffer| {
                 let (file, n, _, _) = layers[i / 3][i % 3];
                 let mut got = vec![0u8; n as usize];
                 s.download(slot, 0, &mut got).unwrap();
-                assert_eq!(got, bytes[file as usize..(file + n) as usize], "tensor {i}");
+                let from = match host && i / 3 < 3 {
+                    true => &flipped,
+                    false => &bytes,
+                };
+                assert_eq!(got, from[file as usize..(file + n) as usize], "tensor {i}");
             };
             for _ in 0..2 {
                 pool.begin(&s, 1).unwrap();

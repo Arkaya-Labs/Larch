@@ -7,6 +7,7 @@
 #include <cstring>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <vector>
 
@@ -263,10 +264,61 @@ static larch_status buffer_wrap_host(larch_device*, void*, uint64_t, larch_buffe
   return vv_fail(LARCH_ERR_UNSUPPORTED, "buffer_wrap_host: Metal only");
 }
 
+// Host buffers (larch.h): page-locked host memory at larch_buffer::host, which every CPU device's ops take as
+// their own. Their ordinal is -1, so this backend's ops and copies refuse one as their buffer; upload and
+// download find a source or target inside one (pinned_holds) and copy straight from or to it, asynchronously,
+// where other host memory goes through the stream's staging.
+static std::mutex pinned_m;
+static std::vector<std::pair<const uint8_t*, uint64_t>> pinned;
+
+static bool pinned_holds(const void* p, uint64_t bytes) {
+  const auto* a = static_cast<const uint8_t*>(p);
+  std::lock_guard<std::mutex> lock(pinned_m);
+  return std::any_of(pinned.begin(), pinned.end(), [&](const std::pair<const uint8_t*, uint64_t>& r) {
+    return a >= r.first && bytes <= r.second && uint64_t(a - r.first) <= r.second - bytes;
+  });
+}
+
+[[maybe_unused]] static larch_status buffer_alloc_host(larch_device* vd, uint64_t bytes, larch_buffer** out, void** host) {
+  const auto* d = static_cast<const device*>(vd);
+  if (!bytes) return vv_fail(LARCH_ERR_INVALID_ARG, "buffer_alloc_host: 0 bytes");
+  void* p = nullptr;
+  if (cudaError_t e = cudaSetDevice(d->ordinal)) return fail(e, "cudaSetDevice");
+  if (cudaError_t e = cudaHostAlloc(&p, bytes, cudaHostAllocDefault))
+    return fail(e, "buffer_alloc_host: " + std::to_string(bytes) + " bytes");
+  auto* b = new (std::nothrow) buffer{{vv_cuda_ops()}, -1, nullptr, bytes};
+  if (!b) {
+    cudaFreeHost(p);
+    return vv_fail(LARCH_ERR_OOM, "buffer_alloc_host: host memory");
+  }
+  b->host = static_cast<uint8_t*>(p);
+  try {
+    std::lock_guard<std::mutex> lock(pinned_m);
+    pinned.emplace_back(b->host, bytes);
+  } catch (...) {
+    cudaFreeHost(p);
+    delete b;
+    return vv_fail(LARCH_ERR_OOM, "buffer_alloc_host: host memory");
+  }
+  *out = b;
+  *host = p;
+  return LARCH_OK;
+}
+
 // cudaFree waits for the device, so work still queued on the buffer finishes first (larch-kernels'
-// Buffer relies on it).
+// Buffer relies on it); so does cudaFreeHost for a host buffer's copies.
 static void buffer_free(larch_buffer* vb) {
   auto* b = static_cast<buffer*>(vb);
+  if (b->host) {
+    {
+      std::lock_guard<std::mutex> lock(pinned_m);
+      pinned.erase(std::find_if(pinned.begin(), pinned.end(),
+                                [&](const std::pair<const uint8_t*, uint64_t>& r) { return r.first == b->host; }));
+    }
+    cudaFreeHost(b->host);
+    delete b;
+    return;
+  }
   cudaSetDevice(b->ordinal);
   cudaFree(b->ptr);
   delete b;
@@ -282,7 +334,8 @@ static const buffer* in_range(const stream* s, const larch_buffer* vb, uint64_t 
 
 // Uploads go through the stream's two pinned staging halves, so `src` is free when upload returns
 // (larch.h), whatever kind of host memory it is, and a model loaded in many uploads pins 64 MiB, not its
-// size. One half fills while the other's copies run; refilling a half waits for its own copies only.
+// size. One half fills while the other's copies run; refilling a half waits for its own copies only. A source
+// inside a host buffer is copied from directly and asynchronously, as larch.h has it for that memory.
 static const uint64_t staging_half = 32 << 20;
 
 // A copy queued while s captures a graph would replay host memory that is gone (or staging that was
@@ -310,6 +363,11 @@ static larch_status upload(larch_stream* vs, larch_buffer* vb, uint64_t off, con
   if (!b) return vv_fail(LARCH_ERR_INVALID_ARG, "upload: bad buffer, source or range");
   if (cudaError_t e = cudaSetDevice(s->ordinal)) return fail(e, "cudaSetDevice");
   if (larch_status st = not_capturing(s, "upload")) return st;
+  if (bytes && pinned_holds(src, bytes)) {
+    if (cudaError_t e = cudaMemcpyAsync(b->ptr + off, src, bytes, cudaMemcpyHostToDevice, s->s))
+      return fail(e, "upload");
+    return LARCH_OK;
+  }
   if (!s->staging && bytes)
     if (cudaError_t e = cudaHostAlloc(reinterpret_cast<void**>(&s->staging), 2 * staging_half, cudaHostAllocDefault))
       return fail(e, "upload: pinned staging");
@@ -583,6 +641,8 @@ static const vv_ops table = {
     // ponytail: HIP keeps the default (Q3_K refused) and builds no Q3_K kernels; take Q3_K there when ctest ops
     // passes it on an RDNA card.
     .no_weights = 0,
+    // ponytail: CUDA only; HIP's hipHostMalloc would serve the same once a ROCm card runs the stream pool.
+    .buffer_alloc_host = buffer_alloc_host,
     .mmvq_verify = cuda::mmvq_verify,
 #endif
     .mmvq_id = cuda::mmvq_id,
