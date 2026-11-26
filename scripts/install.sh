@@ -12,25 +12,7 @@ case "$(uname -s):$(uname -m)" in
   *) fail 'unsupported OS or CPU; use 64-bit x86 Linux or Apple silicon macOS' ;;
 esac
 command -v curl >/dev/null || fail 'curl is required'
-# Prints the scalar at a dotted key path (list items by index) of a JSON file, or with a third
-# argument `json` any value as JSON; fails when the key is absent. macOS reads JSON with its own
-# plutil, because its python3 is a stub that, on a Mac without developer tools, stops the install
-# to download them first.
-if [ "$os" = macOS ]; then
-  json() { plutil -extract "$2" "${3:-raw}" -o - "$1" 2>/dev/null; }
-else
-  command -v python3 >/dev/null || fail 'python3 is required to read release metadata'
-  json() {
-    python3 - "$1" "$2" "${3:-raw}" 2>/dev/null <<'PY'
-import json,sys
-v=json.load(open(sys.argv[1]))
-for k in sys.argv[2].split('.'): v=v[int(k)] if isinstance(v,list) else v[k]
-if sys.argv[3]=='json': print(json.dumps(v)); raise SystemExit
-if isinstance(v,(dict,list)): raise SystemExit(1)
-print(str(v).lower() if isinstance(v,bool) else v)
-PY
-  }
-fi
+command -v python3 >/dev/null || fail 'python3 is required to read release metadata'
 channel=stable
 next=0
 # With no options but --channel, setup opens its window; --terminal, any other option, or no
@@ -51,7 +33,7 @@ case "$channel" in ''|*[!a-zA-Z0-9_-]*) fail 'invalid channel' ;; esac
 [ "$next" = 0 ] || fail '--channel requires a value'
 temp=$(mktemp -d)
 trap 'rm -r -- "$temp"' EXIT
-# The one place the release repository is named here.
+# The one place the release repository is named here; the Python checks below get it as an argument.
 repo=Arkaya-Labs/Larch
 api=https://api.github.com/repos/$repo
 get() {
@@ -79,38 +61,40 @@ if [ -n "${LARCH_RELEASES_TOKEN:-}" ]; then
 else
   get "https://raw.githubusercontent.com/$repo/channels/$channel.json" "$temp/pointer.json" application/json
 fi
-bad() { fail 'invalid channel pointer'; }
-pointer=$temp/pointer.json
-[ "$(json "$pointer" schema)" = 1 ] && [ "$(json "$pointer" channel)" = "$channel" ] || bad
+python3 - "$temp/pointer.json" "$target" "$channel" "$repo" "$os" > "$temp/selected" <<'PY'
+import json,re,sys
+def require(ok):
+ if not ok: raise SystemExit('larch setup: invalid channel pointer')
+p=json.load(open(sys.argv[1]))
+require(p['schema']==1 and p['channel']==sys.argv[3] and isinstance(p['setup'],dict))
 # A release that does not build this target has no setup for it in its pointer.
-json "$pointer" "setup.$target" json >/dev/null ||
-  fail "Larch for $os is coming soon; this release does not include it. See https://github.com/$repo"
-url=$(json "$pointer" "setup.$target.url") && sha=$(json "$pointer" "setup.$target.sha256") &&
-  size=$(json "$pointer" "setup.$target.size") || bad
-[[ $sha =~ ^[0-9a-fA-F]{64}$ && $size =~ ^[1-9][0-9]*$ ]] || bad
-prefix=https://github.com/$repo/releases/download/
-[[ $url == "$prefix"* ]] || bad
-tag=${url#"$prefix"} name=${tag#*/} tag=${tag%%/*}
-for part in "$tag" "$name"; do
-  [[ $part =~ ^[A-Za-z0-9_.-]+$ && $part != . && $part != .. ]] || bad
-done
-sha=$(printf %s "$sha" | tr A-F a-f)
+if sys.argv[2] not in p['setup']: raise SystemExit('larch setup: Larch for '+sys.argv[5]+' is coming soon; this release does not include it. See https://github.com/'+sys.argv[4])
+a=p['setup'][sys.argv[2]]
+require(re.fullmatch('[0-9a-fA-F]{64}',a['sha256']) and isinstance(a['size'],int) and a['size']>0)
+url=a['url'];prefix='https://github.com/'+sys.argv[4]+'/releases/download/'
+require(url.startswith(prefix))
+parts=url[len(prefix):].split('/')
+require(len(parts)==2 and all(re.fullmatch('[A-Za-z0-9_.-]+',s) and s not in ('.','..') for s in parts))
+print(url);print(a['sha256'].lower());print(a['size']);print(parts[0]);print(parts[1])
+PY
+selected=()
+while IFS= read -r line; do selected+=("$line"); done < "$temp/selected"
+url=${selected[0]}
 if [ -n "${LARCH_RELEASES_TOKEN:-}" ]; then
-  get "$api/releases/tags/$tag" "$temp/assets.json" application/vnd.github+json
-  i=0
-  while asset=$(json "$temp/assets.json" "assets.$i.name"); do
-    [ "$asset" = "$name" ] && break
-    i=$((i + 1))
-  done
-  [ "$asset" = "$name" ] || fail 'release has no setup asset'
-  url=$(json "$temp/assets.json" "assets.$i.url") || fail 'invalid asset URL'
-  [[ $url =~ ^https://api\.github\.com/repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/assets/[0-9]+$ &&
-     $url == "$api/releases/assets/"* ]] || fail 'invalid asset URL'
+  get "$api/releases/tags/${selected[3]}" "$temp/assets.json" application/vnd.github+json
+  url=$(python3 - "$temp/assets.json" "${selected[4]}" "$repo" <<'PY'
+import json,sys,re
+assets=json.load(open(sys.argv[1]))['assets']
+a=next(a for a in assets if a['name']==sys.argv[2])
+if not re.fullmatch(r'https://api\.github\.com/repos/'+re.escape(sys.argv[3])+r'/releases/assets/[0-9]+',a['url']): raise SystemExit('larch setup: invalid asset URL')
+print(a['url'])
+PY
+)
 fi
 get "$url" "$temp/larch-setup" application/octet-stream
 if command -v sha256sum >/dev/null; then actual=$(sha256sum "$temp/larch-setup"); else actual=$(shasum -a 256 "$temp/larch-setup"); fi
-[ "${actual%% *}" = "$sha" ] || fail 'setup checksum mismatch; retry the install command'
-[ "$(wc -c < "$temp/larch-setup" | tr -d ' ')" = "$size" ] || fail 'setup size mismatch; retry the install command'
+[ "${actual%% *}" = "${selected[1]}" ] || fail 'setup checksum mismatch; retry the install command'
+[ "$(wc -c < "$temp/larch-setup" | tr -d ' ')" = "${selected[2]}" ] || fail 'setup size mismatch; retry the install command'
 chmod 700 "$temp/larch-setup"
 # A window needs a desktop: a Mac's own session, or Linux with X11 or Wayland.
 case "$target" in

@@ -12,7 +12,7 @@ the install commands below say so on those systems and stop without changing any
 |---|---|---|---|
 | OS | Windows 11, 64-bit x86 | macOS 26 or later, Apple silicon | 64-bit x86 |
 | GPU | NVIDIA RTX 30, 40 or 50 series, or none | Built in | NVIDIA RTX 30, 40 or 50 series, or none |
-| Also needs | PowerShell 5.1 or later | `curl` | `curl`, `python3` |
+| Also needs | PowerShell 5.1 or later | `curl`, `python3` | `curl`, `python3` |
 
 Without a supported GPU, the installer offers the CPU build, which works but is slow. Intel Macs and
 32-bit systems are not supported. See [Hardware](hardware.md) for details per card.
@@ -47,10 +47,8 @@ The installer then:
 
 Everything installs for your user only. No administrator rights are needed.
 
-On a Mac without Apple's developer tools, the Larch 0.1.0 installer makes macOS ask to install
-them first ("The python3 command requires the command line developer tools"). Click Install, wait
-for it to finish (about 10 minutes), then run the install command again. From the next release,
-the installer no longer needs these tools on a Mac.
+On a new Mac, macOS may first ask to install its command line developer tools, which the installer
+needs for `python3`. Click Install, wait for it to finish, then run the install command again.
 
 To answer the same questions in the terminal instead, add `--terminal`. The installer also stays in
 the terminal when there is no desktop to show a window on, such as over SSH, or when the window
