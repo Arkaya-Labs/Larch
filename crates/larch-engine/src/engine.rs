@@ -31,7 +31,7 @@ use larch_records::{
 use larch_sys::nvml::Nvml;
 
 use crate::fit::{
-    FitPlan, GRAPH_BYTES, drafter_bytes, fit, graph_arena_reserve, graph_quota, graph_reserve,
+    FitPlan, GRAPH_BYTES, drafter_bytes, graph_arena_reserve, graph_quota, graph_reserve,
     mixed_reserve, mtp_bytes, serving_scratch,
 };
 use crate::guard::{Guard, Target};
@@ -1413,34 +1413,49 @@ fn graphs_fit(with: &FitPlan, without: &FitPlan, set_aside: u64) -> bool {
 /// `waive_floor` (an operator's `LARCH_PREFILL_STREAM_ROWS`, or the hybrid MoE target, whose KV
 /// floor already holds each seat's measured peak) admits the pool wherever [`fit`] does.
 /// `set_aside`: the projector's bytes ([`graphs_fit`]).
+#[allow(clippy::too_many_arguments)]
 fn gated_plan(
-    plan_for: impl Fn(bool, u64) -> Result<FitPlan, LoadError>,
+    plan_for: impl Fn(bool, u32, u64) -> Result<FitPlan, LoadError>,
     mut graphs: bool,
     gated: bool,
     paid: bool,
+    seats: u32,
     stream_want: u64,
     waive_floor: bool,
     set_aside: u64,
 ) -> Result<(FitPlan, bool), LoadError> {
-    let mut plan = plan_for(graphs, 0);
+    let mut seats = seats;
+    let mut plan = plan_for(graphs, seats, 0);
     if gated {
-        let without = plan_for(false, 0)?;
+        let without = plan_for(false, seats, 0)?;
         let kept = keep_graphs(paid, &plan, &without, set_aside);
+        // The floor: one seat's capture where every seat's leaves the pool under its share, so a
+        // tight plan still replays one chat (the cold 0.3 file on a 5070 Ti ran eager at 1 chat,
+        // 75 against 120 tok/s); its larger buckets run eager, as past any quota.
+        let floor = (graphs && !kept)
+            .then(|| plan_for(true, 1, 0))
+            .and_then(Result::ok)
+            .filter(|p| p.graph_bytes > 0);
         if graph_diagnostics() {
             let with = plan.as_ref().map_or(0, |p| p.kv_blocks);
-            eprintln!("larch_graph_fit,{with},{},{kept}", without.kv_blocks);
+            let floor = floor.map_or(0, |p| p.kv_blocks);
+            eprintln!(
+                "larch_graph_fit,{with},{},{kept},{floor}",
+                without.kv_blocks
+            );
         }
-        if !kept {
-            graphs = false;
-            plan = Ok(without);
+        match (kept, floor) {
+            (true, _) => {}
+            (false, Some(p)) => (seats, plan) = (1, Ok(p)),
+            (false, None) => (graphs, plan) = (false, Ok(without)),
         }
     }
     plan?;
-    let with = plan_for(graphs, stream_want)?;
-    if waive_floor || graphs_fit(&with, &plan_for(false, 0)?, set_aside) {
+    let with = plan_for(graphs, seats, stream_want)?;
+    if waive_floor || graphs_fit(&with, &plan_for(false, seats, 0)?, set_aside) {
         return Ok((with, graphs));
     }
-    Ok((plan_for(graphs, 0)?, graphs))
+    Ok((plan_for(graphs, seats, 0)?, graphs))
 }
 
 /// Whether fit-gated graphs stay on: `with` fitted and either the load's plan already moved layers
@@ -1680,8 +1695,8 @@ impl Loaded {
                 } else {
                     0
                 };
-            let plan_for = |graphs, stream_want| {
-                fit(
+            let plan_for = |graphs, graph_seats, stream_want| {
+                crate::fit::fit_seats(
                     &props,
                     free,
                     &mc,
@@ -1689,6 +1704,7 @@ impl Loaded {
                     opts.kv_pool_fraction,
                     scratch,
                     seats,
+                    graph_seats,
                     graphs,
                     s.capture_arena_held(),
                     mapped,
@@ -1701,6 +1717,7 @@ impl Loaded {
                 graphs_on,
                 partial.graphs_fit_gated,
                 paid,
+                seats,
                 stream_want,
                 waive_floor,
                 vision_bytes,
@@ -5923,13 +5940,14 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use crate::fit::fit;
     use larch_kernels::{CPU, KError, KvPool, Stream, Tensor};
     use larch_model::{Arch, FakeModel, Model, ModelConfig, StepBatch, Transformer, tiny};
     use larch_records::{Backend, EngineError, HealthState, LoadError, RejectReason, knob_id};
 
     use super::{
         Capture, Dims, EffectiveConfig, Engine, FitPlan, GRAPH_BYTES, GraphKey, Loaded, Partial,
-        Refusal, block_runs, budget_layers, capture_charge, eager_line, fit, gated_plan,
+        Refusal, block_runs, budget_layers, capture_charge, eager_line, gated_plan,
         graph_decode_bucket, graph_reserve, graphs_fit, graphs_fit_gated, layer_download,
         layer_upload, mixed_key, remeasured_charge, says_eager, startup_config, step_floor,
     };
@@ -7248,40 +7266,110 @@ mod tests {
         let room = |usable: u64| usable + (512 << 20);
         let (before, c) = (&before, &c);
         let plan = |free: u64| {
-            move |graphs, want| {
-                fit(
-                    before, free, c, 2048, 0.85, 0, 16, graphs, false, false, want, 0,
+            move |graphs, seats, want| {
+                crate::fit::fit_seats(
+                    before, free, c, 2048, 0.85, 0, 16, seats, graphs, false, false, want, 0,
                 )
             }
         };
         let want = 800_000_000;
         // Graphs stay; the pool would take the KV pool under the floor, so it stays out.
-        let (p, graphs) =
-            gated_plan(plan(room(1_000_000_000)), true, true, false, want, false, 0).unwrap();
+        let (p, graphs) = gated_plan(
+            plan(room(1_000_000_000)),
+            true,
+            true,
+            false,
+            16,
+            want,
+            false,
+            0,
+        )
+        .unwrap();
         assert!(graphs && p.graph_bytes > 0, "{p:?}");
         assert_eq!(p.stream_pool_bytes, 0, "{p:?}");
-        // Under the gate without a pool: the graphs go, whatever the want.
+        // Under the gate without a pool: the graphs give way to their floor, one seat's capture,
+        // so one chat still replays (the cold 0.3 file on a 5070 Ti: eager at 1 chat, 75 against 120
+        // tok/s), whatever the want; with no room for that either, they go.
+        let one = crate::fit::graph_reserve(larch_kernels::Backend::Cuda, 1, 0);
         for want in [0, 100_000_000] {
-            let (p, graphs) =
-                gated_plan(plan(room(300_000_000)), true, true, false, want, false, 0).unwrap();
-            assert!(!graphs && p.graph_bytes == 0, "{p:?}");
+            let (p, graphs) = gated_plan(
+                plan(room(300_000_000)),
+                true,
+                true,
+                false,
+                16,
+                want,
+                false,
+                0,
+            )
+            .unwrap();
+            assert!(graphs && p.graph_bytes == one, "{p:?}");
+            let (p, graphs) = gated_plan(
+                plan(room(100_000_000)),
+                true,
+                true,
+                false,
+                16,
+                want,
+                false,
+                0,
+            )
+            .unwrap();
+            assert_eq!(p.graph_bytes, 0, "no room for the floor: {p:?} {graphs}");
         }
         // The floor, either side of 68 % with graphs on (112 MiB) ...
-        let (p, graphs) =
-            gated_plan(plan(room(3_000_000_000)), true, true, false, want, false, 0).unwrap();
+        let (p, graphs) = gated_plan(
+            plan(room(3_000_000_000)),
+            true,
+            true,
+            false,
+            16,
+            want,
+            false,
+            0,
+        )
+        .unwrap();
         assert!(graphs && p.graph_bytes > 0, "{p:?}");
         assert_eq!(p.stream_pool_bytes, want, "69 %: {p:?}");
-        let (p, graphs) =
-            gated_plan(plan(room(2_700_000_000)), true, true, false, want, false, 0).unwrap();
+        let (p, graphs) = gated_plan(
+            plan(room(2_700_000_000)),
+            true,
+            true,
+            false,
+            16,
+            want,
+            false,
+            0,
+        )
+        .unwrap();
         assert!(graphs && p.graph_bytes > 0, "{p:?}");
         assert_eq!(p.stream_pool_bytes, 0, "66 %: {p:?}");
         // An operator who set the crossover accepted the KV cost: past one context and the graphs
         // the floor does not apply, and a pool that does not fit there stays out all the same.
-        let (p, graphs) =
-            gated_plan(plan(room(1_000_000_000)), true, true, false, want, true, 0).unwrap();
+        let (p, graphs) = gated_plan(
+            plan(room(1_000_000_000)),
+            true,
+            true,
+            false,
+            16,
+            want,
+            true,
+            0,
+        )
+        .unwrap();
         assert!(graphs && p.graph_bytes > 0, "{p:?}");
         assert_eq!(p.stream_pool_bytes, want, "opted in: {p:?}");
-        let (p, _) = gated_plan(plan(room(900_000_000)), true, true, false, want, true, 0).unwrap();
+        let (p, _) = gated_plan(
+            plan(room(900_000_000)),
+            true,
+            true,
+            false,
+            16,
+            want,
+            true,
+            0,
+        )
+        .unwrap();
         assert_eq!(p.stream_pool_bytes, 0, "opted in, no room: {p:?}");
         // ... and with graphs off and no gate, against the same plan without the pool.
         let (p, _) = gated_plan(
@@ -7289,6 +7377,7 @@ mod tests {
             false,
             false,
             false,
+            16,
             want,
             false,
             0,
@@ -7300,6 +7389,7 @@ mod tests {
             false,
             false,
             false,
+            16,
             want,
             false,
             0,
@@ -9170,7 +9260,8 @@ mod tests {
 
     /// Through the real loader and `Loaded::load` on a fake CUDA card: a plan that moved a layer
     /// marks the load paid and keeps graphs at a pool share under the gate, its quota sized for
-    /// the one state slot its room leaves; the same share on a forced count refuses them.
+    /// the one state slot its room leaves; the same share on a forced count keeps their floor, one
+    /// seat's capture, so one chat still replays.
     #[test]
     fn a_planned_host_expert_load_is_paid_through_the_loader() {
         let (props, c, bytes, l, slot) = fake_cuda_terms();
@@ -9188,12 +9279,12 @@ mod tests {
         let (loaded, cfg, n, l) = fake_cuda_load(before, move |_, _| after, Some(1));
         assert_eq!(n, 1);
         assert!(!l.graphs_paid);
-        assert_eq!(
+        assert_ne!(
             cfg.values[knob_id::DECODE_GRAPHS as usize],
             0.0,
-            "forced: gated"
+            "forced: the floor"
         );
-        assert_eq!(loaded.graph_bytes, 0);
+        assert_eq!(loaded.graph_bytes, one);
     }
 
     /// The check after a default whole-layer load allows CUDA's free swing: a load that left the
