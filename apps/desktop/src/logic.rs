@@ -57,7 +57,7 @@ pub const GIB: f64 = 1024. * 1024. * 1024.;
 
 /// What the 35B card says of its faster version before it is made: where it helps and what it
 /// costs, in plain words. No speed figure: the gain was measured on one card, not this one.
-pub const FASTER_NOTE: &str = "Faster on GPUs that can't hold the whole model. The experts it rarely uses are kept in less detail, so quality is slightly lower. Takes a few minutes and 16 GB of disk.";
+pub const FASTER_NOTE: &str = "Faster on GPUs that can't hold the whole model. The experts it rarely uses are kept in less detail, so quality is slightly lower. Takes a few minutes and 17 GB of disk in Larch's data folder.";
 
 /// The faster version's progress line at `frac` (0 to 1) after `secs` seconds: "42 % · 3 min left".
 pub fn making_left(frac: f64, secs: f64) -> String {

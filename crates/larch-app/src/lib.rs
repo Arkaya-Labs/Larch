@@ -1082,11 +1082,7 @@ impl App {
                 && !(self.inner.projector_errors.lock())
                     .unwrap_or_else(PoisonError::into_inner)
                     .contains_key(path.to_string_lossy().as_ref()),
-            faster: (self.inner).faster_offer(
-                &path,
-                size_bytes,
-                self.inner.gpu().as_ref().map(|g| g.1),
-            ),
+            faster: (self.inner).faster_offer(&path, self.inner.gpu().as_ref().map(|g| g.1)),
         })
     }
 

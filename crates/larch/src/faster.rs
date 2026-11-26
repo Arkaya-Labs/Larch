@@ -4,13 +4,16 @@
 //! GPU. Only a file this binary carries a histogram for is offered: the histogram picks the experts
 //! that lose precision, and the quality cost was measured with that histogram on that file.
 //!
-//! The copy is made safely: the source is hashed first, free disk space is checked, the copy is
-//! written under a temporary name, checked, and renamed into place only once it passes. A failed or
-//! stopped build leaves nothing behind, and the source is never changed.
+//! The copy is made safely: one build at a time holds `<copy>.lock`, the source is hashed first,
+//! free disk space is checked, the copy is written under a temporary name, checked, and linked into
+//! place only once it passes (a link never replaces a file). A failed or stopped build leaves
+//! nothing behind, and the source is never changed.
 
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, BufReader};
+
+use fs2::FileExt;
 use std::path::{Path, PathBuf};
 
 use larch_model::gguf::Gguf;
@@ -25,6 +28,9 @@ pub struct Known {
     /// The file's length and LFS SHA-256 (bench/models.toml).
     pub size: u64,
     pub sha256: &'static str,
+    /// The least GPU memory (its total) the copy was measured to fit and run faster on: a smaller
+    /// card cannot hold the copy whole either, so it is not offered there.
+    pub min_gpu: u64,
     /// The `<gguf>.experts` histogram the copy is planned from.
     routes: &'static [u8],
 }
@@ -35,8 +41,19 @@ pub struct Known {
 const KNOWN: &[Known] = &[Known {
     size: 17_117_951_808,
     sha256: "eaef9194110fa86144b003e22f5058a3fb2810be0828c805ff0bec21601d2db8",
+    // The 15.7 GB copy loaded whole on the 5070 Ti (16,303 MiB); 16 GB cards report about 15.9 GiB
+    // total and 12 GB cards under 12, so 15 GiB tells the two apart.
+    min_gpu: 15 << 30,
     routes: include_bytes!("../../../bench/routes/m13.experts"),
 }];
+
+impl Known {
+    /// Whether a GPU with `gpu_total` bytes is offered the copy: it cannot hold the original whole,
+    /// and it can hold the copy.
+    pub fn offered_on(&self, gpu_total: u64) -> bool {
+        (self.min_gpu..self.size).contains(&gpu_total)
+    }
+}
 
 /// The extra free space a build keeps beyond the copy's own size.
 const DISK_MARGIN: u64 = 1 << 30;
@@ -62,6 +79,10 @@ pub enum Error {
     },
     /// Something that is not a faster copy is already where the copy would go.
     Occupied(PathBuf),
+    /// Another build of the same copy holds its lock (another `larch faster`, or the app).
+    Busy,
+    /// The copy's folder cannot hard-link, which publishing needs (FAT32 and exFAT drives).
+    NoLinks(PathBuf),
     /// The caller stopped it.
     Stopped,
     /// The written copy did not pass its check.
@@ -89,6 +110,13 @@ impl fmt::Display for Error {
                 "{} is already there and is not a faster version. Move it, or choose another place.",
                 p.display()
             ),
+            Error::Busy => f.write_str("The faster version is already being made."),
+            Error::NoLinks(d) => write!(
+                f,
+                "{} cannot hold the faster version: its drive does not support hard links (FAT32 \
+                 or exFAT). Choose a folder on another drive.",
+                d.display()
+            ),
             Error::Stopped => f.write_str("Stopped."),
             Error::Check(e) => write!(f, "The faster version did not pass its check: {e}"),
             Error::Io(e) => write!(f, "The faster version could not be made: {e}"),
@@ -114,13 +142,55 @@ pub fn known(src: &Path) -> Option<&'static Known> {
 
 /// `dst`'s name while it is written and checked: never one a model list or a load picks up.
 fn unverified(dst: &Path) -> PathBuf {
+    beside(dst, ".unverified")
+}
+
+/// `dst` with `suffix` added to its file name.
+fn beside(dst: &Path, suffix: &str) -> PathBuf {
     let mut p = dst.as_os_str().to_owned();
-    p.push(".unverified");
+    p.push(suffix);
     PathBuf::from(p)
 }
 
+/// The exclusive `<dst>.lock` one build holds; dropping it unlocks and removes the file.
+// ponytail: a build that opened the file just before the holder removed it can lock the unlinked
+// file beside a third build; the worst case is one of them refused at publish (a link never
+// replaces), so no data is lost. Keep the file if that is ever seen.
+struct Lock(PathBuf, File);
+
+impl Lock {
+    /// Takes `dst`'s build lock, or [`Error::Busy`] if another build holds it.
+    fn take(dst: &Path) -> Result<Lock, Error> {
+        let path = beside(dst, ".lock");
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)?;
+        file.try_lock_exclusive().map_err(|_| Error::Busy)?;
+        Ok(Lock(path, file))
+    }
+
+    /// Whether the folder can publish by hard link, tried on the lock file before any long work.
+    fn links(&self, dir: &Path) -> Result<(), Error> {
+        let probe = beside(&self.0, ".link");
+        let _ = fs::remove_file(&probe);
+        let r = fs::hard_link(&self.0, &probe);
+        let _ = fs::remove_file(&probe);
+        r.map_err(|_| Error::NoLinks(dir.to_owned()))
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.1);
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 /// Removes what an interrupted build left at `dst`: the unchecked copy and the repack's own
-/// temporary files (`<unverified>.<pid>.tmp`).
+/// temporary files (`<unverified>.<pid>.tmp`). A build calls it only while it holds the copy's
+/// lock; the app calls it after stopping its own build of the copy.
 pub fn clean(dst: &Path) {
     let part = unverified(dst);
     let _ = fs::remove_file(&part);
@@ -151,11 +221,15 @@ pub fn build(
     progress: &mut dyn FnMut(Stage, u64, u64) -> bool,
 ) -> Result<(), Error> {
     let k = known(src).ok_or(Error::NotOffered)?;
-    let dir = match dst.parent() {
+    build_with(src, dst, k, fs2::available_space(folder(dst))?, progress)
+}
+
+/// The folder `dst` goes in.
+fn folder(dst: &Path) -> &Path {
+    match dst.parent() {
         Some(d) if !d.as_os_str().is_empty() => d,
         _ => Path::new("."),
-    };
-    build_with(src, dst, k, fs2::available_space(dir)?, progress)
+    }
 }
 
 /// [`build`] for `k`'s file, with `have` bytes free at `dst`'s folder.
@@ -166,6 +240,8 @@ fn build_with(
     have: u64,
     progress: &mut dyn FnMut(Stage, u64, u64) -> bool,
 ) -> Result<(), Error> {
+    let lock = Lock::take(dst)?;
+    lock.links(folder(dst))?;
     clean(dst);
     if dst.exists() {
         return check(dst, k).map_err(|_| Error::Occupied(dst.to_owned()));
@@ -175,11 +251,8 @@ fn build_with(
     if have < need {
         return Err(Error::Disk { need, have });
     }
-    let sum = larch_fetch::sha256_file_progress(src, &mut |n| progress(Stage::Check, n, k.size))
-        .map_err(|e| match e.kind() {
-            io::ErrorKind::Interrupted => Error::Stopped,
-            _ => Error::Io(e),
-        })?;
+    let sum = larch_fetch::sha256_file_progress(src, &mut |n| progress(Stage::Check, n, k.size))?
+        .ok_or(Error::Stopped)?;
     if sum != k.sha256 {
         return Err(Error::NotThisFile);
     }
@@ -195,10 +268,13 @@ fn build_with(
             e => Error::Repack(e),
         },
     )?;
-    let published = check(&part, k).and_then(|()| Ok(fs::rename(&part, dst)?));
-    if published.is_err() {
-        let _ = fs::remove_file(&part);
-    }
+    // A hard link publishes without replacing: it fails if a file appeared at `dst` meanwhile.
+    let published = check(&part, k).and_then(|()| match fs::hard_link(&part, dst) {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(Error::Occupied(dst.to_owned())),
+        r => Ok(r.and_then(|()| q2k::sync_dir(dst))?),
+    });
+    let _ = fs::remove_file(&part); // published through its link, or failed: not needed either way
+    drop(lock);
     published
 }
 
@@ -302,7 +378,7 @@ mod tests {
 
     use larch_model::{Arch, Histogram, tiny};
 
-    use super::{Error, Known, Stage, build_with, check};
+    use super::{Error, KNOWN, Known, Lock, Stage, build_with, check};
 
     /// The tiny MoE model in a fresh folder, and a row for it whose histogram counts expert `e` of
     /// every layer `EXPERTS - e` times, so the coldest is the highest id (a uniform one picks 0).
@@ -321,6 +397,7 @@ mod tests {
         let k = Known {
             size: bytes.len() as u64,
             sha256: Box::leak(larch_fetch::sha256_bytes(&bytes).into_boxed_str()),
+            min_gpu: 0,
             routes: Box::leak(fs::read(&hp).unwrap().into_boxed_slice()),
         };
         fs::remove_file(&hp).unwrap();
@@ -416,6 +493,53 @@ mod tests {
         assert!(matches!(e, Error::Occupied(_)), "{e}");
         assert_eq!(fs::read(&src).unwrap(), before, "the source is untouched");
         fs::remove_dir_all(dst.parent().unwrap()).unwrap();
+    }
+
+    /// A file put at the copy's place while the copy was written is kept, and the build refused.
+    #[test]
+    fn a_file_that_appears_during_the_build_is_not_replaced() {
+        let (src, dst, k) = setup("appears");
+        let mut put = false;
+        let r = build_with(&src, &dst, &k, u64::MAX, &mut |s, _, _| {
+            if s == Stage::Write && !put {
+                fs::write(&dst, b"someone else's").unwrap();
+                put = true;
+            }
+            true
+        });
+        assert!(matches!(r, Err(Error::Occupied(_))), "{r:?}");
+        assert_eq!(fs::read(&dst).unwrap(), b"someone else's");
+        assert_eq!(others(dst.parent().unwrap()), ["m.faster.gguf"]);
+        fs::remove_dir_all(dst.parent().unwrap()).unwrap();
+    }
+
+    /// A second build of the same copy is refused and leaves the first one's files alone.
+    #[test]
+    fn a_second_build_of_the_same_copy_waits_its_turn() {
+        let (src, dst, k) = setup("busy");
+        let tmp = dst
+            .parent()
+            .unwrap()
+            .join("m.faster.gguf.unverified.4242.tmp");
+        fs::write(&tmp, b"the first build's").unwrap();
+        let first = Lock::take(&dst).unwrap();
+        let r = build_with(&src, &dst, &k, u64::MAX, &mut |_, _, _| panic!("no work"));
+        assert!(matches!(r, Err(Error::Busy)), "{r:?}");
+        assert_eq!(fs::read(&tmp).unwrap(), b"the first build's");
+        drop(first);
+        build_with(&src, &dst, &k, u64::MAX, &mut |_, _, _| true).unwrap();
+        assert_eq!(others(dst.parent().unwrap()), ["m.faster.gguf"]);
+        fs::remove_dir_all(dst.parent().unwrap()).unwrap();
+    }
+
+    /// 12 GB cards cannot hold the copy and 24 GB ones hold the original: only 16 GB cards see it.
+    #[test]
+    fn the_copy_is_offered_only_on_cards_it_fits_and_the_original_does_not() {
+        let k = &KNOWN[0];
+        let mib = |m: u64| m << 20;
+        assert!(!k.offered_on(mib(12_282)), "12 GB");
+        assert!(k.offered_on(mib(16_303)), "the 5070 Ti it was measured on");
+        assert!(!k.offered_on(mib(24_564)), "24 GB");
     }
 
     /// The carried row is m13's in bench/models.toml, where model identifiers live: the binary

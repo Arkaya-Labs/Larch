@@ -349,7 +349,7 @@ fn write(
 }
 
 /// Makes `path`'s new directory entry durable (a no-op where directories cannot be synced).
-fn sync_dir(path: &Path) -> io::Result<()> {
+pub fn sync_dir(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     if let Some(dir) = path.parent() {
         let dir = if dir.as_os_str().is_empty() {

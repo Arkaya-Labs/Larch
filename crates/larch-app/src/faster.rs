@@ -30,20 +30,16 @@ impl Inner {
         self.data.join(DIR).join(format!("{name}.faster.gguf"))
     }
 
-    /// The card's offer for `src` of `size_bytes`: a CUDA build (where the copy's 2-bit experts
-    /// load and it was measured faster) on a GPU that cannot hold the whole original, and a file
-    /// [`larch::faster`] carries a histogram for.
+    /// The card's offer for `src`: a CUDA build (where the copy's 2-bit experts load and it was
+    /// measured faster), a file [`larch::faster`] carries a histogram for, and a GPU that cannot
+    /// hold the whole original but can hold the copy ([`faster::Known::offered_on`]).
     // ponytail: measured on one 16 GB sm_120 card (bench/results/35b-vs-llamacpp-2026-11-25.md);
     // elsewhere switch_or_back keeps the copy only where it loads whole with graphs. Narrow the
     // offer by card if one passes that check and still measures the copy slower.
-    pub(crate) fn faster_offer(
-        &self,
-        src: &Path,
-        size_bytes: u64,
-        gpu_total: Option<u64>,
-    ) -> Option<Faster> {
-        let here = larch_kernels::BACKEND == "cuda" && gpu_total.is_some_and(|t| t < size_bytes);
-        (here && faster::known(src).is_some()).then(|| {
+    pub(crate) fn faster_offer(&self, src: &Path, gpu_total: Option<u64>) -> Option<Faster> {
+        let k = faster::known(src)?;
+        let here = larch_kernels::BACKEND == "cuda" && gpu_total.is_some_and(|t| k.offered_on(t));
+        here.then(|| {
             let copy = self.faster_path(src);
             Faster {
                 copy: copy.is_file().then(|| copy.to_string_lossy().into_owned()),
@@ -59,9 +55,8 @@ impl App {
     /// The faster version offered for the model at `path` on this computer, as its listing shows
     /// it; None where there is none.
     pub fn faster_for(&self, path: &str) -> Option<Faster> {
-        let size = std::fs::metadata(path).ok()?.len();
         let gpu = self.inner.gpu().as_ref().map(|g| g.1);
-        self.inner.faster_offer(Path::new(path), size, gpu)
+        self.inner.faster_offer(Path::new(path), gpu)
     }
 
     /// Starts making the faster copy of the model at `path` on a thread of its own; its progress
@@ -200,7 +195,16 @@ impl Inner {
         }
         let made = std::fs::create_dir_all(dst.parent().unwrap_or(dst))
             .map_err(faster::Error::from)
-            .and_then(|()| faster::build(src, dst, &mut progress));
+            .and_then(|()| faster::build(src, dst, &mut progress))
+            // Stopped after the last check (the model deleted meanwhile): the copy goes too, or
+            // nothing would list or delete it.
+            .and_then(|()| match stop.load(Ordering::SeqCst) {
+                true => {
+                    let _ = std::fs::remove_file(dst);
+                    Err(faster::Error::Stopped)
+                }
+                false => Ok(()),
+            });
         self.end_build(src);
         (self.emit)(match made {
             Ok(()) => Event::FasterDone(FasterDone {
@@ -219,7 +223,7 @@ impl Inner {
     pub(crate) fn stop_build(&self, src: &Path) -> bool {
         let jobs = self.building.lock().unwrap_or_else(PoisonError::into_inner);
         let job = jobs.iter().find(|(p, _)| p == src);
-        job.inspect(|(_, stop)| stop.store(true, Ordering::Relaxed))
+        job.inspect(|(_, stop)| stop.store(true, Ordering::SeqCst))
             .is_some()
     }
 
