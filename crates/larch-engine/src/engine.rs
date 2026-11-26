@@ -31,7 +31,7 @@ use larch_records::{
 use larch_sys::nvml::Nvml;
 
 use crate::fit::{
-    FitPlan, GRAPH_BYTES, drafter_bytes, fit, graph_arena_reserve, graph_quota, graph_reserve,
+    FitPlan, GRAPH_BYTES, drafter_bytes, graph_arena_reserve, graph_quota, graph_reserve,
     mixed_reserve, mtp_bytes, serving_scratch,
 };
 use crate::guard::{Guard, Target};
@@ -612,6 +612,9 @@ struct Loaded {
     headroom_bytes: u64,
     /// Successful-live executable quota; forced observation growth may only decrease it.
     graph_bytes: u64,
+    /// The plan's graphs are the gate's floor ([`crate::fit::FitPlan::graph_floor`]): only the
+    /// one-row decode bucket captures, so no larger shape takes its one slot.
+    graph_floor: bool,
     /// The capture arena still to be allocated, kept from observation growth even when the quota
     /// reaches zero; 0 once the stream holds it.
     graph_arena_bytes: u64,
@@ -1384,7 +1387,7 @@ fn graph_diagnostics() -> bool {
 
 /// Whether a context the engine raised for a projector (above the caller's `asked`) should be
 /// halved because it fits only without decode graphs (`decode_graphs` on, and the plan kept none:
-/// `with_graphs` false when the gate turned them off or none were reserved). One full context comes
+/// `with_graphs` false when the gate turned them off, kept only their floor, or none were reserved). One full context comes
 /// before the graphs in the fit, so a raised context can take their room: Qwen3.5-2B on a 4 GB card
 /// fit 32k without graphs and decoded at 38 tok/s, where 16k with them gave 68.
 fn trade_context_for_graphs(
@@ -1397,7 +1400,8 @@ fn trade_context_for_graphs(
     graphs_on && !with_graphs && projector && context > asked.max(crate::VISION_MIN_CONTEXT)
 }
 
-/// Keep fit-gated graphs only if the pool keeps `GRAPH_FIT_MIN_KV` of its blocks without them.
+/// Whether graphs keep `GRAPH_FIT_MIN_KV` of the pool's blocks without them; [`gated_plan`] holds
+/// both every seat's graphs and their floor (one seat's) to it.
 /// `set_aside`: device bytes the load gave something beside the text model (a vision projector). They
 /// count as pool on both sides, so the rule weighs graphs against the pool the text model alone would
 /// have, and loading a projector never turns graphs off (on a 4 GB 3050 it cost InternVL3-1B its
@@ -1407,40 +1411,69 @@ fn graphs_fit(with: &FitPlan, without: &FitPlan, set_aside: u64) -> bool {
     f64::from(with.kv_blocks) + extra >= GRAPH_FIT_MIN_KV * (f64::from(without.kv_blocks) + extra)
 }
 
-/// The plan for a load and whether decode graphs stay: a gated default keeps them only if
-/// [`keep_graphs`] without the streaming pool, which comes after the graphs and must not turn them
-/// off; the pool then joins the plan if it too leaves the KV pool that floor, else stays out.
+/// The plan for a load and whether decode graphs stay, for `seats` graph seats: a gated default
+/// keeps them only if [`keep_graphs`] without the streaming pool, which comes after the graphs and
+/// must not turn them off, else their floor (one seat's capture) if that keeps the share; the pool then joins the plan if it too leaves the KV pool that floor, else stays out.
 /// `waive_floor` (an operator's `LARCH_PREFILL_STREAM_ROWS`, or the hybrid MoE target, whose KV
 /// floor already holds each seat's measured peak) admits the pool wherever [`fit`] does.
 /// `set_aside`: the projector's bytes ([`graphs_fit`]).
+#[allow(clippy::too_many_arguments)]
 fn gated_plan(
-    plan_for: impl Fn(bool, u64) -> Result<FitPlan, LoadError>,
+    plan_for: impl Fn(bool, u32, u64) -> Result<FitPlan, LoadError>,
     mut graphs: bool,
     gated: bool,
     paid: bool,
+    seats: u32,
     stream_want: u64,
     waive_floor: bool,
     set_aside: u64,
 ) -> Result<(FitPlan, bool), LoadError> {
-    let mut plan = plan_for(graphs, 0);
+    let mut seats = seats;
+    let mut plan = plan_for(graphs, seats, 0);
     if gated {
-        let without = plan_for(false, 0)?;
+        let without = plan_for(false, seats, 0)?;
         let kept = keep_graphs(paid, &plan, &without, set_aside);
+        // The floor: one seat's capture where every seat's leaves the pool under its share, held to
+        // that share itself, so a tight plan still replays one chat (the cold 0.3 file on a 5070 Ti
+        // ran eager at 1 chat, 70.6 against 163.0 tok/s, its floor keeping 438 of 634 blocks); its
+        // larger buckets run eager, as past any quota. At one seat it is the plan that failed.
+        // ponytail: one seat only; plan a floor of more buckets if a card shows several chats
+        // eager on a floor while the share would hold their captures.
+        let floor = match (graphs && !kept && seats > 1).then(|| plan_for(true, 1, 0)) {
+            Some(Ok(p)) => Some(p),
+            Some(Err(LoadError::DoesNotFit { .. })) | None => None,
+            Some(Err(e)) => return Err(e),
+        }
+        .filter(|p| p.graph_bytes > 0 && keep_graphs(paid, &Ok(*p), &without, set_aside));
         if graph_diagnostics() {
             let with = plan.as_ref().map_or(0, |p| p.kv_blocks);
-            eprintln!("larch_graph_fit,{with},{},{kept}", without.kv_blocks);
+            let floor = floor.map_or(0, |p| p.kv_blocks);
+            eprintln!(
+                "larch_graph_fit,{with},{},{kept},{floor}",
+                without.kv_blocks
+            );
         }
-        if !kept {
-            graphs = false;
-            plan = Ok(without);
+        match (kept, floor) {
+            (true, _) => {}
+            (false, Some(p)) => (seats, plan) = (1, Ok(p)),
+            (false, None) => (graphs, plan) = (false, Ok(without)),
         }
     }
-    plan?;
-    let with = plan_for(graphs, stream_want)?;
-    if waive_floor || graphs_fit(&with, &plan_for(false, 0)?, set_aside) {
+    let plan = plan?;
+    let with = plan_for(graphs, seats, stream_want)?;
+    let without = plan_for(false, seats, 0)?;
+    if waive_floor || graphs_fit(&with, &without, set_aside) {
         return Ok((with, graphs));
     }
-    Ok((plan_for(graphs, 0)?, graphs))
+    // A floor that would keep the streaming pool out where no graphs would let it in gives way:
+    // the pool's prefill (host experts on the device) before one chat's replays.
+    if plan.graph_floor {
+        let pooled = plan_for(false, seats, stream_want)?;
+        if pooled.stream_pool_bytes > 0 && graphs_fit(&pooled, &without, set_aside) {
+            return Ok((pooled, false));
+        }
+    }
+    Ok((plan_for(graphs, seats, 0)?, graphs))
 }
 
 /// Whether fit-gated graphs stay on: `with` fitted and either the load's plan already moved layers
@@ -1680,8 +1713,8 @@ impl Loaded {
                 } else {
                     0
                 };
-            let plan_for = |graphs, stream_want| {
-                fit(
+            let plan_for = |graphs, graph_seats, stream_want| {
+                crate::fit::fit_seats(
                     &props,
                     free,
                     &mc,
@@ -1689,6 +1722,7 @@ impl Loaded {
                     opts.kv_pool_fraction,
                     scratch,
                     seats,
+                    graph_seats,
                     graphs,
                     s.capture_arena_held(),
                     mapped,
@@ -1701,6 +1735,7 @@ impl Loaded {
                 graphs_on,
                 partial.graphs_fit_gated,
                 paid,
+                seats,
                 stream_want,
                 waive_floor,
                 vision_bytes,
@@ -1732,7 +1767,7 @@ impl Loaded {
                 Ok((p, kept))
                     if trade_context_for_graphs(
                         graphs_on,
-                        kept && p.graph_bytes > 0,
+                        kept && p.graph_bytes > 0 && !p.graph_floor,
                         projector,
                         max_context,
                         opts.max_context,
@@ -1741,7 +1776,8 @@ impl Loaded {
                     first_fit.get_or_insert((max_context, (dims, bytes, scratch, p, kept)));
                     max_context = (max_context / 2).max(crate::VISION_MIN_CONTEXT);
                 }
-                Ok((p, kept)) if !graphs_on || (kept && p.graph_bytes > 0) => {
+                // A floor is not the graphs a smaller context may still get whole.
+                Ok((p, kept)) if !graphs_on || (kept && p.graph_bytes > 0 && !p.graph_floor) => {
                     break (dims, bytes, scratch, p, kept);
                 }
                 // No smaller context got the graphs: the largest that fit, as before.
@@ -1939,6 +1975,7 @@ impl Loaded {
             mixed_graphs: larch_kernels::routes().mixed_graphs,
             headroom_bytes: plan.headroom_bytes,
             graph_bytes: plan.graph_bytes,
+            graph_floor: plan.graph_floor,
             graph_arena_bytes: plan.graph_arena_bytes,
             model: partial.model.take().expect("loaded model"),
             k,
@@ -4620,6 +4657,10 @@ impl Engine {
                 None if k.prefill != 0 => {
                     loaded.graphs.insert(k, Capture::Seen);
                 }
+                // On the gate's floor only one chat's bucket captures; every other shape runs eager.
+                _ if loaded.graph_floor && (k.decode > 1 || k.prefill != 0 || k.checks != 0) => {
+                    loaded.graphs.insert(k, Capture::Refused(room));
+                }
                 // A capture is charged at least the floor, so a quota short of it never keeps one.
                 _ if room.free < GRAPH_BYTES => {
                     loaded.graphs.insert(k, Capture::Refused(room));
@@ -5923,13 +5964,14 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use crate::fit::fit;
     use larch_kernels::{CPU, KError, KvPool, Stream, Tensor};
     use larch_model::{Arch, FakeModel, Model, ModelConfig, StepBatch, Transformer, tiny};
     use larch_records::{Backend, EngineError, HealthState, LoadError, RejectReason, knob_id};
 
     use super::{
         Capture, Dims, EffectiveConfig, Engine, FitPlan, GRAPH_BYTES, GraphKey, Loaded, Partial,
-        Refusal, block_runs, budget_layers, capture_charge, eager_line, fit, gated_plan,
+        Refusal, block_runs, budget_layers, capture_charge, eager_line, gated_plan,
         graph_decode_bucket, graph_reserve, graphs_fit, graphs_fit_gated, layer_download,
         layer_upload, mixed_key, remeasured_charge, says_eager, startup_config, step_floor,
     };
@@ -7248,40 +7290,116 @@ mod tests {
         let room = |usable: u64| usable + (512 << 20);
         let (before, c) = (&before, &c);
         let plan = |free: u64| {
-            move |graphs, want| {
-                fit(
-                    before, free, c, 2048, 0.85, 0, 16, graphs, false, false, want, 0,
+            move |graphs, seats, want| {
+                crate::fit::fit_seats(
+                    before, free, c, 2048, 0.85, 0, 16, seats, graphs, false, false, want, 0,
                 )
             }
         };
         let want = 800_000_000;
         // Graphs stay; the pool would take the KV pool under the floor, so it stays out.
-        let (p, graphs) =
-            gated_plan(plan(room(1_000_000_000)), true, true, false, want, false, 0).unwrap();
+        let (p, graphs) = gated_plan(
+            plan(room(1_000_000_000)),
+            true,
+            true,
+            false,
+            16,
+            want,
+            false,
+            0,
+        )
+        .unwrap();
         assert!(graphs && p.graph_bytes > 0, "{p:?}");
         assert_eq!(p.stream_pool_bytes, 0, "{p:?}");
-        // Under the gate without a pool: the graphs go, whatever the want.
+        // Under the gate without a pool: the graphs give way to their floor, one seat's capture,
+        // so one chat still replays (the cold 0.3 file on a 5070 Ti: eager at 1 chat, 75 against 120
+        // tok/s), whatever the want; with no room for that either, they go.
+        // The floor's quota: the measured one-row capture (fit.rs ONE_ROW_GRAPH_BYTES), held to the share.
+        let one = 2 * GRAPH_BYTES;
         for want in [0, 100_000_000] {
-            let (p, graphs) =
-                gated_plan(plan(room(300_000_000)), true, true, false, want, false, 0).unwrap();
-            assert!(!graphs && p.graph_bytes == 0, "{p:?}");
+            let (p, graphs) = gated_plan(
+                plan(room(300_000_000)),
+                true,
+                true,
+                false,
+                16,
+                want,
+                false,
+                0,
+            )
+            .unwrap();
+            assert!(graphs && p.graph_bytes == one, "{p:?}");
+            let (p, graphs) = gated_plan(
+                plan(room(100_000_000)),
+                true,
+                true,
+                false,
+                16,
+                want,
+                false,
+                0,
+            )
+            .unwrap();
+            // No quota at all: the knob stays on and every capture is refused, as before the floor.
+            assert_eq!(
+                (graphs, p.graph_bytes),
+                (true, 0),
+                "no room for the floor: {p:?}"
+            );
         }
         // The floor, either side of 68 % with graphs on (112 MiB) ...
-        let (p, graphs) =
-            gated_plan(plan(room(3_000_000_000)), true, true, false, want, false, 0).unwrap();
+        let (p, graphs) = gated_plan(
+            plan(room(3_000_000_000)),
+            true,
+            true,
+            false,
+            16,
+            want,
+            false,
+            0,
+        )
+        .unwrap();
         assert!(graphs && p.graph_bytes > 0, "{p:?}");
         assert_eq!(p.stream_pool_bytes, want, "69 %: {p:?}");
-        let (p, graphs) =
-            gated_plan(plan(room(2_700_000_000)), true, true, false, want, false, 0).unwrap();
+        let (p, graphs) = gated_plan(
+            plan(room(2_700_000_000)),
+            true,
+            true,
+            false,
+            16,
+            want,
+            false,
+            0,
+        )
+        .unwrap();
         assert!(graphs && p.graph_bytes > 0, "{p:?}");
         assert_eq!(p.stream_pool_bytes, 0, "66 %: {p:?}");
         // An operator who set the crossover accepted the KV cost: past one context and the graphs
         // the floor does not apply, and a pool that does not fit there stays out all the same.
-        let (p, graphs) =
-            gated_plan(plan(room(1_000_000_000)), true, true, false, want, true, 0).unwrap();
+        let (p, graphs) = gated_plan(
+            plan(room(1_000_000_000)),
+            true,
+            true,
+            false,
+            16,
+            want,
+            true,
+            0,
+        )
+        .unwrap();
         assert!(graphs && p.graph_bytes > 0, "{p:?}");
         assert_eq!(p.stream_pool_bytes, want, "opted in: {p:?}");
-        let (p, _) = gated_plan(plan(room(900_000_000)), true, true, false, want, true, 0).unwrap();
+        let (p, _) = gated_plan(
+            plan(room(900_000_000)),
+            true,
+            true,
+            false,
+            16,
+            want,
+            true,
+            0,
+        )
+        .unwrap();
         assert_eq!(p.stream_pool_bytes, 0, "opted in, no room: {p:?}");
         // ... and with graphs off and no gate, against the same plan without the pool.
         let (p, _) = gated_plan(
@@ -7289,6 +7407,7 @@ mod tests {
             false,
             false,
             false,
+            16,
             want,
             false,
             0,
@@ -7300,6 +7419,7 @@ mod tests {
             false,
             false,
             false,
+            16,
             want,
             false,
             0,
@@ -7397,6 +7517,7 @@ mod tests {
             kv_block_bytes: 1,
             kv_blocks,
             max_seqs_fit: 1,
+            graph_floor: false,
         };
         assert!(graphs_fit(&plan(75), &plan(100), 0));
         assert!(graphs_fit(&plan(68), &plan(100), 0));
