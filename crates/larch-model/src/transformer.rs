@@ -2780,23 +2780,14 @@ impl Transformer {
         let mut live = rows;
         if self.streaming && layer < self.layers.len() {
             let nd = self.stream_decode;
-            let streamed = match nd {
-                0 => self.stream_experts(s, layer, experts, cold, m, h, &ids, &weights, out)?,
-                nd => {
-                    let n = rows - nd;
-                    let (h, ids, w, o) = (
-                        h.rows(nd, n)?,
-                        ids.rows(nd, n)?,
-                        weights.rows(nd, n)?,
-                        out.rows(nd, n)?,
-                    );
-                    self.stream_experts(s, layer, experts, cold, m, &h, &ids, &w, &o)?
+            let n = rows - nd;
+            let (h, i) = (h.rows(nd, n)?, ids.rows(nd, n)?);
+            let (w, o) = (weights.rows(nd, n)?, out.rows(nd, n)?);
+            if self.stream_experts(s, layer, experts, cold, m, &h, &i, &w, &o)? {
+                if nd == 0 {
+                    return Ok(());
                 }
-            };
-            match (streamed, nd) {
-                (true, 0) => return Ok(()),
-                (true, nd) => live = nd,
-                (false, _) => {}
+                live = nd;
             }
         }
         // Dynamic residency's uploads map in the next pass, which a replay never makes.
