@@ -9236,18 +9236,33 @@ mod tests {
     }
 
     /// A load the check finds short gives up state slots before it moves a layer: the most slots
-    /// whose freed state covers the need (2 of 8 here), measured again.
+    /// whose freed state covers the need (5 of 8 here), measured again. Below MANY_SEATS it keeps
+    /// them and moves a layer instead (`settle_low`): room for 2 slots ends with 4 and a host layer.
     #[test]
     fn a_short_hybrid_load_gives_up_state_slots_before_a_layer() {
         let (props, c, _, l, slot) = fake_cuda_terms();
         let need = |beside, seats| {
             crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
         };
-        let two = graph_reserve(larch_kernels::Backend::Cuda, 2, 0);
-        let state = |slots: u64| l.hybrid - (8 - slots) * slot;
-        let room = need(l.scratch + two + l.graph_arena, 2) + crate::FREE_SWING + state(2);
-        let (loaded, _, n, _) = fake_cuda_load(1 << 30, move |_, held| room - held, None);
-        assert_eq!((n, loaded.model.state_slots()), (0, 2));
+        let room_for = |k: u32| {
+            let g = graph_reserve(larch_kernels::Backend::Cuda, k, 0);
+            need(l.scratch + g + l.graph_arena, k) + crate::FREE_SWING + l.hybrid
+                - u64::from(8 - k) * slot
+        };
+        let five = room_for(5);
+        let (loaded, _, n, _) = fake_cuda_load(1 << 30, move |_, held| five - held, None);
+        assert_eq!((n, loaded.model.state_slots()), (0, 5));
+        // Room for 2 slots at no host layer, for 5 once a layer moved.
+        let two = room_for(2);
+        let after = move |n: u32, held: u64| if n == 0 { two } else { five } - held;
+        let (loaded, _, n, _) = fake_cuda_load(1 << 30, after, None);
+        // The tiny model's layers are small, so the re-plan's margin (its largest expert and the
+        // free swing) moves two; m13's 381 MB layer covers it alone.
+        let slots = loaded.model.state_slots();
+        assert!(
+            n > 0 && slots >= super::MANY_SEATS,
+            "{n} host layers, {slots} slots"
+        );
     }
 
     /// A hybrid's real loader gives `max_batch_seqs` 16 only 8 state slots on any device; the

@@ -1579,8 +1579,8 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                     return fits_after_load(m, planned, before.vram_free, free, need(slots));
                 }
                 let freed = |k: u32| free + u64::from(slots - k) * t.slot_bytes;
-                let low = floor.min(slots);
-                match (low..slots).rev().find(|&k| freed(k) >= need(k)) {
+                let low = settle_low(slots, floor);
+                match settle_slots(free, slots, floor, t.slot_bytes, need) {
                     Some(k) => slots = k,
                     // Short even at the floor: the host layers cover what it leaves.
                     None if planned || slots == low => {
@@ -2154,6 +2154,33 @@ fn plan_experts(experts: &[u64], block: u64) -> Vec<u64> {
 /// graphs' reserve in the room (`seats` != 0). With every layer on the host they gave way.
 fn graphs_paid(planned: bool, seats: u32, layers: u32, total: usize) -> bool {
     planned && seats != 0 && layers > 0 && (layers as usize) < total
+}
+
+/// The fewest state slots the check after a load gives up to: the plan's `floor`, but never below
+/// [`engine::MANY_SEATS`] when the plan gave that many. Four chats on three seats queue one (W4@4
+/// on the hybrid MoE target, 5070 Ti: 112.7 against 174 tok/s, its graphs eager), so a load short
+/// of its fourth slot refuses with the shortfall and moves one more host layer instead.
+fn settle_low(slots: u32, floor: u32) -> u32 {
+    match slots >= engine::MANY_SEATS {
+        true => floor.max(engine::MANY_SEATS),
+        false => floor,
+    }
+    .min(slots)
+}
+
+/// The most state slots, from `slots` down to [`settle_low`], whose freed state (`slot_bytes`
+/// each) leaves `free` at least `need` of them; None when even that many are short.
+fn settle_slots(
+    free: u64,
+    slots: u32,
+    floor: u32,
+    slot_bytes: u64,
+    need: impl Fn(u32) -> u64,
+) -> Option<u32> {
+    let freed = |k: u32| free + u64::from(slots - k) * slot_bytes;
+    (settle_low(slots, floor)..slots)
+        .rev()
+        .find(|&k| freed(k) >= need(k))
 }
 
 /// A refused load: its error, and the bytes more host layers must free when a load fitted but left
@@ -3370,6 +3397,33 @@ mod tests {
     /// A planned load that succeeds but leaves less than the serving need is dropped and retried
     /// once with the layers that cover the shortfall, such as a hybrid's recurrent state, which the
     /// plan does not count; a forced load is kept as it is; a shortfall past the last layer fails.
+    /// m13 on the 5070 Ti (26 Nov): a load planned for 4 state slots read 630,738,944 B free against
+    /// 637,157,298 needed, and 608,244,358 at 3 slots. It gave a slot up, so 4 chats ran on 3 seats
+    /// (112.7 against 174 tok/s at W4@4, graphs eager). Short of the 4th slot, it now keeps MANY_SEATS
+    /// and refuses with the shortfall, so the load moves one more host layer for the slot.
+    #[test]
+    fn a_load_planned_for_four_seats_keeps_them_and_moves_a_layer() {
+        let slot = 64_389_120u64;
+        let need = |k: u32| match k {
+            4 => 637_157_298,
+            3 => 608_244_358,
+            k => 608_244_358 - u64::from(3 - k) * 28_912_940,
+        };
+        let free = 630_738_944;
+        // Planned 4, floor 1: the check may not drop below the 4 seats the plan gave.
+        assert_eq!(super::settle_slots(free, 4, 1, slot, need), None);
+        // Planned 7 (the faster copy): dropping to 5 still seats 4 chats.
+        let roomy = |k: u32| 500_000_000 + u64::from(k) * 30_000_000;
+        assert_eq!(super::settle_slots(600_000_000, 7, 1, slot, roomy), Some(5));
+        // A plan of fewer slots than MANY_SEATS gives them up to its floor, as before.
+        assert_eq!(
+            super::settle_slots(free - 64_389_120, 3, 1, slot, need),
+            Some(2)
+        );
+        // The floor itself is never dropped below; short there, the load refuses.
+        assert_eq!(super::settle_slots(100, 2, 2, slot, need), None);
+    }
+
     #[test]
     fn a_planned_load_short_of_serving_memory_moves_more_host_layers() {
         use std::cell::Cell;
