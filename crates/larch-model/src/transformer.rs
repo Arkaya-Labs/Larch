@@ -849,19 +849,19 @@ impl Drop for StreamPool {
     }
 }
 
-/// Whether a step streams its host experts: prefill-only (those are never captured) of at least
-/// `from` rows, neither a check step nor one where any layer has adapters (a host layer's run on the
-/// CPU device; a device layer's would not stop it, but the check is per model), and only with a pool.
+/// Whether a step streams its host experts: at least `from` prefill rows (beside any decode rows,
+/// which keep the CPU path: [`Transformer::moe_ffn`]), never a capture, neither a check step nor one
+/// where any layer has adapters (a host layer's run on the CPU device; a device layer's would not
+/// stop it, but the check is per model), and only with a pool.
 fn streams_step(
     from: u32,
     pool: bool,
-    decode: u32,
     prefill: u32,
     check: bool,
     capturing: bool,
     adapters: bool,
 ) -> bool {
-    from > 0 && pool && decode == 0 && prefill >= from && !check && !capturing && !adapters
+    from > 0 && pool && prefill >= from && !check && !capturing && !adapters
 }
 
 /// The token embedding in host memory, as llama.cpp keeps it beside a GPU's MoE: the table `w`
@@ -955,6 +955,8 @@ pub struct Transformer {
     stream_rows: u32,
     /// The running step streams its host experts ([`streams_step`]).
     streaming: bool,
+    /// The last pass's decode rows, which lead its rows: a streamed pass keeps them on the CPU path.
+    stream_decode: i64,
     /// Per trunk layer, a mixed layer's expert table (i32 `[experts]`, [`ops::mmvq_id_mixed`]'s) on
     /// the device that runs its experts; `None` for any other layer.
     cold_tables: Vec<Option<Buffer>>,
@@ -2331,6 +2333,7 @@ impl Transformer {
             stream: None,
             stream_rows: place.stream_rows,
             streaming: false,
+            stream_decode: 0,
             tok_embd: host_embd.is_none().then_some(tok_embd),
             embd: host_embd,
             cache,
@@ -2771,12 +2774,30 @@ impl Transformer {
             return Ok(());
         }
         // `streaming` is the last pass's: the MTP block (layer `layers.len()`) runs outside any pass
-        // and has no plan in the pool, where it would wait on copies nothing queued.
-        if self.streaming
-            && layer < self.layers.len()
-            && self.stream_experts(s, layer, experts, cold, m, h, &ids, &weights, out)?
-        {
-            return Ok(());
+        // and has no plan in the pool, where it would wait on copies nothing queued. Beside decode
+        // rows only the prefill rows stream; the decode rows run on the CPU path below, the bits a
+        // decode step gives them (m13 W4@4 on the 5070 Ti: 578 ms such a step all on the CPU path).
+        let mut live = rows;
+        if self.streaming && layer < self.layers.len() {
+            let nd = self.stream_decode;
+            let streamed = match nd {
+                0 => self.stream_experts(s, layer, experts, cold, m, h, &ids, &weights, out)?,
+                nd => {
+                    let n = rows - nd;
+                    let (h, ids, w, o) = (
+                        h.rows(nd, n)?,
+                        ids.rows(nd, n)?,
+                        weights.rows(nd, n)?,
+                        out.rows(nd, n)?,
+                    );
+                    self.stream_experts(s, layer, experts, cold, m, &h, &ids, &w, &o)?
+                }
+            };
+            match (streamed, nd) {
+                (true, 0) => return Ok(()),
+                (true, nd) => live = nd,
+                (false, _) => {}
+            }
         }
         // Dynamic residency's uploads map in the next pass, which a replay never makes.
         if s.capturing()
@@ -2796,7 +2817,7 @@ impl Transformer {
             return Err(KError::InvalidArg);
         }
         if !s.capturing() {
-            return self.host_experts(s, layer, rows, rows, self.check.get(), true);
+            return self.host_experts(s, layer, rows, live, self.check.get(), true);
         }
         // A graph would keep the version's buffers past the swap that frees them.
         if ad.is_some() || delta.is_some() {
@@ -4318,10 +4339,10 @@ impl Transformer {
             self.probe_check(s, b, kv, logits)?;
             self.checks_ran = true;
         }
+        self.stream_decode = i64::from(b.decode_rows);
         self.streaming = streams_step(
             self.stream_rows,
             self.stream.as_ref().is_some_and(|p| !p.borrow().disabled),
-            b.decode_rows,
             b.prefill_rows,
             b.check,
             s.capturing(),
@@ -5453,22 +5474,23 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
     }
 
-    /// A step streams only as a whole prefill-only chunk with a pool, past the crossover, and neither
-    /// a check step, a capture nor adapters on the CPU; a crossover of 0 never does.
+    /// A step streams its prefill chunk with a pool, past the crossover, and neither a check step, a
+    /// capture nor adapters on the CPU; a crossover of 0 never does.
     #[test]
     fn only_eligible_steps_stream() {
-        let go = |from, pool, decode, prefill, check, capturing, adapters| {
-            streams_step(from, pool, decode, prefill, check, capturing, adapters)
+        let go = |from, pool, prefill, check, capturing, adapters| {
+            streams_step(from, pool, prefill, check, capturing, adapters)
         };
-        assert!(go(128, true, 0, 128, false, false, false));
-        assert!(go(128, true, 0, 512, false, false, false));
-        assert!(!go(128, true, 0, 127, false, false, false), "below R");
-        assert!(!go(0, true, 0, 512, false, false, false), "R 0 never");
-        assert!(!go(128, false, 0, 512, false, false, false), "no pool");
-        assert!(!go(128, true, 1, 512, false, false, false), "mixed");
-        assert!(!go(128, true, 0, 512, true, false, false), "check step");
-        assert!(!go(128, true, 0, 512, false, true, false), "capturing");
-        assert!(!go(128, true, 0, 512, false, false, true), "adapters");
+        assert!(go(128, true, 128, false, false, false));
+        assert!(go(128, true, 512, false, false, false));
+        assert!(!go(128, true, 127, false, false, false), "below R");
+        assert!(!go(0, true, 512, false, false, false), "R 0 never");
+        assert!(!go(128, false, 512, false, false, false), "no pool");
+        assert!(!go(128, true, 512, true, false, false), "check step");
+        assert!(!go(128, true, 512, false, true, false), "capturing");
+        assert!(!go(128, true, 512, false, false, true), "adapters");
+        // Decode rows beside the chunk keep the CPU path (`moe_ffn`); the chunk still streams:
+        // a_mixed_step_streams_its_prefill_rows_and_keeps_the_decode_rows_bits.
     }
 
     /// Five layers through one and two tensor slots, twice; failure leaves the pool usable.
@@ -5598,6 +5620,237 @@ mod tests {
         let mut got = vec![0f32; tiny::VOCAB as usize];
         s.download(&out, 0, &mut got)?;
         Ok(got)
+    }
+
+    /// One step on `kv` from its integer inputs (token ids, positions, KV slots, block table, decode
+    /// lengths, prefill starts and lengths, logits rows) with `nd` decode rows: its logits rows.
+    fn run_step(
+        m: &mut Transformer,
+        dev: &Device,
+        s: &Stream,
+        kv: &KvPool,
+        ints: &[(Vec<i32>, Vec<i64>); 8],
+        nd: u32,
+    ) -> Result<Vec<f32>, KError> {
+        let bufs: Vec<Buffer> = ints
+            .iter()
+            .map(|(v, _)| {
+                let b = Buffer::alloc(dev, (v.len() as u64 * 4).max(4)).unwrap();
+                s.upload(&b, 0, v).unwrap();
+                b
+            })
+            .collect();
+        let t = |i: usize| Tensor::new(&bufs[i], 0, DType::I32, &ints[i].1).unwrap();
+        let rows = ints[0].0.len() as u32;
+        let batch = StepBatch {
+            token_ids: t(0),
+            positions: t(1),
+            slot_ids: t(2),
+            decode_rows: nd,
+            prefill_rows: rows - nd,
+            block_table: t(3),
+            seq_lens: t(4),
+            prefill_q_start: t(5),
+            prefill_q_len: t(6),
+            logits_rows: t(7),
+            attn_splits: 0,
+            check: false,
+        };
+        let n = ints[7].0.len();
+        let out = Buffer::alloc(dev, (n * tiny::VOCAB as usize * 4) as u64)?;
+        let logits = Tensor::new(&out, 0, DType::F32, &[n as i64, i64::from(tiny::VOCAB)])?;
+        m.forward(s, &batch, kv, &logits)?;
+        let mut got = vec![0f32; n * tiny::VOCAB as usize];
+        s.download(&out, 0, &mut got)?;
+        Ok(got)
+    }
+
+    /// Sequence A's 3-token prefill (block 0), then A's decode row (position 3) and sequence B's
+    /// 3-token prefill (block 1): in one mixed step (`mixed`), else B's prefill alone and then A's
+    /// decode alone. The logits rows, A's then B's last.
+    fn after_prefill(
+        m: &mut Transformer,
+        dev: &Device,
+        s: &Stream,
+        mixed: bool,
+    ) -> Result<Vec<f32>, KError> {
+        let kv_bytes = u64::from(tiny::LAYERS) * 4 * 16 * tiny::KV_HEADS * tiny::HEAD_DIM * 2;
+        let (k, v) = (Buffer::alloc(dev, kv_bytes)?, Buffer::alloc(dev, kv_bytes)?);
+        let kv = KvPool {
+            k: &k,
+            v: &v,
+            n_blocks: 4,
+            block_tokens: 16,
+            n_layers: tiny::LAYERS,
+            n_kv_heads: tiny::KV_HEADS as u32,
+            head_dim: tiny::HEAD_DIM as u32,
+            dtype: DType::F16,
+        };
+        let i = |v: &[i32], shape: &[i64]| (v.to_vec(), shape.to_vec());
+        let a = [
+            i(&[5, 9, 2], &[3]),
+            i(&[0, 1, 2], &[3]),
+            i(&[0, 1, 2], &[3]),
+            i(&[0, 1, 2, 3], &[1, 4]),
+            i(&[], &[0]),
+            i(&[0], &[1]),
+            i(&[3], &[1]),
+            i(&[2], &[1]),
+        ];
+        run_step(m, dev, s, &kv, &a, 0)?;
+        if mixed {
+            let both = [
+                i(&[7, 4, 8, 1], &[4]),
+                i(&[3, 0, 1, 2], &[4]),
+                i(&[3, 16, 17, 18], &[4]),
+                i(&[0, 2, 3, 0, 1, 2, 3, 0], &[2, 4]),
+                i(&[4], &[1]),
+                i(&[0], &[1]),
+                i(&[3], &[1]),
+                i(&[0, 3], &[2]),
+            ];
+            return run_step(m, dev, s, &kv, &both, 1);
+        }
+        let b = [
+            i(&[4, 8, 1], &[3]),
+            i(&[0, 1, 2], &[3]),
+            i(&[16, 17, 18], &[3]),
+            i(&[1, 2, 3, 0], &[1, 4]),
+            i(&[], &[0]),
+            i(&[0], &[1]),
+            i(&[3], &[1]),
+            i(&[2], &[1]),
+        ];
+        let b = run_step(m, dev, s, &kv, &b, 0)?;
+        let a = [
+            i(&[7], &[1]),
+            i(&[3], &[1]),
+            i(&[3], &[1]),
+            i(&[0, 2, 3, 0], &[1, 4]),
+            i(&[4], &[1]),
+            i(&[], &[0]),
+            i(&[], &[0]),
+            i(&[0], &[1]),
+        ];
+        Ok([run_step(m, dev, s, &kv, &a, 1)?, b].concat())
+    }
+
+    /// A step of decode rows beside a prefill chunk past the crossover streams the chunk's host
+    /// experts and keeps the decode rows on the CPU path: the same bits as the CPU path for every
+    /// row (m13 W4@4 on the 5070 Ti: such a step took 578 ms on the CPU path, 187 ms streamed alone).
+    #[test]
+    fn a_mixed_step_streams_its_prefill_rows_and_keeps_the_decode_rows_bits() {
+        let path = std::env::temp_dir().join(format!("larch-mixed-{}.gguf", std::process::id()));
+        std::fs::write(&path, tiny::gguf(Arch::Qwen3Moe, 3)).unwrap();
+        let dev = Device::open(CPU).unwrap();
+        let s = Stream::new(&dev).unwrap();
+        let load = |stream_rows| {
+            let place = Placement {
+                cpu_expert_layers: tiny::LAYERS,
+                stream_rows,
+            };
+            Transformer::load_placed(&path, &dev, &s, 8, place).unwrap()
+        };
+        let pooled = || {
+            let mut m = load(3);
+            assert!(Model::alloc_stream_pool(&mut m, &s).unwrap());
+            m
+        };
+        // Apart: B's chunk streams alone, then A's decode row runs on the CPU path alone.
+        let want = after_prefill(&mut pooled(), &dev, &s, false).unwrap();
+        assert!(want.iter().all(|x| x.is_finite()) && want.iter().any(|&x| x != 0.0));
+        let mut m = pooled();
+        assert_eq!(
+            after_prefill(&mut m, &dev, &s, true).unwrap(),
+            want,
+            "each row's bits"
+        );
+        // The decode row's are the CPU path's, as with no pool at all.
+        let cpu = after_prefill(&mut load(0), &dev, &s, true).unwrap();
+        let v = tiny::VOCAB as usize;
+        assert_eq!(cpu[..v], want[..v]);
+        // A's 3-row prefill and the mixed step's 3 prefill rows both reach the crossover.
+        assert_eq!(
+            m.streamed_steps(),
+            2,
+            "the mixed step streamed its prefill rows"
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// Two prompts packed into one streamed chunk give the logits of each prefilled alone, one
+    /// after the other: per-sequence KV and positions stay exact, and the packed chunk streams each
+    /// host layer's experts once instead of once a prompt.
+    #[test]
+    fn two_packed_prompts_give_the_logits_of_one_after_the_other() {
+        let path = std::env::temp_dir().join(format!("larch-packed-{}.gguf", std::process::id()));
+        std::fs::write(&path, tiny::gguf(Arch::Qwen3Moe, 3)).unwrap();
+        let dev = Device::open(CPU).unwrap();
+        let s = Stream::new(&dev).unwrap();
+        let run = |packed: bool| {
+            let place = Placement {
+                cpu_expert_layers: tiny::LAYERS,
+                stream_rows: 3,
+            };
+            let mut m = Transformer::load_placed(&path, &dev, &s, 8, place).unwrap();
+            assert!(Model::alloc_stream_pool(&mut m, &s).unwrap());
+            let kv_bytes = u64::from(tiny::LAYERS) * 4 * 16 * tiny::KV_HEADS * tiny::HEAD_DIM * 2;
+            let (k, v) = (
+                Buffer::alloc(&dev, kv_bytes).unwrap(),
+                Buffer::alloc(&dev, kv_bytes).unwrap(),
+            );
+            let kv = KvPool {
+                k: &k,
+                v: &v,
+                n_blocks: 4,
+                block_tokens: 16,
+                n_layers: tiny::LAYERS,
+                n_kv_heads: tiny::KV_HEADS as u32,
+                head_dim: tiny::HEAD_DIM as u32,
+                dtype: DType::F16,
+            };
+            let i = |v: &[i32], shape: &[i64]| (v.to_vec(), shape.to_vec());
+            let one = |ids: &[i32], block: i32| {
+                let slots: Vec<i32> = (0..3).map(|p| block * 16 + p).collect();
+                [
+                    i(ids, &[3]),
+                    i(&[0, 1, 2], &[3]),
+                    i(&slots, &[3]),
+                    i(&[block, 2, 3, 0], &[1, 4]),
+                    i(&[], &[0]),
+                    i(&[0], &[1]),
+                    i(&[3], &[1]),
+                    i(&[2], &[1]),
+                ]
+            };
+            let got = if packed {
+                let both = [
+                    i(&[5, 9, 2, 4, 8, 1], &[6]),
+                    i(&[0, 1, 2, 0, 1, 2], &[6]),
+                    i(&[0, 1, 2, 16, 17, 18], &[6]),
+                    i(&[0, 2, 3, 0, 1, 2, 3, 0], &[2, 4]),
+                    i(&[], &[0]),
+                    i(&[0, 0], &[2]),
+                    i(&[3, 3], &[2]),
+                    i(&[2, 5], &[2]),
+                ];
+                run_step(&mut m, &dev, &s, &kv, &both, 0).unwrap()
+            } else {
+                let a = run_step(&mut m, &dev, &s, &kv, &one(&[5, 9, 2], 0), 0).unwrap();
+                let b = run_step(&mut m, &dev, &s, &kv, &one(&[4, 8, 1], 1), 0).unwrap();
+                [a, b].concat()
+            };
+            (got, m.streamed_steps())
+        };
+        let (apart, steps) = run(false);
+        let (packed, packed_steps) = run(true);
+        assert_eq!(packed, apart);
+        assert_eq!(
+            (steps, packed_steps),
+            (2, 1),
+            "one streamed pass for both prompts"
+        );
+        std::fs::remove_file(&path).unwrap();
     }
 
     /// A copy that runs out of memory costs the pool, not the request: the layer and every later
