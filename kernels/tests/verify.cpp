@@ -264,10 +264,11 @@ static void pinned() {
 }
 
 // Metal's mmvq_id in drafter mode (a stream whose last dense GEMV was mmvq_verify, as in every step of a guessing
-// engine: backend.mm runs it per pair at any row count): at the 35B's expert shapes (64 experts, top 8) and two ragged
-// ones with bias, on random routes, every row on the same 8 experts, and each expert picked twice a row, row r of a 2-
-// to 32-row call is byte-equal to row r alone; each row is within ops.cpp's mmvq_id tolerance of the CPU reference
-// (random routes); and mmvq leaves the mode (the plain bytes come back). The unequal rows.
+// engine: backend.mm takes the per-pair sums at any row count, the rows on one expert sharing its reads): at the
+// 35B's expert shapes (64 experts, top 8) and two ragged ones with bias, on random routes, every row on the same 8
+// experts, and each expert picked twice a row, row r of a 2- to 32-row call is byte-equal to row r alone; each row is
+// within ops.cpp's mmvq_id tolerance of the CPU reference (random routes); and mmvq leaves the mode (the plain bytes
+// come back). The unequal rows.
 static int64_t drafter_experts() {
   larch_device* cpu = nullptr;
   larch_stream* cs = nullptr;

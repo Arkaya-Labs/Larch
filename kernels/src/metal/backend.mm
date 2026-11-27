@@ -45,6 +45,8 @@ struct kernels {
   id<MTLComputePipelineState> mmvq_id_mm[2][LARCH_Q3_K + 1];  // the tensor path's grouped mmvq_id, [64 x 32 tile]
   id<MTLComputePipelineState> mmvq_id1[LARCH_Q3_K + 1];  // Q3_K, Q4_K, Q5_K and Q6_K, nil for the others
   id<MTLComputePipelineState> mmvq_id1n[LARCH_Q3_K + 1];  // the same formats, for experts under 1024 wide
+  // mmvq_id1 and (1) mmvq_id1n over several rows, each expert read once a call: the same formats
+  id<MTLComputePipelineState> mmvq_id1s[2][LARCH_Q3_K + 1];
   id<MTLComputePipelineState> attn_flash[3];                 // head_dim up to 64, 128 and 256
   // The simdgroup-matrix kernels for GPUs without the tensor API; nil when LARCH_METAL_SIMD_KERNELS=0.
   id<MTLComputePipelineState> gemm_qs[LARCH_Q3_K + 1], mmvq_id_mm_sg[LARCH_Q3_K + 1];
@@ -77,9 +79,11 @@ struct kernels {
 //   at a time on simdgroup matrices (MLX's chunked delta rule); 0 keeps vv_gdn's row-by-row walk, for A/B timing.
 // LARCH_METAL_MOE_NARROW (default 1): mmvq_id at decode and check row counts on experts under 1024 wide takes
 //   vv_mmvq_id1n, which keeps all 32 lanes busy; 0 keeps vv_mmvq_id1, for A/B timing.
+// LARCH_METAL_MOE_SHARED (default 1): those mmvq_id calls of several rows read each expert once for the rows that
+//   chose it (vv_mmvq_id1s, vv_mmvq_id1ns), with the same bits; 0 keeps one threadgroup per pair, for A/B timing.
 struct feed {
   bool concurrent = true, commit = true, profile = false, simd_kernels = true, moe_prefetch = true, gdn_wide = true,
-       moe_narrow = true, gdn_chunk = true;
+       moe_narrow = true, gdn_chunk = true, moe_shared = true;
 };
 static constexpr uint32_t first_commit = 32, commit_every = 128;
 struct mtl_device : larch_device {
@@ -131,7 +135,8 @@ struct mtl_stream : larch_stream {
   bool committed_early = false;      // since the last sync: later command buffers take the longer run
   bool profiled = true;              // LARCH_METAL_PROFILE times its dispatches; pick_gemm's stream stays out
   // Drafter mode: the last dense GEMV was mmvq_verify (set there, cleared by mmvq and dequant), as in every step of a
-  // guessing engine (larch.h's mmvq_verify) and none of a plain one; mmvq_id then runs per pair at any row count.
+  // guessing engine (larch.h's mmvq_verify) and none of a plain one; mmvq_id then takes the per-pair sums at any row
+  // count.
   bool check = false;
 };
 // An event sits between two command buffers: `prev`, the last one committed before it (nil if none),
@@ -158,7 +163,8 @@ static larch_status read_feed(feed* f) {
                                  std::pair{"LARCH_METAL_MOE_PREFETCH", &f->moe_prefetch},
                                  std::pair{"LARCH_METAL_GDN_WIDE", &f->gdn_wide},
                                  std::pair{"LARCH_METAL_MOE_NARROW", &f->moe_narrow},
-                                 std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk}}) {
+                                 std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk},
+                                 std::pair{"LARCH_METAL_MOE_SHARED", &f->moe_shared}}) {
     const char* c = std::getenv(name);
     if (c && std::strcmp(c, "0") && std::strcmp(c, "1"))
       return vv_fail(LARCH_ERR_INVALID_ARG, std::string(name) + " must be 0 or 1");
@@ -403,6 +409,9 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
         k.mmvq1[t] = pipe(std::string("vv_mmvq1_") + dtype_name[t], 32 * MMVQ1_SG);
         k.mmvq_id1[t] = pipe(std::string("vv_mmvq_id1_") + dtype_name[t], 32 * MMVQ1_SG);
         if (fed.moe_narrow) k.mmvq_id1n[t] = opt(std::string("vv_mmvq_id1n_") + dtype_name[t], 32 * MMVQ1_SG);
+        if (fed.moe_shared) k.mmvq_id1s[0][t] = pipe(std::string("vv_mmvq_id1s_") + dtype_name[t], 32 * MMVQ1_SG);
+        if (fed.moe_shared && k.mmvq_id1n[t])
+          k.mmvq_id1s[1][t] = opt(std::string("vv_mmvq_id1ns_") + dtype_name[t], 32 * MMVQ1_SG);
       }
       // G1's best step (M5, 14 Nov): 32 inputs for the K-quants, 128 for Q8_0. All three row tiles or none, so a format
       // never changes kernel with the row count.
@@ -1259,11 +1268,30 @@ larch_status mmvq_id(larch_stream* vs, const larch_tensor* w_quant, const larch_
                     o.dtype == LARCH_F32 ? 1u : 0u, weighted ? 1u : 0u, u32(experts), u32(x.rows)};
     mtl_stream* s = static_cast<mtl_stream*>(vs);
     // ponytail: grouped only up to k = 1024 MOE_GROUP_T (qwen3moe's 2048); raise MOE_GROUP_T when a model's k does.
-    // Drafter mode runs per pair at any row count, 1-row decode included, so a row's bits never depend on the rows
-    // beside it (the engine's check steps send up to 32 rows a call).
+    // Drafter mode takes the per-pair sums at any row count, 1-row decode included, so a row's bits never depend on
+    // the rows beside it (the engine's check steps send up to 32 rows a call).
     if (s->check || pairs < MOE_GROUP_PAIRS * experts || experts > MOE_ROUTE_MAX || w.cols > 1024 * MOE_GROUP_T) {
       id<MTLComputePipelineState> narrow = w.cols < 1024 ? ks(vs).mmvq_id1n[w.dtype] : nil;
       const int64_t cols = MMVQ1_SG * (narrow ? MMVQ1N_C : MMVQ1_NR);
+      // Several rows: pairs that chose one expert share a threadgroup, which reads the expert once, with the
+      // per-pair kernel's sums (rows of a check or of a few chats often share experts). Weighted, through f32
+      // partials that vv_moe_reduce sums in the per-pair kernel's order.
+      id<MTLComputePipelineState> shared = x.rows > 1 ? ks(vs).mmvq_id1s[narrow ? 1 : 0][w.dtype] : nil;
+      const uint64_t part_bytes = weighted ? uint64_t(pairs * n) * 4 : 0;
+      if (shared && part_bytes <= MOE_PARTIAL_BYTES) {
+        arg dst = at(o);
+        if (weighted) {
+          if (s->moe_scratch.length < part_bytes) {  // work queued with the old one keeps it alive
+            s->moe_scratch = [s->dev->dev newBufferWithLength:part_bytes options:MTLResourceStorageModePrivate];
+            if (!s->moe_scratch) throw std::bad_alloc();
+          }
+          dst = arg{s->moe_scratch, 0, part_bytes};
+        }
+        groups(s, shared, {input(w), input(x), input(ids), input_or(b, at(w)), dst}, a, (n + cols - 1) / cols,
+               32 * MMVQ1_SG, pairs);
+        if (weighted) each(s, ks(vs).moe_reduce, {input(dst), input(wt), at(o)}, a, n, x.rows);
+        return;
+      }
       if (id<MTLComputePipelineState> one = narrow ? narrow : ks(vs).mmvq_id1[w.dtype])
         groups(s, one, {input(w), input(x), input(ids), input_or(b, at(w)), input_or(wt, at(w)), at(o)}, a, (n + cols - 1) / cols,
                32 * MMVQ1_SG, weighted ? x.rows : pairs);

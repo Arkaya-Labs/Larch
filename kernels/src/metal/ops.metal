@@ -704,6 +704,48 @@ kernel void mmvq_id(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in
   }
 }
 
+// This lane's part of one (row, slot) pair's sums over MMVQ1_NR columns n0, ... of expert we (rows rs bytes apart, n
+// of them, k wide), as mmvq1 sums them: mmvq_id1's, and mmvq_id1s's.
+template <int BYTES>
+static void id1_sum(bytes_in we, u64 rs, uint n0, uint n, uint k, bytes_in xr, ushort lane, thread float* sum) {
+  if (BYTES == 110)
+    mmvq1_q3_k_sum(we, rs, n0, n, k, xr, lane, sum);
+  else if (BYTES == 144)
+    mmvq1_q4_k_sum(we, rs, n0, n, k, xr, lane, sum);
+  else if (BYTES == 176)
+    mmvq1_q5_k_sum(we, rs, n0, n, k, xr, lane, sum);
+  else
+    mmvq1_q6_k_sum(we, rs, n0, n, k, xr, lane, sum);
+}
+
+// The same over MMVQ1N_C columns for experts under 4 blocks wide, mmvq_id1n's way (see there): mmvq_id1n's, and
+// mmvq_id1s's.
+template <int BYTES>
+static void id1n_sum(bytes_in we, u64 rs, uint n0, uint n, uint k, bytes_in xr, ushort lane, thread float* sum) {
+  constexpr short C = MMVQ1N_C;
+  // Lane groups and a lane's place in its group, as each format's sum reads them (its block stride, then the
+  // lane with that stride's bits cleared, so the sum starts at block 0).
+  constexpr short G = BYTES == 210 ? 2 : 4;
+  const short g = BYTES == 110 || BYTES == 144 ? lane / 8 : lane % G;
+  const ushort vl = BYTES == 110 || BYTES == 144 ? lane % 8 : lane & ~ushort(G - 1);
+  const uint nb = k / 256;
+  for (uint u = g; u < C * nb; u += G) {
+    const uint c = u / nb, ib = u % nb, col = min(n0 + c, n - 1);  // a ragged tail recomputes column n - 1
+    bytes_in wb = we + ib * BYTES, xb = xr + ib * 512;
+    float s[1] = {};
+    if (BYTES == 110)
+      mmvq1_q3_k_sum<1>(wb, rs, col, n, 256, xb, vl, s);
+    else if (BYTES == 144)
+      mmvq1_q4_k_sum<1>(wb, rs, col, n, 256, xb, vl, s);
+    else if (BYTES == 176)
+      mmvq1_q5_k_sum<1>(wb, rs, col, n, 256, xb, vl, s);
+    else
+      mmvq1_q6_k_sum<1>(wb, rs, col, n, 256, xb, vl, s);
+#pragma clang loop unroll(full)
+    for (short cc = 0; cc < C; ++cc) sum[cc] += cc == short(c) ? s[0] : 0.0f;
+  }
+}
+
 // mmvq_id for Q3_K, Q4_K, Q5_K and Q6_K (BYTES 110, 144, 176 and 210) up to the grouped kernel's row counts: mmvq1's wide-load sums
 // over MMVQ1_NR columns of the chosen expert per simdgroup, for one (row, slot) pair or, weighted, one row over
 // its slots in ascending order. mmvq_id's one column per simdgroup decodes byte by byte, and at qwen3moe's
@@ -722,14 +764,7 @@ kernel void mmvq_id1(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
     const uint e = uint(at<int>(ids + r * a.ids_rs, 4, j));
     bytes_in we = w + u64(e) * a.n * a.w_rs, xr = x + r * a.x_rs + j * a.x_slot_rs;
     float sum[MMVQ1_NR] = {};
-    if (BYTES == 110)
-      mmvq1_q3_k_sum(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
-    else if (BYTES == 144)
-      mmvq1_q4_k_sum(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
-    else if (BYTES == 176)
-      mmvq1_q5_k_sum(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
-    else
-      mmvq1_q6_k_sum(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
+    id1_sum<BYTES>(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
     for (short c = 0; c < MMVQ1_NR; ++c) {
       const uint n = min(n0 + c, a.n - 1);
       float v = simd_sum(sum[c]);
@@ -766,35 +801,16 @@ kernel void mmvq_id1n(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_
                       constant id_args& a [[buffer(6)]], uint2 tg [[threadgroup_position_in_grid]],
                       ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
   constexpr short C = MMVQ1N_C;
-  // Lane groups and a lane's place in its group, as each format's sum reads them (its block stride, then the
-  // lane with that stride's bits cleared, so the sum starts at block 0).
-  constexpr short G = BYTES == 210 ? 2 : 4;
-  const short g = BYTES == 110 || BYTES == 144 ? lane / 8 : lane % G;
-  const ushort vl = BYTES == 110 || BYTES == 144 ? lane % 8 : lane & ~ushort(G - 1);
   const uint n0 = (tg.x * MMVQ1_SG + sg) * C;
   if (n0 >= a.n) return;  // the whole simdgroup
   const uint r = a.weighted ? tg.y : tg.y / a.slots, first = a.weighted ? 0 : tg.y % a.slots;
-  const uint last = a.weighted ? a.slots : first + 1, nb = a.k / 256;
+  const uint last = a.weighted ? a.slots : first + 1;
   float acc[C] = {};
   for (uint j = first; j < last; ++j) {
     const uint e = uint(at<int>(ids + r * a.ids_rs, 4, j));
     bytes_in we = w + u64(e) * a.n * a.w_rs, xr = x + r * a.x_rs + j * a.x_slot_rs;
     float sum[C] = {};
-    for (uint u = g; u < C * nb; u += G) {
-      const uint c = u / nb, ib = u % nb, col = min(n0 + c, a.n - 1);  // a ragged tail recomputes column n - 1
-      bytes_in wb = we + ib * BYTES, xb = xr + ib * 512;
-      float s[1] = {};
-      if (BYTES == 110)
-        mmvq1_q3_k_sum<1>(wb, a.w_rs, col, a.n, 256, xb, vl, s);
-      else if (BYTES == 144)
-        mmvq1_q4_k_sum<1>(wb, a.w_rs, col, a.n, 256, xb, vl, s);
-      else if (BYTES == 176)
-        mmvq1_q5_k_sum<1>(wb, a.w_rs, col, a.n, 256, xb, vl, s);
-      else
-        mmvq1_q6_k_sum<1>(wb, a.w_rs, col, a.n, 256, xb, vl, s);
-#pragma clang loop unroll(full)
-      for (short cc = 0; cc < C; ++cc) sum[cc] += cc == short(c) ? s[0] : 0.0f;
-    }
+    id1n_sum<BYTES>(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
     for (short c = 0; c < C; ++c) {
       const uint n = min(n0 + c, a.n - 1);
       float v = simd_sum(sum[c]);
@@ -816,6 +832,56 @@ kernel void mmvq_id1n(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_
       ((device float*)o)[n0 + c] = acc[c];
     else
       ((device half*)o)[n0 + c] = half(acc[c]);
+  }
+}
+
+// The expert (row, slot) pair q chose.
+static inline uint pair_expert(bytes_in ids, constant id_args& a, uint q) {
+  return uint(at<int>(ids + q / a.slots * a.ids_rs, 4, q % a.slots));
+}
+
+// mmvq_id1 (NARROW: mmvq_id1n) for several rows, each expert's columns read from memory once a call: the threadgroup
+// of pair tg.y takes every pair from it on that chose its expert, unless an earlier pair chose it (whose threadgroup
+// takes them). Each pair's sum is the per-pair kernel's, so a row's bits do not depend on the rows beside it, nor on
+// whether a call runs this kernel or that one. Weighted, out is f32 [pairs, n] scratch that vv_moe_reduce sums.
+template <int BYTES, bool NARROW>
+kernel void mmvq_id1s(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in ids [[buffer(2)]],
+                      bytes_in bias [[buffer(3)]], device uchar* out [[buffer(4)]], constant id_args& a [[buffer(5)]],
+                      uint2 tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]],
+                      ushort lane [[thread_index_in_simdgroup]]) {
+  constexpr short C = NARROW ? MMVQ1N_C : MMVQ1_NR;
+  const uint n0 = (tg.x * MMVQ1_SG + sg) * C;
+  if (n0 >= a.n) return;  // the whole simdgroup
+  const uint pairs = a.rows * a.slots, q0 = tg.y;
+  const uint e = pair_expert(ids, a, q0);
+  bool seen = false;  // an earlier pair chose e: its threadgroup takes e (the whole simdgroup returns)
+  for (uint q = lane; q < q0; q += 32) seen |= pair_expert(ids, a, q) == e;
+  if (simd_any(seen)) return;
+  bytes_in we = w + u64(e) * a.n * a.w_rs;
+  for (uint q = q0; q < pairs; ++q) {
+    if (q != q0 && pair_expert(ids, a, q) != e) continue;
+    const uint r = q / a.slots, j = q % a.slots;
+    bytes_in xr = x + r * a.x_rs + j * a.x_slot_rs;
+    float sum[MMVQ1N_C] = {};  // either sum's columns (MMVQ1N_C >= MMVQ1_NR)
+    if (NARROW)
+      id1n_sum<BYTES>(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
+    else
+      id1_sum<BYTES>(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
+    for (short c = 0; c < C; ++c) {
+      const uint n = min(n0 + c, a.n - 1);
+      float v = simd_sum(sum[c]);
+      if (a.has_bias) v += at<float>(bias, a.bias_rs, e * a.n + n);
+      if (lane || n0 + c >= a.n) continue;
+      if (a.weighted) {
+        ((device float*)out)[u64(q) * a.n + n] = v;
+      } else {
+        device uchar* o = out + r * a.out_rs + j * a.out_slot_rs;
+        if (a.out_f32)
+          ((device float*)o)[n] = v;
+        else
+          ((device half*)o)[n] = half(v);
+      }
+    }
   }
 }
 
@@ -989,6 +1055,13 @@ template [[host_name("vv_mmvq_id1n_q3_k")]] kernel decltype(mmvq_id1n<110>) mmvq
 template [[host_name("vv_mmvq_id1n_q4_k")]] kernel decltype(mmvq_id1n<144>) mmvq_id1n<144>;
 template [[host_name("vv_mmvq_id1n_q5_k")]] kernel decltype(mmvq_id1n<176>) mmvq_id1n<176>;
 template [[host_name("vv_mmvq_id1n_q6_k")]] kernel decltype(mmvq_id1n<210>) mmvq_id1n<210>;
+#define ID1S(name, bytes)                                                                                  \
+  template [[host_name("vv_mmvq_id1s_" #name)]] kernel decltype(mmvq_id1s<bytes, false>) mmvq_id1s<bytes, false>; \
+  template [[host_name("vv_mmvq_id1ns_" #name)]] kernel decltype(mmvq_id1s<bytes, true>) mmvq_id1s<bytes, true>;
+ID1S(q3_k, 110)
+ID1S(q4_k, 144)
+ID1S(q5_k, 176)
+ID1S(q6_k, 210)
 template [[host_name("vv_mmvq_mma8_q4_k")]] kernel mmvq_mma_t mmvq_mma<144, deq16_q4_k, 1>;
 template [[host_name("vv_mmvq_mma16_q4_k")]] kernel mmvq_mma_t mmvq_mma<144, deq16_q4_k, 2>;
 template [[host_name("vv_mmvq_mma8_q6_k")]] kernel mmvq_mma_t mmvq_mma<210, deq16_q6_k, 1>;

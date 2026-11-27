@@ -168,6 +168,7 @@ static inline u32 st_splits(u32 n, u32 k, u32 cores) {
 #define MMVQ1_SG 2
 #define MMVQ1_NR 2
 #define MMVQ1N_C 4  // columns per simdgroup of mmvq_id1n (experts under 4 blocks wide)
+static_assert(MMVQ1N_C >= MMVQ1_NR, "mmvq_id1s sizes its sums by MMVQ1N_C");
 
 /// Attention's shape limits, shared so host dispatch and kernel layout agree: one simdgroup serves up to
 /// ATTN_GROUP q heads of a kv head, each lane holds 2 chunks of 4 dims per head, and the split-K reduce
