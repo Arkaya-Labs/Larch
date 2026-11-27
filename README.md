@@ -30,9 +30,6 @@ The command opens the Larch Setup window, which asks whether you want the app, t
 tools or both, picks the build for your GPU, and offers a model that fits your memory. Every file it
 downloads is checked against a signed list before anything is installed. [More about installing](docs/install.md).
 
-On a new Mac, macOS may first ask to install its command line developer tools, which the installer
-needs for `python3`. Click Install, wait for it to finish, then run the install command again.
-
 ## First chat
 
 Open Larch from the Start menu, Launchpad or your app launcher, pick a model, and type.

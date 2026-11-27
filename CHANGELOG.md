@@ -3,7 +3,23 @@
 Notable changes to Larch, newest first. Versions follow [Semantic Versioning](https://semver.org/);
 before 1.0, a minor version can change interfaces and file formats.
 
-## 0.1.0 (unreleased)
+## 0.1.1
+
+Fixes for the Mac install.
+
+### Install
+- macOS: the install command no longer needs `python3`, so a Mac without Apple's command line
+  developer tools installs without first downloading them.
+- The installer window wraps a long install path inside its box.
+- The installer downloads its first model over several connections at once, as the app's Models
+  page already did.
+
+### Engine
+- Mixture-of-experts models that keep some expert layers in system RAM beside an NVIDIA GPU run
+  faster with several chats, and `larch faster` writes a smaller copy of such a model that fits on
+  the GPU.
+
+## 0.1.0 (25 Nov 2026)
 
 The first public release, for Apple silicon Macs (Metal and CPU). Windows and Linux builds are
 coming soon; until then their install commands say so and stop.
