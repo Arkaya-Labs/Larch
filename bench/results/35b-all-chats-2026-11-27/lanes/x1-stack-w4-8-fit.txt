@@ -1,0 +1,29 @@
+larch_host_experts_plan,4,15631122432,17066033152,15890541056,804680064,2560,0.85,576,184549376,true
+larch_host_experts_load,4,687210496,670264542,5
+larch_context_fit,2560,free=687210496,scratch=68520704,vision=0,kv_blocks=603,graph_bytes=16777216,graphs=true
+larch_fit_ledger,free_before=15631122432,host_layers=4,weights_on_device=14363814400,activation=56332288,routers=41943040,hybrid=394614400,reserve_scratch=68520704,reserve_graph_slots=16777216,reserve_graph_arena=67108864,graphs_paid=true,fit_scratch=68520704,headroom=117440512,free_after_load=687210496,model_bytes=14943911936,kv_blocks=603,kv_block_bytes=327680,graph_quota=16777216,graph_arena=67108864
+larch_stream_pool,184549376,184549376,true,64
+larch_graph_eager,decode=2,reason=quota,short_bytes=67391488,free_bytes=4194304,quota_bytes=16777216
+# step profile by shape (prof.py: interval 3 = CPU side of the forward, interval 4 = GPU wait + download)
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+decode5                      replay     1095       5.48       10.57    16.13    17.67
+mixed d4+chunk>=256          eager        15      90.94       58.42   152.14     2.28
+decode2                      eager       115      10.00        4.37    14.42     1.66
+decode4                      replay       87       4.63        9.01    13.77     1.20
+prefill p16                  eager         1     574.97       71.99   652.73     0.65
+mixed d3+chunk>=256          eager         4      90.74       63.67   156.00     0.62
+decode1                      replay       57       2.01        4.64     6.98     0.40
+decode3                      replay       29       3.77        9.02    12.85     0.37
+mixed d2+chunk>=256          eager         2     104.92       51.40   159.09     0.32
+mixed d1+chunk>=256          eager         1      97.50       61.31   171.31     0.17
+mixed d4+p91                 eager         2      53.70       24.74    81.27     0.16
+prefill chunk>=256           eager         1      85.61       66.29   155.18     0.16
+mixed d4+p241                eager         1      66.57       43.40   114.29     0.11
+mixed d4+p16                 eager         1     111.41        0.93   112.41     0.11
+mixed d4+p211                eager         1      70.27       38.17   108.56     0.11
+mixed d4+p62                 eager         1      76.49       22.26   104.31     0.10
+mixed d4+p178                eager         1      58.08       36.72    94.92     0.09
+mixed d4+p65                 eager         1      64.42       23.13    90.67     0.09
+mixed d4+p50                 eager         1      67.20       20.67    87.91     0.09
+decode2                      replay        1       9.60        0.92    17.11     0.02
+larch_stream_step: 29 streamed steps, rows mean 413, layers 4, copy ms mean 29.0, wait ms mean 21.9

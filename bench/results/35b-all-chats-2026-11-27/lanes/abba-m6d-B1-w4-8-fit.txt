@@ -1,0 +1,6 @@
+larch_host_experts_plan,5,15631122432,17066033152,15890541056,780988800,2560,0.85,576,318767104,true
+larch_host_experts_load,5,1003880448,699177483,6
+larch_context_fit,2560,free=1003880448,scratch=68520704,vision=0,kv_blocks=1425,graph_bytes=16777216,graphs=true
+larch_fit_ledger,free_before=15631122432,host_layers=5,weights_on_device=13982132736,activation=56332288,routers=41943040,hybrid=459003520,reserve_scratch=68520704,reserve_graph_slots=16777216,reserve_graph_arena=67108864,graphs_paid=true,fit_scratch=68520704,headroom=117440512,free_after_load=1003880448,model_bytes=14627241984,kv_blocks=1425,kv_block_bytes=327680,graph_quota=16777216,graph_arena=67108864
+larch_stream_pool,184549376,184549376,true,64
+larch_graph_eager,decode=4,reason=quota,short_bytes=7344128,free_bytes=8388608,quota_bytes=16777216
