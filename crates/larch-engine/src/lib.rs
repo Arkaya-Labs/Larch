@@ -1682,7 +1682,7 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                     bytes,
                     &experts,
                     &hist.counts,
-                    m.experts,
+                    m,
                     &c,
                     max_context,
                     fraction,
@@ -3196,9 +3196,14 @@ mod tests {
         (c.n_layers, c.ctx_train) = (40, 262_144);
         let (weights, reserve) = (16_209_005_056, 578_451_072);
         let experts = vec![381_681_664; 40];
+        let m = larch_model::MoeCfg {
+            experts: 128,
+            used: 8,
+            ffn: 512,
+        };
         super::plan_from(start).and_then(|h| {
             fit::expert_residency(
-                &before, weights, &experts, &h.counts, 128, &c, 1795, 0.85, reserve, 0, 1,
+                &before, weights, &experts, &h.counts, m, &c, 1795, 0.85, reserve, 0, 1,
             )
         })
     }
