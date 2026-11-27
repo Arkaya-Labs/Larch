@@ -1414,8 +1414,10 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
     // The expert cache (per-expert residency): 0 keeps whole host layers, 1 places experts
     // statically, 2 adds dynamic residency. 5070 Ti, 35B, 11 Nov: 4 chats +35 %, 1 chat -33 %
     // against whole layers, so the demand switch's many-chats plan takes it.
-    // ponytail: only a planned many-chats load records routes, so a card's first one has no
-    // histogram and keeps whole layers; record in fast mode too if that first switch shows.
+    // ponytail: only a load that takes the cache records routes, and a many-chats load without a
+    // histogram keeps whole layers and the prefill pool instead, so on its own a card never
+    // starts one (LARCH_EXPERT_CACHE=1 does). Record on whole-layer loads too if a measured
+    // per-expert plan beats whole layers with the pool at many chats.
     let forced_cache = std::env::var("LARCH_EXPERT_CACHE")
         .ok()
         .map(|v| expert_cache(&v));
@@ -1457,7 +1459,26 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
         };
         // Measured on CUDA only (the 5070 Ti); elsewhere many chats keep whole layers.
         let many = before.backend == larch_kernels::Backend::Cuda && floor >= engine::MANY_SEATS;
-        let cache = forced_cache.unwrap_or(many.then_some(false));
+        // The CPU reference keeps every expert where it is (fit::host_expert_layers), so only a GPU
+        // plan moves experts.
+        let planned = forced.is_none()
+            && !experts.is_empty()
+            && before.backend != larch_kernels::Backend::Cpu;
+        let wanted = forced_cache.unwrap_or(many.then_some(false));
+        // A crafted expert_count has no histogram: the whole-layer load below refuses that file.
+        let hist_path = Histogram::path(&path);
+        // What the load records from, usable or not; only counts make it a per-expert plan.
+        let start = moe
+            .filter(|_| planned && wanted.is_some())
+            .and_then(|m| Histogram::for_load(&header, &c, m, &hist_path, len));
+        // Many chats take the expert cache only with a histogram to place experts from: without
+        // one its plan was whole layers with no prefill pool, so they keep the whole-layer plan
+        // and its pool instead, and record nothing. A cache set by LARCH_EXPERT_CACHE stays.
+        let cache = match forced_cache {
+            Some(cache) => cache,
+            None => wanted.filter(|_| plan_from(start.as_ref()).is_some()),
+        };
+        let start = start.filter(|_| cache.is_some());
         // A hybrid's seats stop at its state slots, so the buckets past them never capture.
         let seats_of = |slots: u32| {
             if c.arch.hybrid() {
@@ -1593,11 +1614,6 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                 }
             }
         };
-        // The CPU reference keeps every expert where it is (fit::host_expert_layers), so only a GPU
-        // plan moves experts.
-        let planned = forced.is_none()
-            && !experts.is_empty()
-            && before.backend != larch_kernels::Backend::Cpu;
         // A drafter's smaller attempts at the startup terms (below).
         let first = t.get();
         let drafting = drafter.is_some() || mtp;
@@ -1657,12 +1673,6 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                 return Err(LoadError::DoesNotFit { need: 0, have: 0 });
             }
         }
-        // A crafted expert_count has no histogram: the whole-layer load below refuses that file.
-        let hist_path = Histogram::path(&path);
-        // What the load records from, usable or not; only counts make it a per-expert plan.
-        let start = moe
-            .filter(|_| planned && cache.is_some())
-            .and_then(|m| Histogram::for_load(&header, &c, m, &hist_path, len));
         // A per-expert attempt moved memory, so a fallback's check allows CUDA's free swing too.
         let mut tried = false;
         if let (Some(m), Some(hist)) = (moe, plan_from(start.as_ref())) {
