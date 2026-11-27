@@ -490,8 +490,9 @@ fn hash_into(mut reader: impl Read, hash: &mut Sha256) -> io::Result<()> {
     }
 }
 
-/// Resumes, verifies size and SHA-256, and only then renames into place.
-/// The callback receives (bytes present, bytes fetched this run); false cancels.
+/// Resumes, verifies size and SHA-256, and only then renames into place, over [`PARALLEL`]
+/// connections as [`download_parallel`] does. The callback receives (bytes present, bytes fetched
+/// this run); false cancels.
 pub fn download(
     url: &str,
     token: Option<&str>,
@@ -501,17 +502,38 @@ pub fn download(
     progress: impl FnMut(u64, u64) -> bool,
 ) -> Result<String, DownloadError> {
     let agent = agent(url);
-    download_with(
+    // Where `url` redirected (a CDN's signed URL): the ranges after the first go there straight,
+    // since a round trip to `url` per 8 MiB piece costs about as much as the piece. It takes no
+    // token, and one the CDN refuses (it expired) sends the next range via `url` again.
+    let direct = Mutex::new(None::<String>);
+    let lock = || direct.lock().unwrap_or_else(PoisonError::into_inner);
+    download_parallel(
         dest,
         Some(sha256),
         size,
-        |at, etag| {
-            let range = format!("bytes={at}-");
+        |start, end, etag| {
+            let range = match end {
+                Some(end) => format!("bytes={start}-{end}"),
+                None => format!("bytes={start}-"),
+            };
             let mut headers = vec![("Range", range.as_str())];
             if let Some(etag) = etag {
                 headers.push(("If-Range", etag));
             }
-            get(&agent, url, token, &headers)
+            let cdn = lock().clone();
+            if let Some(cdn) = cdn {
+                match get(&agent, &cdn, None, &headers) {
+                    Err(e) if matches!(*e, ureq::Error::Status(401 | 403 | 404 | 410, _)) => {
+                        *lock() = None;
+                    }
+                    r => return r,
+                }
+            }
+            let response = get(&agent, url, token, &headers)?;
+            if response.get_url() != url {
+                *lock() = Some(response.get_url().to_owned());
+            }
+            Ok(response)
         },
         progress,
     )
