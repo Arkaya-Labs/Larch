@@ -93,6 +93,17 @@ fn weights(rng: &mut Rng, t: DType, rows: u64, cols: u64, a: f32) -> Vec<u8> {
     let mut out: Vec<u8> = (0..t.bytes(rows * cols))
         .map(|_| rng.next() as u8)
         .collect();
+    if t == DType::Nvfp4 {
+        // Four E4M3 scale bytes a block: the exponent for a/12 (codes reach 12, at half a scale's value),
+        // a random mantissa.
+        let e = (((a / 6.0).log2().floor() as i32) + 7).clamp(1, 14) as u8;
+        for block in out.chunks_mut(36) {
+            for s in &mut block[..4] {
+                *s = (e << 3) | (rng.next() as u8 & 7);
+            }
+        }
+        return out;
+    }
     // Scale fields: the largest |weight| is about a.
     let (fields, scale): (&[usize], f32) = match t {
         DType::Q4K | DType::Q5K => (&[0, 2], a / (63.0 * 31.0)),
@@ -134,6 +145,7 @@ fn build(arch: Arch, seed: u64, mtp: bool) -> Vec<u8> {
         Arch::Qwen3Moe => "qwen3moe",
         Arch::Qwen35 => "qwen35",
         Arch::Qwen35Moe => "qwen35moe",
+        Arch::Inkling2Loop => panic!("inkling_gguf writes the Inkling 2 model"),
     };
     let k = |key: &str| format!("{name}.{key}");
     let mut kv = vec![
@@ -309,6 +321,18 @@ pub mod ink {
 /// the sink and dynamic-tap projections bf16, the controllers, router, norms, queries, biases and
 /// convolutions f32, as in the released files; layers below [`ink::SCALED`] scale each expert.
 pub fn inkling_gguf(seed: u64) -> Vec<u8> {
+    inkling(seed, false)
+}
+
+/// [`inkling_gguf`] with layer 0's experts in NVFP4, as the released files keep their scaled layers' (so
+/// layers 1 to 3 scale Q8_0 experts, as Q3_K_XL's mixed layers do). Only layer 0's: with every scaled
+/// layer's experts in four bits the random model is chaotic enough that llama.cpp's own runs of it agree
+/// on top-1 at 74 % of positions, too few decisive ones for a gate.
+pub fn inkling_gguf_nvfp4(seed: u64) -> Vec<u8> {
+    inkling(seed, true)
+}
+
+fn inkling(seed: u64, nvfp4: bool) -> Vec<u8> {
     use ink::*;
     let name = "inkling2_loop";
     let k = |key: &str| format!("{name}.{key}");
@@ -434,8 +458,12 @@ pub fn inkling_gguf(seed: u64) -> Vec<u8> {
         b.vector(n("ffn_norm.weight"), D, 1.0);
         b.f32(n("ffn_gate_inp.weight"), &[D, e], 0.1);
         b.f32(n("exp_probs_b.bias"), &[e], 0.5);
-        b.q8(n("ffn_gate_up_exps.weight"), &[D, 2 * FFN, e], 0.1);
-        b.q8(n("ffn_down_exps.weight"), &[FFN, D, e], 0.1);
+        let experts = |b: &mut Builder, name: String, dims: &[u64]| match nvfp4 && i == 0 {
+            true => b.quant(DType::Nvfp4, name, dims, 0.1),
+            false => b.quant(DType::Q8_0, name, dims, 0.1),
+        };
+        experts(&mut b, n("ffn_gate_up_exps.weight"), &[D, 2 * FFN, e]);
+        experts(&mut b, n("ffn_down_exps.weight"), &[FFN, D, e]);
         if i < SCALED {
             b.vector(n("ffn_gate_up_exps.scale"), e, 1.0);
             b.vector(n("ffn_down_exps.scale"), e, 1.0);
@@ -645,9 +673,14 @@ impl Builder {
 
     /// A Q8_0 tensor of GGML dims `dims` (the first a multiple of 32) with weights of about `a`.
     fn q8(&mut self, name: String, dims: &[u64], a: f32) {
+        self.quant(DType::Q8_0, name, dims, a);
+    }
+
+    /// A tensor of quant type `t` and GGML dims `dims` (the first whole blocks) with weights of about `a`.
+    fn quant(&mut self, t: DType, name: String, dims: &[u64], a: f32) {
         let rows = dims[1..].iter().product();
-        let data = weights(&mut self.rng, DType::Q8_0, rows, dims[0], a);
-        let ty = ggml_type(DType::Q8_0).expect("a GGML type");
+        let data = weights(&mut self.rng, t, rows, dims[0], a);
+        let ty = ggml_type(t).expect("a GGML type");
         self.tensors.push((name, dims.to_vec(), ty, data));
     }
 

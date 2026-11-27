@@ -26,3 +26,6 @@ target_link_libraries(tokdump PRIVATE llama llama-common)
 add_executable(llama-logits logits.cpp)
 target_link_libraries(llama-logits PRIVATE llama llama-common mtmd vendor::hash)
 target_compile_definitions(llama-logits PRIVATE LLAMA_TAG="${LLAMA_TAG}")
+
+add_executable(tensordump tensordump.cpp)
+target_link_libraries(tensordump PRIVATE llama llama-common)
