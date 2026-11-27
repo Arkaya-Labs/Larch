@@ -296,6 +296,83 @@ fn redirect_to_another_port_never_gets_the_bearer_token() {
 }
 
 #[test]
+fn a_large_download_takes_ranges_at_once_straight_from_where_it_redirected() {
+    use std::sync::{Arc, atomic::AtomicUsize};
+    let dir = Temp::new();
+    let dest = dir.0.join("model.gguf");
+    // Three 8 MiB pieces.
+    let data: Arc<Vec<u8>> = Arc::new((0..24 << 20).map(|i| (i % 251) as u8).collect());
+    let hash = hex(&Sha256::digest(&*data));
+    let origin = TcpListener::bind("127.0.0.1:0").unwrap();
+    let cdn = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/file", origin.local_addr().unwrap());
+    let redirected = format!("http://{}/signed", cdn.local_addr().unwrap());
+    let origin_hits = Arc::new(AtomicUsize::new(0));
+    let hits = origin_hits.clone();
+    thread::spawn(move || {
+        for stream in origin.incoming() {
+            let mut stream = stream.unwrap();
+            assert!(request(&stream).contains("authorization: bearer test-token\r\n"));
+            hits.fetch_add(1, Ordering::SeqCst);
+            write!(stream, "HTTP/1.1 302 Found\r\nLocation: {redirected}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        }
+    });
+    let (cdn_hits, open, peak) = (
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let (served, hits, now, most) = (data.clone(), cdn_hits.clone(), open.clone(), peak.clone());
+    thread::spawn(move || {
+        for stream in cdn.incoming() {
+            let mut stream = stream.unwrap();
+            let (served, hits, now, most) =
+                (served.clone(), hits.clone(), now.clone(), most.clone());
+            thread::spawn(move || {
+                let req = request(&stream);
+                assert!(!req.contains("authorization:"));
+                let range = req.split("range: bytes=").nth(1).unwrap();
+                let range = range.split("\r\n").next().unwrap();
+                let (a, b) = range.split_once('-').unwrap();
+                let a: usize = a.parse().unwrap();
+                let b: usize = b.parse().map_or(served.len() - 1, |b: usize| b);
+                hits.fetch_add(1, Ordering::SeqCst);
+                most.fetch_max(now.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                // Long enough that the connections a parallel download keeps busy overlap here.
+                thread::sleep(std::time::Duration::from_millis(300));
+                write!(stream, "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {a}-{b}/{}\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n", b + 1 - a, served.len()).unwrap();
+                stream.write_all(&served[a..=b]).unwrap();
+                now.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
+    });
+    download(
+        &url,
+        Some("test-token"),
+        &dest,
+        &hash,
+        data.len() as u64,
+        |_, _| true,
+    )
+    .unwrap();
+    assert!(fs::read(&dest).unwrap() == *data);
+    assert_eq!(
+        origin_hits.load(Ordering::SeqCst),
+        1,
+        "only the first range asks the origin"
+    );
+    assert_eq!(
+        cdn_hits.load(Ordering::SeqCst),
+        3,
+        "one request per 8 MiB piece"
+    );
+    assert!(
+        peak.load(Ordering::SeqCst) >= 2,
+        "the pieces after the first were fetched one at a time"
+    );
+}
+
+#[test]
 fn bad_sizes_ranges_and_hashes_never_replace_the_destination() {
     for (headers, body, size, hash) in [
         (
