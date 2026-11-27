@@ -53,9 +53,8 @@ use sha2::{Digest, Sha256};
 const GUESS_SPLITS: u32 = 16;
 
 /// The most guesses a check of a load with `opts` tries: `drafted` (the drafter's, see
-/// [`crate::guess::drafted`]), else `guesses`. A `recurrent` model's check snapshots a row a guess
-/// into its spares, one more taken while its sequence lives in a spare, so it allocates a spare a
-/// guess and one ([`Model::alloc_checks`]), at most [`Transformer::CHECK_SLOTS`].
+/// [`crate::guess::drafted`]), else `guesses`; a `recurrent` model's check holds at most
+/// [`Transformer::CHECK_ROWS`] rows.
 pub(crate) fn guess_count(opts: &EngineOptions, drafted: Option<u32>, recurrent: bool) -> u32 {
     let n = match drafted {
         Some(d) => d,
@@ -63,20 +62,21 @@ pub(crate) fn guess_count(opts: &EngineOptions, drafted: Option<u32>, recurrent:
     };
     let spares = match recurrent {
         false => MAX_GUESSES,
-        true => Transformer::CHECK_SLOTS - 1,
+        true => Transformer::CHECK_ROWS - 1,
     };
     n.min(MAX_GUESSES).min(spares)
 }
 
-/// The check spares a load with `opts` allocates ([`guess_count`] and one) and the check-step
-/// graph slots it reserves, its drafter DFlash with `block` rows or else the MTP block or plain
-/// guesses; 0 when it does not guess.
+/// The check-step graph slots a load with `opts` reserves ([`guess_count`] and one) and the check
+/// spares it asks for (a recurrent model holds at most [`Transformer::CHECK_SLOTS`] of them), its
+/// drafter DFlash with `block` rows or else the MTP block or plain guesses; 0 when it does not
+/// guess.
 pub(crate) fn check_spares(opts: &EngineOptions, block: Option<u32>) -> u32 {
     if !opts.guessing() {
         return 0;
     }
     let drafted = (block.is_some() || opts.mtp()).then(|| drafted(opts.drafter_guesses, block));
-    (guess_count(opts, drafted, true) + 1).min(Transformer::CHECK_SLOTS)
+    (guess_count(opts, drafted, true) + 1).min(Transformer::CHECK_ROWS)
 }
 
 /// [`guess_count`] for a loaded model.
@@ -12149,17 +12149,20 @@ mod tests {
             }
         }
 
-        /// A guessing hybrid holds a spare state slot for each guess its checks try and one for
-        /// the sequence living in a spare, never more than [`Transformer::CHECK_SLOTS`]: 3 guesses
-        /// take 4 rows' snapshots (a check of 5 rows), not 5.
+        /// A guessing hybrid holds a spare state slot for each row its checks try past the first,
+        /// never more than [`Transformer::CHECK_SLOTS`], and a check takes one whatever its rows,
+        /// up to [`Transformer::CHECK_ROWS`]: 3 guesses hold 4 spares, 8 hold the most.
         #[test]
-        fn a_guessing_hybrid_holds_a_spare_a_guess_and_one() {
+        fn a_guessing_hybrid_check_takes_one_spare() {
             for (guesses, spares) in [(3, 4), (8, Transformer::CHECK_SLOTS)] {
                 let (mut e, _h) = engine(Arch::Qwen35, guesses, Box::new(PromptLookup), 0, false);
                 let model = &mut e.loaded.as_mut().unwrap().model;
-                assert_eq!(model.begin_check(&e.s, 0, spares + 1), Ok(()), "{guesses}");
+                assert_eq!(model.check_spares_free(), Some(spares), "{guesses}");
+                let rows = Transformer::CHECK_ROWS;
+                assert_eq!(model.begin_check(&e.s, 0, rows), Ok(()), "{guesses}");
+                assert_eq!(model.check_spares_free(), Some(spares - 1), "{guesses}");
                 model.end_check(&e.s, 0, 1).unwrap_err();
-                let more = model.begin_check(&e.s, 0, spares + 2);
+                let more = model.begin_check(&e.s, 0, rows + 1);
                 assert_eq!(more, Err(KError::Unsupported), "{guesses}");
             }
         }

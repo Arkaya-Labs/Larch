@@ -257,9 +257,9 @@ impl Scratch {
 
 /// Every sequence's recurrent state: [`Hybrid::gdn_layers`] layers of `phys` slots, the first
 /// `slots` the sequences' own, the rest spares. Sequence slot `l` lives in physical slot `map[l]`:
-/// its own, or after a rewind the spare that holds the kept row's snapshot, until a step that is
-/// not its check moves it home (that step's last row snapshots there), or a copy onto itself does
-/// for a step it sits out.
+/// its own, or after a rewind to its check's first row the spare that holds that row, until a
+/// step that is not its check moves it home (that step's last row snapshots there), or a copy onto
+/// itself does for a step it sits out.
 pub(super) struct States {
     conv: Buffer,
     ssm: Buffer,
@@ -270,6 +270,8 @@ pub(super) struct States {
     free: Vec<u32>,
     /// The begun checks, one a sequence slot at most: several sequences check in one step.
     checks: Vec<Check>,
+    /// A guessing load's record of its check steps' layer inputs; None without spares.
+    replay: Option<Replay>,
     /// A routed step's i32 physical slots (`[seqs]` at 0) and snapshot slots (`[rows]` at
     /// `4 * max_rows`), which the Gated DeltaNet layers read in place of the batch's slots. A
     /// guessing load's capture always reads them, and [`Model::route_table`] writes them before
@@ -279,13 +281,82 @@ pub(super) struct States {
     step: Option<bool>,
 }
 
-/// A begun check: `rows` rows of sequence slot `slot`, row `i < rows - 1` snapshotted into
-/// `snaps[i]`; `ran` once its step was routed.
+/// A begun check: `rows` rows of sequence slot `slot`, from row `row0` of its step. Its first row
+/// snapshots into the spare `snap` or, while the sequence lives in a spare, into its own slot
+/// (None); `ran` once its step was routed.
 struct Check {
     slot: u32,
     rows: u32,
-    snaps: Vec<u32>,
+    snap: Option<u32>,
+    row0: u32,
     ran: bool,
+}
+
+/// The most rows of a step [`Replay`] records: a check step's checks and one row for every other
+/// sequence ([`Transformer::check_begin`] refuses a check past it).
+const REPLAY_ROWS: i64 = 64;
+
+/// A guessing load's record of each Gated DeltaNet layer's inputs in its last step of up to
+/// `REPLAY_ROWS` rows (the conv input `[rows, channels]` f16, then alpha and beta `[rows, v_heads]`
+/// f32), which the layers write in place of the scratch, so recording costs no op; then three i32
+/// tables of `REPLAY_ROWS`, indexed by a check's rows: each replay's physical slot and row count
+/// (at the check's first row) and its snapshot table. [`Transformer::check_end`] replays a check's
+/// kept rows past its first from it.
+struct Replay {
+    buf: Buffer,
+}
+
+impl Replay {
+    fn layer_bytes(h: &Hybrid) -> u64 {
+        let (ch, vh) = (h.channels(), i64::from(h.v_heads));
+        let b = DType::F16.bytes((REPLAY_ROWS * ch) as u64)
+            + 2 * DType::F32.bytes((REPLAY_ROWS * vh) as u64);
+        b.next_multiple_of(256)
+    }
+
+    /// Where the i32 tables start, past every layer's inputs.
+    fn args_at(h: &Hybrid) -> u64 {
+        Self::layer_bytes(h) * u64::from(h.gdn_layers())
+    }
+
+    /// The device bytes of a load's record.
+    fn bytes(h: &Hybrid) -> u64 {
+        Self::args_at(h) + DType::I32.bytes(3 * REPLAY_ROWS as u64)
+    }
+
+    /// Layer `layer`'s conv input, alpha and beta at rows `from..from + n` of the record.
+    fn rows(&self, h: &Hybrid, layer: u32, from: i64, n: i64) -> Result<[Tensor<'_>; 3], KError> {
+        let (ch, vh) = (h.channels(), i64::from(h.v_heads));
+        let base = u64::from(layer) * Self::layer_bytes(h);
+        let alpha = base + DType::F16.bytes((REPLAY_ROWS * ch) as u64);
+        let beta = alpha + DType::F32.bytes((REPLAY_ROWS * vh) as u64);
+        let row = |at: u64| at + DType::F32.bytes((from * vh) as u64);
+        let qkv = base + DType::F16.bytes((from * ch) as u64);
+        Ok([
+            Tensor::new(&self.buf, qkv, DType::F16, &[n, ch])?,
+            Tensor::new(&self.buf, row(alpha), DType::F32, &[n, vh])?,
+            Tensor::new(&self.buf, row(beta), DType::F32, &[n, vh])?,
+        ])
+    }
+
+    /// Byte `i` of the i32 tables.
+    fn arg(h: &Hybrid, i: i64) -> u64 {
+        Self::args_at(h) + DType::I32.bytes(i as u64)
+    }
+}
+
+/// The state buffers of `st` as the Gated DeltaNet ops of `h` take them.
+fn gdn_state<'a>(h: &Hybrid, st: &'a States) -> GdnState<'a> {
+    GdnState {
+        conv: &st.conv,
+        ssm: &st.ssm,
+        n_slots: st.phys,
+        n_layers: h.gdn_layers(),
+        kernel: h.kernel,
+        k_heads: h.k_heads,
+        v_heads: h.v_heads,
+        head_dim: h.head_dim,
+    }
 }
 
 impl States {
@@ -293,7 +364,8 @@ impl States {
         self.slots
     }
 
-    /// The spares no check, snapshot or rewound sequence holds.
+    /// The spares no check, snapshot or rewound sequence holds: a check of a sequence in its own
+    /// slot takes one.
     pub fn spares_free(&self) -> u32 {
         self.free.len() as u32
     }
@@ -302,7 +374,7 @@ impl States {
     /// overwritten.
     fn release(&mut self, slot: u32) {
         if let Some(i) = self.checks.iter().position(|c| c.slot == slot) {
-            self.free.extend(self.checks.swap_remove(i).snaps);
+            self.free.extend(self.checks.swap_remove(i).snap);
         }
         let p = std::mem::replace(&mut self.map[slot as usize], slot);
         if p != slot {
@@ -312,22 +384,33 @@ impl States {
 }
 
 impl Transformer {
-    /// The most spare state slots a check step snapshots its rows into ([`Model::begin_check`]),
-    /// beside the sequences' own: a check of `rows` rows takes `rows - 1` of them, one more while
-    /// its sequence lives in a spare. Only a load that will guess has them, as many as its guesses
-    /// need ([`Model::alloc_checks`]).
-    pub const CHECK_SLOTS: u32 = 8;
+    /// The most spare state slots beside the sequences' own ([`Model::begin_check`]): a check of a
+    /// sequence in its own slot snapshots its first row into one, and the sequence lives there
+    /// after a rewind until a step moves it home. Only a load that will guess has them
+    /// ([`Model::alloc_checks`]).
+    // ponytail: 4 lets 4 chats check in one step; raise it when a bench at 8 chats shows checks
+    // refused for want of a spare.
+    pub const CHECK_SLOTS: u32 = 4;
 
-    /// The device bytes [`Model::alloc_checks`] adds to a load of `g` for `spares` spares; 0 for
-    /// any other arch.
+    /// The most rows a check may have (its last token and 7 guesses): a rewind replays its kept
+    /// rows past the first from the step's record.
+    pub const CHECK_ROWS: u32 = 8;
+
+    /// The device bytes [`Model::alloc_checks`] adds to a load of `g` for `spares` spares (at most
+    /// [`Transformer::CHECK_SLOTS`]) and its check steps' record; 0 for any other arch or no spare.
     pub fn check_bytes(g: &Gguf, c: &ModelConfig, spares: u32) -> Result<u64, LoadError> {
         let Some(h) = Hybrid::from_gguf(g, c)? else {
             return Ok(0);
         };
+        let spares = spares.min(Transformer::CHECK_SLOTS);
+        if spares == 0 {
+            return Ok(0);
+        }
         let (conv, ssm) = h.slot_bytes();
         Ok((conv + ssm)
             .saturating_mul(u64::from(h.gdn_layers()))
-            .saturating_mul(u64::from(spares)))
+            .saturating_mul(u64::from(spares))
+            .saturating_add(Replay::bytes(&h)))
     }
 
     /// The device bytes a load of `g` for `rows` rows takes for its hybrid layers, beyond the
@@ -409,6 +492,12 @@ impl Transformer {
         let n = u64::from(h.gdn_layers()) * u64::from(phys);
         let dev = s.device();
         let alloc = |b: u64| Buffer::alloc(dev, b.max(1)).map_err(|e| fit_err(dev, b, e));
+        let replay = match spares {
+            0 => None,
+            _ => Some(Replay {
+                buf: alloc(Replay::bytes(h))?,
+            }),
+        };
         let st = States {
             conv: alloc(conv * n)?,
             ssm: alloc(ssm * n)?,
@@ -417,6 +506,7 @@ impl Transformer {
             map: (0..slots).collect(),
             free: (slots..phys).collect(),
             checks: Vec::new(),
+            replay,
             route: alloc(DType::I32.bytes(2 * self.max_rows as u64))?,
             step: None,
         };
@@ -586,9 +676,12 @@ impl Transformer {
         Ok(())
     }
 
-    /// [`Model::begin_check`]: takes `rows - 1` spares for the step's row snapshots, beside the
-    /// other sequences' checks of the step. `Unsupported` without enough of them, `InvalidArg` for
-    /// a slot out of range, no rows or a check on the slot not ended.
+    /// [`Model::begin_check`]: a check of more than one row snapshots its first row, into a spare it
+    /// takes while its sequence lives in its own slot, else into that slot, beside the other
+    /// sequences' checks of the step. `Unsupported` past [`Transformer::CHECK_ROWS`] rows, without
+    /// a free spare or a record ([`Model::alloc_checks`]), or past the rows a step records (the
+    /// checks' and one for every other sequence slot); `InvalidArg` for a slot out of range, no
+    /// rows or a check on the slot not ended.
     pub(super) fn check_begin(&mut self, slot: u32, rows: u32) -> Result<(), KError> {
         let Some(st) = &mut self.states else {
             return Err(KError::Unsupported);
@@ -596,24 +689,34 @@ impl Transformer {
         if slot >= st.slots || rows == 0 || st.checks.iter().any(|c| c.slot == slot) {
             return Err(KError::InvalidArg);
         }
-        let n = rows as usize - 1;
-        if n > st.free.len() {
+        let checked: u32 = rows + st.checks.iter().map(|c| c.rows).sum::<u32>();
+        let beside = st.slots - 1 - st.checks.len() as u32;
+        let recorded = st.replay.is_some() && i64::from(checked + beside) <= REPLAY_ROWS;
+        if rows > Transformer::CHECK_ROWS || (rows > 1 && !recorded) {
             return Err(KError::Unsupported);
         }
-        let snaps = st.free.split_off(st.free.len() - n);
+        let snap = match rows > 1 && st.map[slot as usize] == slot {
+            true => Some(st.free.pop().ok_or(KError::Unsupported)?),
+            false => None,
+        };
         st.checks.push(Check {
             slot,
             rows,
-            snaps,
+            snap,
+            row0: 0,
             ran: false,
         });
         Ok(())
     }
 
-    /// [`Model::end_check`]: points the slot at the snapshot of row `kept - 1` (it stays where it
-    /// is when every row is kept) and frees the other spares: no copy. `InvalidArg` for `kept` out
-    /// of range or no check on `slot`, and for a check whose step did not run, which it drops.
-    pub(super) fn check_end(&mut self, slot: u32, kept: u32) -> Result<(), KError> {
+    /// [`Model::end_check`]: the state after the check's first `kept` rows. A sequence that checked
+    /// in its own slot and kept one row lives in the spare that holds it (no op); one that kept
+    /// more replays its kept rows past the first there and snapshots the last into its own slot,
+    /// where it lives on. One that checked in a spare has its first row in its own slot, where it
+    /// replays and lives again, unless it kept every row (then it stays). The other spares free.
+    /// `InvalidArg` for `kept` out of range or no check on `slot`, and for a check whose step did
+    /// not run, which it drops.
+    pub(super) fn check_end(&mut self, s: &Stream, slot: u32, kept: u32) -> Result<(), KError> {
         let Some(st) = &mut self.states else {
             return Err(KError::Unsupported);
         };
@@ -622,20 +725,84 @@ impl Transformer {
             return Err(KError::InvalidArg);
         };
         let c = st.checks.swap_remove(i);
-        let mut snaps = c.snaps;
-        if c.ran && kept < c.rows {
-            let at = snaps.swap_remove(kept as usize - 1);
-            let old = std::mem::replace(&mut st.map[slot as usize], at);
-            if old != slot {
-                st.free.push(old);
+        if !c.ran {
+            st.free.extend(c.snap);
+            return Err(KError::InvalidArg);
+        }
+        // Where the kept rows past the first replay, and the slot the last one snapshots into.
+        let replay = match c.snap {
+            _ if kept == c.rows => {
+                st.free.extend(c.snap);
+                None
+            }
+            Some(spare) if kept == 1 => {
+                st.map[slot as usize] = spare;
+                None
+            }
+            Some(spare) => {
+                st.free.push(spare);
+                Some((spare, Some(slot)))
+            }
+            None => {
+                let away = std::mem::replace(&mut st.map[slot as usize], slot);
+                if away != slot {
+                    st.free.push(away);
+                }
+                (kept > 1).then_some((slot, None))
+            }
+        };
+        match replay {
+            Some((at, into)) => self.replay_rows(s, at, into, c.row0 + 1, kept - 1),
+            None => Ok(()),
+        }
+    }
+
+    /// Runs the last step's recorded rows `from..from + n` through every Gated DeltaNet layer's
+    /// conv and delta rule on physical slot `at`, the last row's state snapshotted into `into`:
+    /// a check's kept rows past its first, onto its first row's state. Their outputs are dropped.
+    fn replay_rows(
+        &self,
+        s: &Stream,
+        at: u32,
+        into: Option<u32>,
+        from: u32,
+        n: u32,
+    ) -> Result<(), KError> {
+        let (hy, sc) = self.hybrid()?;
+        let st = self.states.as_ref().ok_or(KError::InvalidArg)?;
+        let rec = st.replay.as_ref().ok_or(KError::InvalidArg)?;
+        let (from, n) = (i64::from(from), i64::from(n));
+        let i32s = |i: i64, len: i64| Tensor::new(&rec.buf, Replay::arg(hy, i), DType::I32, &[len]);
+        s.upload(&rec.buf, Replay::arg(hy, from), &[at as i32])?;
+        s.upload(&rec.buf, Replay::arg(hy, REPLAY_ROWS + from), &[n as i32])?;
+        let snaps = match into {
+            Some(p) => {
+                let mut table = vec![-1i32; n as usize];
+                table[n as usize - 1] = p as i32;
+                s.upload(&rec.buf, Replay::arg(hy, 2 * REPLAY_ROWS + from), &table)?;
+                Some(i32s(2 * REPLAY_ROWS + from, n)?)
+            }
+            None => None,
+        };
+        let route = (
+            &i32s(from, 1)?,
+            &i32s(REPLAY_ROWS + from, 1)?,
+            snaps.as_ref(),
+        );
+        let (ch, vd, vh) = (hy.channels(), hy.v_dim(), i64::from(hy.v_heads));
+        let conv = Tensor::new(&sc.conv, 0, DType::F16, &[n, ch])?;
+        let z = Tensor::new(&sc.z, 0, DType::F16, &[n, vd])?;
+        let o = Tensor::new(&sc.o, 0, DType::F16, &[n, vh, i64::from(hy.head_dim)])?;
+        let gated = Tensor::new(&sc.gated, 0, DType::F16, &[n, vd])?;
+        let gs = gdn_state(hy, st);
+        for layer in &self.layers {
+            if let Mixer::Gdn(l) = &layer.mixer {
+                let [qkv, alpha, beta] = rec.rows(hy, l.layer, from, n)?;
+                let ins = [&qkv, &alpha, &beta];
+                self.gdn_core(s, l, &gs, ins, &z, route, &conv, &o, &gated)?;
             }
         }
-        st.free.extend(snaps);
-        if c.ran {
-            Ok(())
-        } else {
-            Err(KError::InvalidArg)
-        }
+        Ok(())
     }
 
     /// Routes a step's Gated DeltaNet layers while a check is begun or a slot lives in a spare:
@@ -667,9 +834,9 @@ impl Transformer {
         self.route_rows(s, slots, &lens, false)
     }
 
-    /// Writes each sequence's physical slot, the check's row snapshots and, for a moved slot in a
-    /// step that is not its check, a snapshot of its last row into its own slot, where it lives
-    /// again after the step. `force` writes the snapshot slots even when none is taken: a replay
+    /// Writes each sequence's physical slot, each check's first-row snapshot and, for a moved slot
+    /// in a step that is not its check, a snapshot of its last row into its own slot, where it
+    /// lives again after the step. `force` writes the snapshot slots even when none is taken: a replay
     /// reads them whatever the step is, and a step before it may have left some.
     pub(super) fn route_rows(
         &mut self,
@@ -693,7 +860,8 @@ impl Transformer {
         let valid = slots.iter().all(|&s| s >= 0 && (s as u32) < st.slots)
             && lens.iter().all(|&l| l >= 0)
             && rows <= cap
-            && st.checks.iter().all(ours);
+            && st.checks.iter().all(ours)
+            && (rows <= REPLAY_ROWS || st.checks.iter().all(|c| c.rows == 1));
         if !valid {
             return Err(KError::InvalidArg);
         }
@@ -704,10 +872,11 @@ impl Transformer {
             let p = st.map[l as usize];
             match st.checks.iter_mut().find(|c| c.slot == l) {
                 Some(c) => {
-                    for (r, &at) in c.snaps.iter().enumerate() {
-                        snaps[first + r] = at as i32;
+                    if c.rows > 1 {
+                        snaps[first] = c.snap.unwrap_or(l) as i32;
+                        snapped = true;
                     }
-                    snapped |= !c.snaps.is_empty();
+                    c.row0 = first as u32;
                     c.ran = true;
                 }
                 _ if p != l && len > 0 => {
@@ -753,18 +922,23 @@ impl Transformer {
         let (ch, vd, vh) = (hy.channels(), hy.v_dim(), i64::from(hy.v_heads));
         let hd = i64::from(hy.head_dim);
         let eps = self.cfg.rms_eps;
-        let qkv = Tensor::new(&sc.qkv, 0, DType::F16, &[rows, ch])?;
         let conv = Tensor::new(&sc.conv, 0, DType::F16, &[rows, ch])?;
         let z = Tensor::new(&sc.z, 0, DType::F16, &[rows, vd])?;
         let o = Tensor::new(&sc.o, 0, DType::F16, &[rows, vh, hd])?;
         let gated = Tensor::new(&sc.gated, 0, DType::F16, &[rows, vd])?;
-        let alpha = Tensor::new(&sc.ab, 0, DType::F32, &[rows, vh])?;
-        let beta = Tensor::new(
-            &sc.ab,
-            alpha.row_bytes() * rows as u64,
-            DType::F32,
-            &[rows, vh],
-        )?;
+        // A guessing load's layer inputs land in its record, for a check's rewind to replay.
+        let [qkv, alpha, beta] = match &st.replay {
+            Some(rec) if rows <= REPLAY_ROWS => rec.rows(hy, l.layer, 0, rows)?,
+            _ => {
+                let alpha = Tensor::new(&sc.ab, 0, DType::F32, &[rows, vh])?;
+                let beta_at = alpha.row_bytes() * rows as u64;
+                [
+                    Tensor::new(&sc.qkv, 0, DType::F16, &[rows, ch])?,
+                    alpha,
+                    Tensor::new(&sc.ab, beta_at, DType::F32, &[rows, vh])?,
+                ]
+            }
+        };
         let projs = [(l.qkv, &qkv), (l.z, &z), (l.alpha, &alpha), (l.beta, &beta)];
         let fused = match norm {
             Some((x, nw)) => {
@@ -792,16 +966,7 @@ impl Transformer {
                 self.linear(s, w, None, h, o)?;
             }
         }
-        let gs = GdnState {
-            conv: &st.conv,
-            ssm: &st.ssm,
-            n_slots: st.phys,
-            n_layers: hy.gdn_layers(),
-            kernel: hy.kernel,
-            k_heads: hy.k_heads,
-            v_heads: hy.v_heads,
-            head_dim: hy.head_dim,
-        };
+        let gs = gdn_state(hy, st);
         let lens = &b.q_lens;
         let i32s = |at: u64, n: i64| Tensor::new(&st.route, at, DType::I32, &[n]);
         let routed = match st.step {
@@ -816,65 +981,66 @@ impl Transformer {
             Some((sl, sn)) => (sl, sn.as_ref()),
             None => (&b.slots, None),
         };
+        let ins = [&qkv, &alpha, &beta];
+        if self.gdn_core(s, l, &gs, ins, &z, (slots, lens, snaps), &conv, &o, &gated)? {
+            return self.gdn_out(s, l, &gated, out, resid);
+        }
+        // llama.cpp's build_norm_gated: RMS norm per v head, times silu(z).
+        ops::qk_norm(s, &o, &self.t(l.norm)?, eps)?;
+        ops::silu_mul(s, &z, &flat(&o)?, &gated)?;
+        self.gdn_out(s, l, &gated, out, resid)
+    }
+
+    /// Layer `l`'s conv and delta rule over `[qkv, alpha, beta]`, its state as `gs` holds it and
+    /// `(slots, lens, snaps)` route it: the conv output into `conv`, then through `fused_gdn`
+    /// with the gated norm by `z` the layer's gated output into `gated` (true), else the delta
+    /// rule's into `o`. A step and a check's replay take the same ops, so their states agree.
+    #[allow(clippy::too_many_arguments)]
+    fn gdn_core(
+        &self,
+        s: &Stream,
+        l: &Gdn,
+        gs: &GdnState,
+        [qkv, alpha, beta]: [&Tensor; 3],
+        z: &Tensor,
+        (slots, lens, snaps): (&Tensor, &Tensor, Option<&Tensor>),
+        conv: &Tensor,
+        o: &Tensor,
+        gated: &Tensor,
+    ) -> Result<bool, KError> {
+        let eps = self.cfg.rms_eps;
         let w = |w: W| self.t(w);
-        let (dt, a) = (w(l.dt)?, w(l.a)?);
+        let (dt, a, cw) = (w(l.dt)?, w(l.a)?, w(l.conv)?);
         if self.fusing(FUSED.gdn) {
-            let st = (&gs, l.layer);
-            let (cw, nw) = (w(l.conv)?, w(l.norm)?);
+            let (state, nw) = ((gs, l.layer), w(l.norm)?);
             let r = self.fused_call(|| {
+                let ab = [alpha, beta, &dt, &a];
                 ops::fused_gdn(
                     s,
-                    &qkv,
+                    qkv,
                     &cw,
-                    [&alpha, &beta, &dt, &a],
+                    ab,
                     eps,
-                    st,
+                    state,
                     slots,
                     lens,
                     snaps,
-                    [&nw, &z],
-                    &conv,
-                    &gated,
+                    [&nw, z],
+                    conv,
+                    gated,
                 )
             });
             match r {
                 Err(KError::Unsupported) => {}
-                r => {
-                    r?;
-                    return self.gdn_out(s, l, &gated, out, resid);
-                }
+                r => return r.map(|()| true),
             }
         }
-        ops::gdn_conv(
-            s,
-            &qkv,
-            &w(l.conv)?,
-            &gs,
-            l.layer,
-            slots,
-            lens,
-            snaps,
-            &conv,
-        )?;
+        ops::gdn_conv(s, qkv, &cw, gs, l.layer, slots, lens, snaps, conv)?;
+        let (layer, o) = (l.layer, &flat(o)?);
         ops::gdn(
-            s,
-            &conv,
-            &alpha,
-            &beta,
-            &dt,
-            &a,
-            eps,
-            &gs,
-            l.layer,
-            slots,
-            lens,
-            snaps,
-            &flat(&o)?,
+            s, conv, alpha, beta, &dt, &a, eps, gs, layer, slots, lens, snaps, o,
         )?;
-        // llama.cpp's build_norm_gated: RMS norm per v head, times silu(z).
-        ops::qk_norm(s, &o, &w(l.norm)?, eps)?;
-        ops::silu_mul(s, &z, &flat(&o)?, &gated)?;
-        self.gdn_out(s, l, &gated, out, resid)
+        Ok(false)
     }
 
     /// A Gated DeltaNet layer's out projection of `gated` into `out`, or onto `resid` through `fused_proj_add`:
@@ -1053,12 +1219,13 @@ mod tests {
         (st.map.clone(), st.free.clone(), ran, st.step, table, snaps)
     }
 
-    /// A check of `slot` run and rewound to `kept` of `rows`: the slot then lives in a spare.
-    fn rewind(m: &mut Transformer, s: &Stream, slot: u32, rows: u32, kept: u32) {
+    /// A check of `slot` run and rewound to its first of `rows` rows: the slot then lives in the
+    /// spare that holds it.
+    fn rewind(m: &mut Transformer, s: &Stream, slot: u32, rows: u32) {
         m.check_begin(slot, rows).unwrap();
         m.route_rows(s, vec![slot as i32], &[rows as i32], true)
             .unwrap();
-        m.check_end(slot, kept).unwrap();
+        m.check_end(s, slot, 1).unwrap();
     }
 
     /// A replay's routing is the eager step's: the same map, spares, `ran` and tables whether the
@@ -1070,8 +1237,8 @@ mod tests {
         // a padding row (slot 2, unheld) over a moved free slot.
         type Setup = fn(&mut Transformer, &Stream);
         let check: Setup = |m, _| m.check_begin(0, 3).unwrap();
-        let moved: Setup = |m, s| rewind(m, s, 0, 3, 2);
-        let free: Setup = |m, s| rewind(m, s, 2, 3, 2);
+        let moved: Setup = |m, s| rewind(m, s, 0, 3);
+        let free: Setup = |m, s| rewind(m, s, 2, 3);
         let scenarios: [(&[i32], &[i32], Setup); 4] = [
             (&[1, 0], &[1, 1], |_, _| ()),
             (&[1, 0], &[1, 3], check),
@@ -1096,29 +1263,57 @@ mod tests {
                 assert!(forced.5.iter().all(|&s| s == -1), "{i}: {:?}", forced.5);
             }
         }
-        // The tables spelled out once: a check's snapshots, then its slot rewound and moved home.
+        // The tables spelled out once: a check's one snapshot, of its first row; its slot rewound
+        // to that row and moved home; then a check that keeps two rows replays them home.
         let (_dev, s, mut m) = fixture("route-moved");
         m.check_begin(0, 3).unwrap();
         let (map, free, ran, step, table, snaps) = route(&mut m, &s, &[1, 0], &[1, 3], true);
         assert_eq!(table, [1, 0]);
-        assert_eq!(snaps[0], -1);
-        assert_eq!(snaps[3], -1, "the last row keeps the live state");
-        let spares = [snaps[1] as u32, snaps[2] as u32];
-        assert!(spares.iter().all(|&p| p >= SLOTS && !free.contains(&p)));
+        assert_eq!(
+            [snaps[0], snaps[2], snaps[3]],
+            [-1; 3],
+            "the first row's alone"
+        );
+        let spare = snaps[1] as u32;
+        assert!(spare >= SLOTS && !free.contains(&spare));
         assert_eq!(
             (map, ran, step),
             ((0..SLOTS).collect(), Some(true), Some(true))
         );
-        m.check_end(0, 2).unwrap();
+        m.check_end(&s, 0, 1).unwrap();
         let (map, free, _, _, table, snaps) = route(&mut m, &s, &[0, 1], &[1, 1], true);
         assert_eq!(
             table,
-            [spares[1] as i32, 1],
+            [spare as i32, 1],
             "the moved slot runs where it lives"
         );
         assert_eq!(snaps, [0, -1], "and snapshots home");
         assert_eq!(map, (0..SLOTS).collect::<Vec<_>>());
-        assert!(free.contains(&spares[0]) && free.contains(&spares[1]));
+        assert!(free.contains(&spare));
+        m.check_begin(0, 3).unwrap();
+        route(&mut m, &s, &[0], &[3], true);
+        m.check_end(&s, 0, 2).unwrap();
+        let st = m.states.as_ref().unwrap();
+        assert_eq!(st.map, (0..SLOTS).collect::<Vec<_>>(), "replayed home");
+        assert_eq!(st.free.len() as u32, Transformer::CHECK_SLOTS);
+    }
+
+    /// A check past [`Transformer::CHECK_ROWS`] rows, or one beside checks that took every spare,
+    /// is refused and takes nothing; a sequence in a spare checks without one.
+    #[test]
+    fn a_check_takes_one_spare_at_most() {
+        let (_dev, s, mut m) = fixture("check-spares");
+        let rows = Transformer::CHECK_ROWS;
+        assert_eq!(m.check_begin(0, rows + 1), Err(KError::Unsupported));
+        rewind(&mut m, &s, 0, 3);
+        let spares = Transformer::CHECK_SLOTS - 1;
+        assert_eq!(m.states.as_ref().unwrap().spares_free(), spares);
+        for slot in 1..=spares.min(SLOTS - 1) {
+            m.check_begin(slot, rows).unwrap();
+        }
+        m.check_begin(0, rows).unwrap();
+        let st = m.states.as_ref().unwrap();
+        assert_eq!(st.spares_free(), spares - spares.min(SLOTS - 1));
     }
 
     /// A step that snapshots leaves its table behind; the next forced routing clears it, so a
@@ -1128,8 +1323,8 @@ mod tests {
         let (_dev, s, mut m) = fixture("route-clear");
         m.check_begin(0, 3).unwrap();
         let (.., snaps) = route(&mut m, &s, &[0], &[3], true);
-        assert!(snaps[0] >= SLOTS as i32 && snaps[1] >= SLOTS as i32);
-        m.check_end(0, 3).unwrap();
+        assert!(snaps[0] >= SLOTS as i32);
+        m.check_end(&s, 0, 3).unwrap();
         let (.., snaps) = route(&mut m, &s, &[0], &[3], true);
         assert_eq!(snaps, [-1, -1, -1]);
     }

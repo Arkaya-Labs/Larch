@@ -3754,8 +3754,8 @@ impl Model for Transformer {
         self.check_begin(slot, rows)
     }
 
-    fn end_check(&mut self, _s: &Stream, slot: u32, kept: u32) -> Result<(), KError> {
-        self.check_end(slot, kept)
+    fn end_check(&mut self, s: &Stream, slot: u32, kept: u32) -> Result<(), KError> {
+        self.check_end(s, slot, kept)
     }
 
     fn route_table(&mut self, s: &Stream, slots: &[i32], lens: &[i32]) -> Result<(), KError> {

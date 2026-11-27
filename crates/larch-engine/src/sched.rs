@@ -820,8 +820,8 @@ pub(crate) struct Scheduler {
     pub(crate) checkable: Option<bool>,
     /// A recurrent model's spare state slots free before this step's checks
     /// ([`larch_model::Model::check_spares_free`], which the engine sets before each schedule):
-    /// each guess a check tries snapshots its row into one. None: no count, and the model
-    /// refuses a check it cannot hold.
+    /// a check snapshots its first row into one at most, so a step checks as many sequences. None:
+    /// no count, and the model refuses a check it cannot hold.
     pub(crate) check_spares: Option<usize>,
     /// Step time by decode and guessed rows, which sizes each check.
     pub(crate) costs: Costs,
@@ -1896,12 +1896,13 @@ impl Scheduler {
                 continue;
             }
             let n_kv = self.reqs[&id].seq.n_kv;
-            // A recurrent model's checks share its free spares: a guess snapshots its row in one.
+            // A recurrent model's checks share its free spares: each takes one at most.
             let mut left = plan.guess_room - plan.guessed;
             if self.state_slots > 0
                 && let Some(free) = self.check_spares
+                && plan.prefill.len() >= free
             {
-                left = left.min(free.saturating_sub(plan.guessed));
+                left = 0;
             }
             let k = self.guess(id, left, plan, d.as_deref_mut());
             loop {

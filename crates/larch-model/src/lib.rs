@@ -255,8 +255,8 @@ pub trait Model: Send {
         Ok(())
     }
 
-    /// The spare state slots [`Model::begin_check`] could take now: a check of `rows` rows takes
-    /// `rows - 1`. None where the model keeps no count (no recurrent state, or a wrapper that does
+    /// The spare state slots [`Model::begin_check`] could take now: a check of more than one row
+    /// takes one at most (none while its sequence lives in a spare). None where the model keeps no count (no recurrent state, or a wrapper that does
     /// not say): a check it cannot hold is then refused (`Unsupported`).
     fn check_spares_free(&self) -> Option<u32> {
         None
