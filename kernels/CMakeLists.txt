@@ -224,7 +224,8 @@ if(LARCH_BUILD_TESTS)
     add_test(NAME ${name} COMMAND ${name})
   endforeach()
   # fast_mmvq_id runs in ~10 s on the CPU build; a lost pool wake hangs it, which must fail, not stall CI.
-  set_tests_properties(fast_mmvq_id PROPERTIES TIMEOUT 120)
+  # It runs alone under `ctest --parallel`, so the other tests' threads never push it past that timeout.
+  set_tests_properties(fast_mmvq_id PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
   # verify skips (77) where GPU 0 is absent or neither CUDA nor Metal with the staged tile: HIP has no mmvq_verify.
   set_tests_properties(verify PROPERTIES SKIP_RETURN_CODE 77)
   # quant.cu routes Q4_K, Q6_K and Q3_K mmvq (one row, routed rows) to half2 on sm_86/89 unless LARCH_DECODE_H2=0;

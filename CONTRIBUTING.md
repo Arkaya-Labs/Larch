@@ -106,6 +106,13 @@ CI runs on GitHub-hosted runners, which have no GPU: `ci.yml` checks the CPU bac
 Windows and macOS, `macos.yml` builds Metal, and `backend-builds.yml` compiles and inspects CUDA and
 HIP with the tests on the CPU reference. GPU tests and parity run by hand before a release
 ([RELEASING.md](RELEASING.md)), so say in your PR which GPU checks you ran and on what hardware.
+
+A pull request gets the fast checks: the build, lints and Rust tests on all three systems, with the
+kernel tests (ctest) only when it changes `kernels/`, and no build or tests when it changes only docs.
+The CUDA and HIP builds run when it changes `kernels/`, `crates/larch-sys/`, `crates/larch-kernels/`,
+`.cargo/` or `rust-toolchain.toml`. For any other change that can affect a GPU build or how the
+kernels are called, a maintainer adds the `ci:kernels` label, which starts those builds. Every
+merge to `dev` runs everything.
 [scripts/ci-local](scripts/ci-local) runs a local subset of the workflows and stops at the first failure;
 it needs dependency access and is not a substitute for all CI or GPU checks.
 

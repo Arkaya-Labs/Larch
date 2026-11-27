@@ -1,7 +1,9 @@
 name: ci
 
-# Every PR and every push to dev, forks included, on GitHub-hosted runners: no secrets, no GPU, and
-# nothing kept between runs. GPU tests and model parity run by hand before a release (RELEASING.md).
+# Every PR and every push to dev, forks included, on GitHub-hosted runners: no secrets, no GPU. GPU
+# tests and model parity run by hand before a release (RELEASING.md). On a PR, the kernel tests run
+# only when kernels/ changes, and a PR that changes only docs skips the build and tests; a push to dev
+# runs everything. Only pushes to dev save the Rust build cache, which PRs then restore.
 on:
   pull_request:
     branches: [dev]
@@ -31,35 +33,66 @@ jobs:
     env:
       LARCH_BACKEND: CPU
       CARGO_TERM_COLOR: always
+      # Line tables keep file:line in a test's backtrace; full debug info only made the build, the
+      # links and the cache bigger.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      # The crate downloads only; the build itself starts cold.
-      - name: cache the crate downloads
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+          # The PR's merge commit and its base, for the scope step.
+          fetch-depth: 2
+      # code=false: the PR changes only docs that no build or test reads (top-level *.md, docs/,
+      # LICENSE, NOTICE, the issue and PR templates). kernels=false: it changes neither kernels/ nor
+      # this workflow. A push to dev or a manual run runs every step.
+      - name: scope
+        id: scope
+        shell: bash
+        run: |
+          code=true kernels=true
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            changed=$(git diff --name-only HEAD^1 HEAD)
+            if [ -n "$changed" ] && ! grep -qvE '^([^/]+\.md|docs/.*|LICENSE|NOTICE|\.github/(ISSUE_TEMPLATE/.*|PULL_REQUEST_TEMPLATE\.md))$' <<<"$changed"; then
+              code=false
+            fi
+            grep -qE '^(kernels/|\.github/workflows/ci\.yml$)' <<<"$changed" || kernels=false
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "kernels=$kernels" >> "$GITHUB_OUTPUT"
+          echo "Build and tests: $code; kernel tests: $kernels"
+      # The crate downloads and the target directory's dependencies, keyed on the lock and the toolchain.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: steps.scope.outputs.code == 'true'
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'apps/desktop/Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
+          key: ci
+          save-if: ${{ github.event_name == 'push' }}
       - run: rustup toolchain install  # the channel in rust-toolchain.toml
+        if: steps.scope.outputs.code == 'true'
+      # nextest runs the test binaries side by side, each test in its own process; cargo test ran
+      # the binaries one after another.
+      - uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
+        if: steps.scope.outputs.code == 'true'
+        with:
+          tool: cargo-nextest@0.9.150
       # The runner's TMPDIR (/var/folders/...) leaves a test's UNIX socket path past macOS's 104
       # bytes (SUN_LEN): the larch-task host tests could not listen.
       - name: short TMPDIR
         if: runner.os == 'macOS'
         run: echo "TMPDIR=/tmp" >> "$GITHUB_ENV"
-      - if: runner.os == 'Linux'
+      - if: runner.os == 'Linux' && steps.scope.outputs.code == 'true'
         run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      # Every test binary runs, so one failure does not hide the rest.
-      - run: cargo test --locked --no-fail-fast
+      - if: steps.scope.outputs.code == 'true'
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # Every test runs, so one failure does not hide the rest (.config/nextest.toml). nextest does
+      # not run doctests, so cargo test runs those.
+      - if: steps.scope.outputs.code == 'true'
+        run: cargo nextest run --locked --workspace --profile ci
+      - if: steps.scope.outputs.code == 'true'
+        run: cargo test --locked --workspace --doc --no-fail-fast
       # Their own workspaces, so the root build never reads their locks. The app links the X11
       # keyboard libraries; its tests open no window.
       - name: desktop app and installer tests
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.scope.outputs.code == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libxkbcommon-x11-dev libxcb-xkb-dev
@@ -67,28 +100,32 @@ jobs:
           cargo test --locked --no-fail-fast --manifest-path apps/setup/Cargo.toml
       # fuzz/ is its own workspace, so the build above never compiles the R9 harness.
       - name: fuzz harness compiles
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.scope.outputs.code == 'true'
         run: cargo check --manifest-path fuzz/Cargo.toml --all-targets
+      # The tests run side by side: one after another they took 10 to 18 minutes, most of it in ops,
+      # ops_cpu_device and attention. The cargo steps above build the kernels into every crate that
+      # links larch-sys, so a PR that does not touch kernels/ still compiles them.
       - name: kernel tests (ctest on the CPU reference)
+        if: steps.scope.outputs.kernels == 'true'
         run: |
           cmake -S kernels -B build/kernels -DLARCH_BACKEND=CPU -DLARCH_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
           cmake --build build/kernels --config RelWithDebInfo
-          ctest --test-dir build/kernels -C RelWithDebInfo --output-on-failure --no-tests=error
+          ctest --test-dir build/kernels -C RelWithDebInfo --output-on-failure --no-tests=error --parallel 4
       - name: loom (1 writer, 2 readers)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.scope.outputs.code == 'true'
         env:
           RUSTFLAGS: --cfg loom
           CARGO_TARGET_DIR: target/loom
         run: cargo test -p larch-records --lib --release
       - name: records-schema generates
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.scope.outputs.code == 'true'
         run: |
           cargo run -p larch-records --features schema --bin records-schema -- "$RUNNER_TEMP/schema.json"
           python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert "EngineSample" in d["$defs"]' "$RUNNER_TEMP/schema.json"
       # numpy is the one package beyond the standard library they import (scripts/dflash_convert.py);
       # the runner's Python has none. apt's lists were updated by the desktop step above.
       - name: Python tests (release scripts and agent benchmarks)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.scope.outputs.code == 'true'
         run: |
           sudo apt-get install -y --no-install-recommends python3-numpy
           python3 -m unittest discover -s scripts -p 'test_*.py'

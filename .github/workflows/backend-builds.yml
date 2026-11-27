@@ -4,27 +4,17 @@ name: backend-builds
 # GitHub-hosted runners, which have no GPU: the GPU code is compiled and inspected, the tests run on
 # the CPU reference, and GPU tests and parity run by hand before a release (RELEASING.md).
 # A separate file from ci.yml, so a mistake here can never break the required CPU `check` jobs.
+#
+# On a PR the builds run only when the PR changes the kernels or what builds and links them (the
+# `scope` job's list), or when it has the `ci:kernels` label; adding that label starts them. A PR
+# build skips the Rust tests, which ci.yml runs on the CPU reference. Every push to dev, every
+# manual run and every release runs everything, the tests included.
 on:
   pull_request:
     branches: [dev]
-    paths:
-      - "kernels/**"
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".cargo/**"
-      - "rust-toolchain.toml"
-      - ".github/workflows/backend-builds.yml"
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches: [dev]
-    paths:
-      - "kernels/**"
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".cargo/**"
-      - "rust-toolchain.toml"
-      - ".github/workflows/backend-builds.yml"
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -48,7 +38,43 @@ env:
   LARCH_CMAKE_GENERATOR: Ninja
 
 jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
+          # The PR's merge commit and its base.
+          fetch-depth: 2
+      # Adding any other label runs nothing, so it never cancels a build already running.
+      - name: scope
+        id: scope
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          ADDED: ${{ github.event.label.name }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'ci:kernels') }}
+        run: |
+          run=true
+          if [ "$EVENT" = pull_request ]; then
+            if [ "$ACTION" = labeled ]; then
+              [ "$ADDED" = ci:kernels ] || run=false
+            elif [ "$LABELLED" != true ]; then
+              changed=$(git diff --name-only HEAD^1 HEAD)
+              grep -qE '^(kernels/|crates/larch-(sys|kernels)/|\.cargo/|rust-toolchain\.toml$|\.github/workflows/backend-builds\.yml$)' <<<"$changed" || run=false
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "CUDA and HIP builds: $run"
+
   cuda-windows:
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     runs-on: windows-2025
     # The workflow token stages a release's archives on the draft release in this repository.
     permissions:
@@ -132,7 +158,9 @@ jobs:
         run: cmake -S kernels -B build/cuda -G Ninja -DLARCH_BACKEND=CUDA -DCMAKE_BUILD_TYPE=RelWithDebInfo
       # Tests first: the workspace build unifies features (cuprum turns on larch-records/schema)
       # and relinks release\larch*, so the build after it leaves the -p binaries that ship.
+      # Not on a PR: ci.yml runs the same tests on the CPU reference there.
       - name: test on the CPU reference (no GPU on the runner)
+        if: github.event_name != 'pull_request'
         run: cargo test --release --workspace
       # A release builds the canonical archives instead (last steps); release.yml's audit runs these
       # checks on them.
@@ -206,6 +234,8 @@ jobs:
           python scripts/release-manifest.py --version "$VERSION" --stage dist/*.tar.zst
 
   cuda-linux:
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -248,7 +278,9 @@ jobs:
           curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       # Tests first, as on Windows: the build after them leaves the -p binaries that ship.
+      # Not on a PR: ci.yml runs the same tests on the CPU reference there.
       - name: test on the CPU reference (no GPU on the runner)
+        if: github.event_name != 'pull_request'
         run: cargo test --release --workspace
       # A release builds the canonical archives instead (below); release.yml's audit runs these
       # checks on them.
@@ -311,6 +343,8 @@ jobs:
   # Compile-only for the 3 days (architecture 6.3). The image unpacks to more than a hosted runner's
   # free disk, so the job frees space first and runs it with docker instead of `container:`.
   hip-linux:
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
