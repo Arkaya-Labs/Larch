@@ -115,11 +115,11 @@ fn decodes_as_check(
         && !plan.decode.is_empty()
 }
 
-/// LARCH_VERIFY_TIME=1: each pure decode or check step prints its rows, guessed rows, whether it ran
-/// the check kernels, its wall and GPU time and the last one-row plain step's wall time
-/// (`larch_verify_time,...` on stderr), so a run reads a check step's cost in plain steps; and
-/// each step that may guess, the guess counters so far and its draft forward's time
-/// (`larch_guesses,...`).
+/// LARCH_VERIFY_TIME=1: each pure decode or check step prints its rows, chats, checking chats,
+/// guessed rows, whether it ran the check kernels, its wall and GPU time and the last one-row
+/// plain step's wall time (`larch_verify_time,...` on stderr), so a run reads a check step's cost
+/// in plain steps; and each step that may guess, the guess counters so far and its draft forward's
+/// time (`larch_guesses,...`).
 fn verify_time_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("LARCH_VERIFY_TIME").is_ok_and(|v| v == "1"))
@@ -135,8 +135,14 @@ fn verify_time(plan: &StepPlan, check: bool, wall_ns: u64, gpu_ns: Option<u64>) 
         PLAIN1.store(wall_ns, Ordering::Relaxed);
     }
     eprintln!(
-        "larch_verify_time,rows={rows},chats={},guessed={},check={},wall_us={},gpu_us={},plain1_us={}",
+        "larch_verify_time,rows={rows},chats={},checks={},guessed={},check={},wall_us={},gpu_us={},plain1_us={}",
         plan.decode.len() + plan.prefill.len(),
+        // A step that checks feeds no prompt: its prefill rows are its checks.
+        if plan.guessed > 0 {
+            plan.prefill.len()
+        } else {
+            0
+        },
         plan.guessed,
         u8::from(check),
         wall_ns / 1000,
