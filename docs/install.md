@@ -3,8 +3,8 @@
 This page installs Larch from a release, keeps it up to date and removes it. To build it yourself,
 see [Building from source](build.md).
 
-Larch 0.1.0 is for Apple silicon Macs only. Windows and Linux builds are coming soon; until then,
-the install commands below say so on those systems and stop without changing anything.
+Larch 0.1.1 is for Apple silicon Macs and Windows. Linux builds are coming soon; until then, the
+install command below says so on Linux and stops without changing anything.
 
 ## Before you start
 

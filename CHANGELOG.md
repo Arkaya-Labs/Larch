@@ -5,7 +5,8 @@ before 1.0, a minor version can change interfaces and file formats.
 
 ## 0.1.1
 
-Fixes for the Mac install.
+Windows (CPU and NVIDIA CUDA) joins Apple silicon Macs, and fixes for the Mac install. Linux
+builds are still coming soon.
 
 ### Install
 - macOS: the install command no longer needs `python3`, so a Mac without Apple's command line

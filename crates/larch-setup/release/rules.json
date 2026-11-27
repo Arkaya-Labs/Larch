@@ -6,7 +6,8 @@
   ],
   "amd_ids": {},
   "flavours": {
-    "aarch64-apple-darwin":["cpu","metal"]
+    "aarch64-apple-darwin":["cpu","metal"],
+    "x86_64-pc-windows-msvc":["cpu","cuda"]
   },
   "hip_targets":["gfx1030","gfx1100","gfx1101","gfx1102","gfx1200","gfx1201"],
   "floors":{"macos_min":"26.0","glibc_min":"2.28","glibcxx_min":"3.4.29","windows_min_build":22000},
