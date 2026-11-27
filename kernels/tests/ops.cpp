@@ -1822,17 +1822,18 @@ static bool pick(int32_t gpus, int32_t* ordinal) {
   return *ordinal = int32_t(v), true;
 }
 
-// A mixed layer of `experts` [n, k] experts, the ones `cold` lists in w_cold (Q2_K) and the others in w_hot (q):
-// the slices of the whole tensors `full` (q) and `full_cold` (Q2_K, [experts * n, k]) at their experts, and the table.
+// A mixed layer of `experts` [n, k] experts, the ones `cold` lists in w_cold (qc, Q2_K unless given) and the others
+// in w_hot (q): the slices of the whole tensors `full` (q) and `full_cold` (qc, [experts * n, k]) at their experts, and
+// the table.
 struct mixed_layer {
   bytes hot, cold, table;
   int64_t n_hot, n_cold;
 };
 static mixed_layer split_layer(larch_dtype q, const bytes& full, const bytes& full_cold, int64_t experts, int64_t n,
-                               int64_t k, const std::vector<int32_t>& cold) {
+                               int64_t k, const std::vector<int32_t>& cold, larch_dtype qc = LARCH_Q2_K) {
   mixed_layer m{};
   std::vector<int32_t> table(static_cast<size_t>(experts));
-  const size_t hb = size_t(nbytes(q, {n, k})), cb = size_t(nbytes(LARCH_Q2_K, {n, k}));
+  const size_t hb = size_t(nbytes(q, {n, k})), cb = size_t(nbytes(qc, {n, k}));
   for (int32_t e = 0; e < experts; ++e)
     if (std::find(cold.begin(), cold.end(), e) != cold.end()) {
       table[size_t(e)] = -1 - int32_t(m.n_cold++);
@@ -1963,6 +1964,91 @@ static int mixed_bytes(const side& x) {
   return wrong;
 }
 
+// A split layer read in place (CUDA): mmvq_id_mixed with the cold experts at the hot ones' dtype in a range of
+// page-locked host memory (larch_buffer_alloc_host, larch_buffer_wrap_host), the hot ones, table, x, ids and weights
+// on the device, gives mmvq_id's bytes on one device tensor holding every expert, for every row. At 1 and 4 rows (decode
+// and check steps) and at 40 (from MOE_GROUPED_ROWS, the grouped path), m13's 8 slots, a third of the experts cold.
+static int mixed_wrapped(const side& x) {
+  int wrong = 0;
+  const int64_t experts = 16, n = 64, k = 512, slots = 8;
+  std::vector<int32_t> cold;
+  for (int32_t e = 1; e < experts; e += 3) cold.push_back(e);
+  for (const larch_dtype q : {LARCH_Q3_K, LARCH_Q4_K})
+    for (const int64_t rows : {1, 4, 40})
+      for (const bool weighted : {false, true}) {
+        const std::string name = std::string("mixed wrapped ") + DTYPE[q] + ", " + std::to_string(rows) + " rows" +
+                                 (weighted ? ", weighted" : "");
+        rng g = seeded(name);
+        const bytes full = quant(q, experts * n, k, g);
+        const mixed_layer m = split_layer(q, full, full, experts, n, k, cold, q);
+        std::vector<int32_t> ids(size_t(rows * slots));
+        for (int32_t& e : ids) e = int32_t(g() % uint32_t(experts));
+        const larch_dtype ot = weighted ? LARCH_F32 : LARCH_F16;
+        const bytes xb = halves(size_t(rows * (weighted ? slots : 1) * k), g), ib = raw(ids),
+                    wb = floats(size_t(rows * slots), g, 0, 1);
+        const uint64_t ob = nbytes(ot, weighted ? std::vector<int64_t>{rows, n} : std::vector<int64_t>{rows, slots, n});
+        // The cold experts 256 bytes into the host buffer, as a split layer's slots lie in the load's.
+        const uint64_t at = 256;
+        larch_buffer *hb = nullptr, *wrapped = nullptr, *d = nullptr;
+        void* host = nullptr;
+        if (larch_buffer_alloc_host(x.dev, at + m.cold.size(), &hb, &host) != LARCH_OK) {
+          std::fprintf(stderr, "%s: larch_buffer_alloc_host failed: %s\n", name.c_str(), larch_last_error(x.dev));
+          ++wrong;
+          continue;
+        }
+        std::memcpy(static_cast<uint8_t*>(host) + at, m.cold.data(), m.cold.size());
+        // One device buffer: full, hot, table, x, ids, weights, then the two outputs, each 256-byte aligned.
+        const std::vector<const bytes*> parts = {&full, &m.hot, &m.table, &xb, &ib, &wb};
+        std::vector<uint64_t> off;
+        uint64_t end = 0;
+        for (const bytes* b : parts) off.push_back(end), end += (b->size() + 255) / 256 * 256;
+        const uint64_t o1 = end, o2 = end + (ob + 255) / 256 * 256;
+        bool ok = larch_buffer_wrap_host(x.dev, static_cast<uint8_t*>(host) + at, m.cold.size(), &wrapped) == LARCH_OK &&
+                  larch_buffer_alloc(x.dev, o2 + ob, &d) == LARCH_OK;
+        for (size_t i = 0; i < parts.size() && ok; ++i)
+          ok = larch_upload(x.s, d, off[i], parts[i]->data(), parts[i]->size()) == LARCH_OK;
+        const auto t = [](larch_buffer* b, uint64_t o, larch_dtype dt, std::vector<int64_t> shape) {
+          larch_tensor r = {b, o, dt, uint32_t(shape.size()), {}, {}};
+          for (int64_t i = int64_t(shape.size()) - 1, stride = 1; i >= 0; --i) {
+            r.shape[i] = shape[size_t(i)];
+            r.stride[i] = stride;
+            stride *= i + 1 == int64_t(shape.size()) ? shape[size_t(i)] / block_of(dt) : shape[size_t(i)];
+          }
+          return r;
+        };
+        const larch_tensor wf = t(d, off[0], q, {experts * n, k}), wh = t(d, off[1], q, {m.n_hot * n, k}),
+                           wc = t(wrapped, 0, q, {m.n_cold * n, k}), tb = t(d, off[2], LARCH_I32, {experts}),
+                           xt = t(d, off[3], LARCH_F16,
+                                  weighted ? std::vector<int64_t>{rows, slots, k} : std::vector<int64_t>{rows, k}),
+                           it = t(d, off[4], LARCH_I32, {rows, slots}), wt = t(d, off[5], LARCH_F32, {rows, slots});
+        const std::vector<int64_t> os = weighted ? std::vector<int64_t>{rows, n} : std::vector<int64_t>{rows, slots, n};
+        const larch_tensor out1 = t(d, o1, ot, os), out2 = t(d, o2, ot, os);
+        larch_status mixed = LARCH_OK, whole = LARCH_OK;
+        bytes got(ob), want(ob);
+        if (ok) {
+          mixed = larch_mmvq_id_mixed(x.s, &wh, &wc, &tb, &xt, &it, weighted ? &wt : nullptr, &out1);
+          whole = larch_mmvq_id(x.s, &wf, &xt, &it, nullptr, weighted ? &wt : nullptr, &out2);
+          ok = larch_download(x.s, d, o1, got.data(), ob) == LARCH_OK &&
+               larch_download(x.s, d, o2, want.data(), ob) == LARCH_OK && larch_stream_sync(x.s) == LARCH_OK;
+        }
+        if (!ok || mixed != LARCH_OK || whole != LARCH_OK) {
+          std::fprintf(stderr, "%s: mixed %d, whole %d, setup %s: %s\n", name.c_str(), int(mixed), int(whole),
+                       ok ? "ok" : "failed", larch_last_error(x.dev));
+          ++wrong;
+        } else if (got != want) {
+          std::fprintf(stderr, "%s: differs from mmvq_id on one tensor\n", name.c_str());
+          ++wrong;
+        } else if (got == bytes(ob)) {
+          std::fprintf(stderr, "%s: all zeros\n", name.c_str());
+          ++wrong;
+        }
+        larch_buffer_free(wrapped);
+        larch_buffer_free(d);
+        larch_buffer_free(hb);
+      }
+  return wrong;
+}
+
 // A valid one-block Q2_K dequant answers UNSUPPORTED on this device: no Q2_K kernels (vv_ops::no_weights).
 static bool lacks_q2(const side& dut) {
   larch_buffer *w = nullptr, *o = nullptr;
@@ -2050,7 +2136,7 @@ int main() {
   for (const test& c : tests) wrong += check(ref, dut, c);
   wrong += mixed_bytes(ref);
   if (props.backend == LARCH_BACKEND_CUDA)
-    wrong += mixed_bytes(dut);
+    wrong += mixed_bytes(dut) + mixed_wrapped(dut);
   else
     std::printf("ops: mixed bytes against mmvq_id not run on this device (%s): NOT RUN\n", props.name);
   // Row equality is CUDA's (and wave32 HIP's) gemm_rows_k promise and the CPU's; wave64 HIP stays on hipBLAS. Metal

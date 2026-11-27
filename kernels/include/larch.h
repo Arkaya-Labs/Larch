@@ -318,7 +318,7 @@ larch_status larch_mmvq_id(larch_stream*, const larch_tensor* w_quant, const lar
  * as ids, are not checked. A (row, slot) pair reads only its expert's rows. On CUDA and the CPU reference its result
  * is larch_mmvq_id's on one tensor holding every expert's rows at its dtype, bit for bit, so a layer's hot experts
  * give the bytes they gave in the whole tensor. A GPU backend may lack it and answer a valid call UNSUPPORTED; CUDA
- * takes Q2_K cold experts only. */
+ * takes cold experts at w_hot's dtype or Q2_K. */
 larch_status larch_mmvq_id_mixed(larch_stream*, const larch_tensor* w_hot, const larch_tensor* w_cold,
                                    const larch_tensor* table_i32, const larch_tensor* x_f16,
                                    const larch_tensor* ids_i32, const larch_tensor* weights_or_null,
