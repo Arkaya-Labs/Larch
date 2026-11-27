@@ -117,6 +117,8 @@ pub struct TextStream {
     closed: bool,
     /// The withheld blocks' text, for `Done::thinking`.
     hidden: Option<Vec<u8>>,
+    /// An Inkling 2 message's frame ([`TextStream::framed`]).
+    frame: Frame,
     /// [`GenParams::stream_thinking`] with `hide_thinking`, and how many of `hidden`'s bytes went
     /// out as [`TextEvent::Thinking`].
     stream_thinking: bool,
@@ -136,6 +138,19 @@ pub struct TextStream {
     looped: bool,
     /// The text trimmed off `loop_tail` left a code block open.
     loop_fenced: bool,
+}
+
+/// Where a stream stands in Inkling 2's messages (`<|message_model|>NAME<|content_KIND|>...
+/// <|end_message|>`): thinking messages are think blocks (`TextStream::thinking`), text messages
+/// the answer without their tags, and tool calls stay whole for the parser (`toolcall::parse`).
+#[derive(Default)]
+enum Frame {
+    #[default]
+    None,
+    /// After `<|message_model|>`: its ids, held until the content tag says what follows.
+    Header(Vec<u32>),
+    /// Inside a text message, whose end tag is dropped too.
+    Text,
 }
 
 /// The longest repeating unit, and the shortest repeated span, [`looping`] calls a loop.
@@ -234,6 +249,7 @@ impl TextStream {
             thinking: opens,
             closed: false,
             hidden: (opens && p.hide_thinking).then(Vec::new),
+            frame: Frame::None,
             stream_thinking: p.hide_thinking && p.stream_thinking,
             thought: 0,
             budget: p.thinking_budget,
@@ -346,10 +362,91 @@ impl TextStream {
         (end > 0).then_some(delta)
     }
 
+    /// Inkling 2's frames: the ids `id` lets through to the decoder (none: withheld), or None for
+    /// a token outside them, which [`TextStream::withheld`] then judges. A message's header waits
+    /// for its content tag: a thinking message opens a think block, its tags withheld as
+    /// `<think>`'s are; a text message's tags go; a tool call's header and tags go out as text.
+    fn framed(&mut self, id: u32) -> Option<Vec<u32>> {
+        let piece = self.runtime.tokenizer.decode_piece(id);
+        let in_text = matches!(self.frame, Frame::Text);
+        let header = match &mut self.frame {
+            Frame::Header(ids) => Some(ids),
+            _ => None,
+        };
+        match (piece, header) {
+            (b"<|message_model|>", _) => {
+                self.frame = Frame::Header(vec![id]);
+                Some(Vec::new())
+            }
+            (b"<|content_thinking|>", Some(ids)) => {
+                let mut ids = std::mem::take(ids);
+                self.frame = Frame::None;
+                self.thinking = true;
+                self.closed = false;
+                if self.hide_thinking {
+                    self.hidden.get_or_insert_default();
+                    return Some(Vec::new());
+                }
+                ids.push(id);
+                Some(ids)
+            }
+            (b"<|content_text|>", Some(_)) => {
+                self.frame = Frame::Text;
+                Some(Vec::new())
+            }
+            (
+                b"<|content_invoke_tool_json|>"
+                | b"<|content_invoke_tool_text|>"
+                | b"<|content_tool_error|>",
+                Some(ids),
+            ) => {
+                let mut ids = std::mem::take(ids);
+                self.frame = Frame::None;
+                ids.push(id);
+                Some(ids)
+            }
+            (_, Some(ids)) => {
+                ids.push(id);
+                Some(Vec::new())
+            }
+            (b"<|end_message|>", None) if self.thinking => {
+                self.thinking = false;
+                self.closed = true;
+                Some(if self.hide_thinking {
+                    Vec::new()
+                } else {
+                    vec![id]
+                })
+            }
+            (b"<|end_message|>", None) if in_text => {
+                self.frame = Frame::None;
+                self.closed = false;
+                Some(Vec::new())
+            }
+            _ => None,
+        }
+    }
+
     /// `id`'s safe text and whether it completed a string stop; None when withheld.
     fn feed(&mut self, id: u32) -> Option<(String, bool)> {
         // Its tokens are counted on the next text event; the stop matcher never sees them.
-        (!self.withheld(id)).then(|| self.decoder.push(&self.runtime.tokenizer, id))
+        let ids = match self.framed(id) {
+            Some(ids) => ids,
+            None if self.withheld(id) => return None,
+            None => vec![id],
+        };
+        if ids.is_empty() {
+            return None;
+        }
+        let mut text = String::new();
+        for id in ids {
+            let (piece, stopped) = self.decoder.push(&self.runtime.tokenizer, id);
+            text.push_str(&piece);
+            if stopped {
+                return Some((text, true));
+            }
+        }
+        Some((text, false))
     }
 
     /// Continues a request its thinking budget ended, in the same session (`TextEvent::Done` parked
@@ -783,6 +880,92 @@ mod tests {
         assert!(opens("q<think>\n"));
         assert!(!opens("q<think>\n\n</think>\n\n"));
         assert!(!opens("q"));
+    }
+
+    /// Inkling 2's messages: FakeModel answers the cue with a thinking message, a text message and
+    /// a tool call, then EOS. The thinking is a think block, the text message the answer without its
+    /// tags, and the call goes out whole, its control-token tags as text, for the parser.
+    #[test]
+    fn inkling_messages_stream_as_thinking_answer_and_call() {
+        use larch_model::gguf::{Value, write};
+        let reply = [
+            ("<|message_model|>", 3),
+            ("<|content_thinking|>", 3),
+            ("<y>", 4),
+            ("<|end_message|>", 3),
+            ("<|message_model|>", 3),
+            ("<|content_text|>", 3),
+            ("<a0>", 4),
+            ("<|end_message|>", 3),
+            ("<|message_model|>", 3),
+            ("get", 4),
+            ("<|content_invoke_tool_json|>", 3),
+            ("{}", 4),
+            ("<|end_message|>", 3),
+        ];
+        // FakeModel walks ids in order (input + 1), so each reply token is its own id, a repeated
+        // tag a second token of the same text.
+        let mut tokens: Vec<_> = (0..256)
+            .map(|b| Value::Str(format!("<0x{b:02X}>")))
+            .collect();
+        let mut types = vec![Value::I32(6); 256];
+        tokens.push(Value::Str("<cue>".into()));
+        types.push(Value::I32(3));
+        for (text, kind) in reply {
+            tokens.push(Value::Str(text.into()));
+            types.push(Value::I32(kind));
+        }
+        tokens.push(Value::Str("<end>".into()));
+        types.push(Value::I32(3));
+        let vocab = tokens.len() as u32;
+        let kv = [
+            ("general.architecture", Value::Str("inkling2".into())),
+            ("tokenizer.ggml.model", Value::Str("llama".into())),
+            ("tokenizer.ggml.tokens", Value::Arr(tokens)),
+            ("tokenizer.ggml.token_type", Value::Arr(types)),
+            ("tokenizer.ggml.bos_token_id", Value::U32(256)),
+            ("tokenizer.ggml.eos_token_id", Value::U32(vocab - 1)),
+            ("tokenizer.ggml.add_bos_token", Value::Bool(false)),
+            ("tokenizer.ggml.add_space_prefix", Value::Bool(false)),
+        ];
+        let none: [(&str, Vec<u64>, u32, Vec<u8>); 0] = [];
+        let g = Gguf::parse(&write(&kv, &none)).unwrap();
+        let tokenizer = Tokenizer::from_gguf(&g).unwrap();
+        let template =
+            ChatTemplate::new("{{ messages[-1].content }}{{ bos_token }}", &tokenizer).unwrap();
+        let engine = start_with(
+            EngineOptions::new("fake".into(), CPU),
+            Box::new(move |_, _, _| Ok(Box::new(FakeModel::new(vocab)))),
+        )
+        .unwrap();
+        let v = Larch::from_engine(engine, tokenizer, template);
+        let call = "<|message_model|>get<|content_invoke_tool_json|>{}<|end_message|>";
+        for hide in [true, false] {
+            let mut session = v.session(SessionOptions::default());
+            let p = GenParams {
+                temperature: Some(0.0),
+                hide_thinking: hide,
+                ..GenParams::default()
+            };
+            let (mut text, mut thinking) = (String::new(), None);
+            for event in session.send("q", p).unwrap() {
+                match event {
+                    TextEvent::Text { delta, .. } => text.push_str(&delta),
+                    TextEvent::Done { thinking: t, .. } => thinking = t,
+                    e => panic!("{e:?}"),
+                }
+            }
+            if hide {
+                assert_eq!(
+                    (text.as_str(), thinking.as_deref()),
+                    (&*format!("<a0>{call}"), Some("<y>"))
+                );
+            } else {
+                let shown =
+                    format!("<|message_model|><|content_thinking|><y><|end_message|><a0>{call}");
+                assert_eq!((text.as_str(), thinking.as_deref()), (shown.as_str(), None));
+            }
+        }
     }
 
     #[test]

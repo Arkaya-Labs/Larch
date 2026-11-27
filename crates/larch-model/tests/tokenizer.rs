@@ -160,6 +160,11 @@ fn bpe_kv(pre: &str) -> Vec<(String, Value)> {
 /// An SPM vocabulary in Mistral's shape: `<unk> <s> </s>`, 256 byte tokens, scored pieces; it also
 /// asks for EOS.
 fn spm_vocab() -> Vec<u8> {
+    write(&spm_kv(), NO_TENSORS)
+}
+
+/// [`spm_vocab`]'s metadata.
+fn spm_kv() -> Vec<(String, Value)> {
     let mut tokens: Vec<(String, f32, i32)> = vec![
         ("<unk>".into(), 0.0, 2),
         ("<s>".into(), 0.0, 3),
@@ -196,7 +201,7 @@ fn spm_vocab() -> Vec<u8> {
         ),
         ("tokenizer.ggml.add_eos_token".into(), Value::Bool(true)),
     ]);
-    write(&kv, NO_TENSORS)
+    kv
 }
 
 fn vocabs() -> [(&'static str, Vec<u8>); 4] {
@@ -1139,4 +1144,45 @@ fn tojson_sorts_keys_and_takes_separators() {
         render("{%- generation -%} x {%- endgeneration %}|{% generation %}y{% endgeneration -%} z"),
         "x|yz"
     );
+}
+
+/// Inkling 2's message tags are control tokens its tokenizer shows as text, as llama-server does
+/// for preserved tokens, so its tool calls reach the parser; its EOS and the same tag in another
+/// architecture's vocabulary stay hidden.
+#[test]
+fn inkling_tags_show_as_text() {
+    for (arch, shown) in [
+        ("inkling2_loop", true),
+        ("inkling2", true),
+        ("llama", false),
+    ] {
+        let mut kv = spm_kv();
+        let tokens = kv
+            .iter_mut()
+            .find(|(k, _)| k == "tokenizer.ggml.tokens")
+            .unwrap();
+        let Value::Arr(tokens) = &mut tokens.1 else {
+            unreachable!()
+        };
+        let tag = tokens.len() as u32;
+        tokens.extend(
+            ["<|message_model|>", "<|content_model_end_sampling|>"].map(|t| Value::Str(t.into())),
+        );
+        for (k, v) in &mut kv {
+            match (k.as_str(), v) {
+                ("tokenizer.ggml.token_type", Value::Arr(t)) => {
+                    t.extend([Value::I32(3), Value::I32(3)])
+                }
+                ("tokenizer.ggml.scores", Value::Arr(s)) => {
+                    s.extend([Value::F32(0.0), Value::F32(0.0)])
+                }
+                ("general.architecture", v) => *v = Value::Str(arch.into()),
+                _ => {}
+            }
+        }
+        let (_, tok) = tokenizer(&write(&kv, NO_TENSORS));
+        let mut d = Detokenizer::new(Vec::new());
+        let text = d.push(&tok, tag).0 + &d.push(&tok, tag + 1).0 + &d.finish();
+        assert_eq!(text, if shown { "<|message_model|>" } else { "" }, "{arch}");
+    }
 }

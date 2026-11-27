@@ -27,7 +27,7 @@ pub use dflash::{DflashDrafter, DraftCache, DraftShape};
 pub use experts::Histogram;
 pub use fake::FakeModel;
 pub use tokcheck::{TokcheckError, tokcheck};
-pub use tokenizer::{Detokenizer, Tokenizer};
+pub use tokenizer::{Detokenizer, INKLING_TAGS, Tokenizer};
 pub use transformer::{
     ExpertPlan, MMVQ_MAX_ROWS, MTP_GUESSES, MtpCache, MtpDrafter, PREFILL_STREAM_ROWS, Placement,
     RouteCase, Transformer,

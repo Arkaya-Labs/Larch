@@ -37,6 +37,21 @@ const EOG_TEXTS: [&str; 9] = [
     "</s>",
 ];
 
+/// Inkling 2's message tags, which its replies are read by: llama.cpp's `preserved_tokens`
+/// (common/parsers/inkling.cpp) with the text kinds Splash's chat format reads as the answer's.
+/// They are control tokens in its GGUFs; [`Tokenizer::from_gguf`] shows them as text, as
+/// llama-server does for preserved tokens, so a reply's tool calls reach the parser and a grammar
+/// can name them.
+pub const INKLING_TAGS: [&str; 7] = [
+    "<|message_model|>",
+    "<|content_thinking|>",
+    "<|content_text|>",
+    "<|content_tool_error|>",
+    "<|content_invoke_tool_text|>",
+    "<|content_invoke_tool_json|>",
+    "<|end_message|>",
+];
+
 /// GPT-2's byte-level alphabet: printable Latin-1 stands for itself, the other 68 bytes for U+0100 on.
 static BYTE_CHARS: LazyLock<[char; 256]> = LazyLock::new(|| {
     let mut out = ['\0'; 256];
@@ -210,6 +225,14 @@ impl Tokenizer {
         }
         eog.sort_unstable();
         eog.dedup();
+        let arch = g.get("general.architecture").and_then(Value::as_str);
+        if matches!(arch, Some("inkling2" | "inkling2_loop")) {
+            for (t, k) in text.iter().zip(&mut kind) {
+                if *k == Kind::Control && INKLING_TAGS.contains(&t.as_str()) {
+                    *k = Kind::User;
+                }
+            }
+        }
 
         let mut merges = HashMap::new();
         if !spm {

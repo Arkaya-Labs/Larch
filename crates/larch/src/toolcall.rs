@@ -18,22 +18,12 @@ pub enum Family {
     Mistral,
     /// Inkling 2's messages: `<|message_model|>NAME<|content_invoke_tool_json|>{"name":...,
     /// "args":{...}}<|end_message|>`, one message per call, beside `<|content_thinking|>` and
-    /// `<|content_text|>` messages of the same shape. Every tag is a control token, so the reply
-    /// reads only where the detokenizer keeps [`INKLING_TAGS`] as text.
+    /// `<|content_text|>` messages of the same shape. Its GGUFs make every tag a control token;
+    /// the tokenizer shows [`INKLING_TAGS`] as text, so the reply reads.
     Inkling,
 }
 
-/// Inkling 2's message tags, which its replies are read by: llama.cpp's `preserved_tokens`
-/// (common/parsers/inkling.cpp) with the text kinds Splash's chat format reads as the answer's.
-pub const INKLING_TAGS: [&str; 7] = [
-    "<|message_model|>",
-    "<|content_thinking|>",
-    "<|content_text|>",
-    "<|content_tool_error|>",
-    "<|content_invoke_tool_text|>",
-    "<|content_invoke_tool_json|>",
-    "<|end_message|>",
-];
+pub use larch_model::INKLING_TAGS;
 
 impl Family {
     /// The text that opens a call in this format.
@@ -48,7 +38,9 @@ impl Family {
 
     /// Each text that opens a call in this format, with its closing tag: the marker, and for
     /// Qwen3 the `<function-call>` wrapper Qwen3-30B-A3B writes at times outside the grammar
-    /// (twice on the M5's source-files-003, 31 Oct), read as the same call.
+    /// (twice on the M5's source-files-003, 31 Oct), read as the same call. Inkling 2's call opens
+    /// at its message's start, before the name: the stream strips the other messages' tags, so
+    /// `<|message_model|>` in an answer starts a call.
     pub fn wrappers(self) -> &'static [(&'static str, &'static str)] {
         match self {
             Self::Qwen3 => &[
@@ -57,7 +49,7 @@ impl Family {
             ],
             Self::Llama3 => &[("<|python_tag|>", "")],
             Self::Mistral => &[("[TOOL_CALLS]", "")],
-            Self::Inkling => &[("<|content_invoke_tool_json|>", "<|end_message|>")],
+            Self::Inkling => &[("<|message_model|>", "<|end_message|>")],
         }
     }
 }
