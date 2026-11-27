@@ -508,7 +508,7 @@ larch_status quant_gemm_i8(larch_stream*, const larch_tensor* w_quant, const lar
     const matmul_checked checked = check_quant_gemm(buffer_bytes, w_quant, x_f16, bias_or_null, out);
     const view w = checked.b_t, x = checked.a, b = checked.bias, o = checked.c;
     // Refuse before the empty-row return, so the answer does not depend on the row count.
-    need(w.dtype != LARCH_Q3_K && w.dtype != LARCH_Q2_K, "no int8 policy for this dtype");
+    need(w.dtype != LARCH_Q3_K && w.dtype != LARCH_Q2_K && w.dtype != LARCH_NVFP4, "no int8 policy for this dtype");
     if (!x.rows) return;
     const int64_t groups = w.cols / 32;
     struct activation {
@@ -856,8 +856,13 @@ attn_checked check_attn_rel(const sizer& bytes, const larch_tensor* q, const lar
                             const larch_tensor* q_lens_i32, const larch_tensor* mask_or_null,
                             const larch_tensor* rel_q, const larch_tensor* rel_w, const larch_tensor* sink,
                             const larch_tensor* out) {
-  attn_checked a =
-      check_attn(bytes, q, pool, block_table_i32, q_start_pos_i32, q_lens_i32, mask_or_null, nullptr, out);
+  attn_checked a;
+  if (q_lens_i32) {
+    a = check_attn(bytes, q, pool, block_table_i32, q_start_pos_i32, q_lens_i32, mask_or_null, nullptr, out);
+  } else {  // decode's form: q_start_pos holds the seq_lens
+    a = check_attn_decode(bytes, q, pool, block_table_i32, q_start_pos_i32, out);
+    need(!mask_or_null, "decode's form takes no mask");
+  }
   a.rel_q = check_tensor(bytes, rel_q, "rel_q");
   a.rel_w = check_tensor(bytes, rel_w, "rel_w");
   a.sinks = check_tensor(bytes, sink, "sink");
@@ -915,8 +920,8 @@ struct attn {
 
   // Query row `row` attends to `slots` in order, all heads; softmax in double, with head h's sink as one
   // more logit when there are sinks. The pages are decoded once per row, so every dtype reads alike. With
-  // rel_q, `dists` holds each slot's distance from the row, every logit takes its bias less the row's sink, and
-  // the one more logit is 0.
+  // rel_q, `dists` holds each slot's distance from the row, every scaled logit takes its bias less the row's sink
+  // (unscaled), and the one more logit is 0.
   void attend(int64_t row, const std::vector<int64_t>& slots, const std::vector<int64_t>* dists = nullptr) const {
     const size_t n = slots.size(), kc = size_t(k.cols);
     std::vector<float> ks(n * kc), vs(n * kc);
@@ -936,8 +941,8 @@ struct attn {
       for (size_t p = 0; p < n; ++p) {
         double dot = 0;
         for (int64_t d = 0; d < hd; ++d) dot += double(q.get(row, qo + d)) * ks[p * kc + size_t(ko + d)];
-        if (rel) dot += bias(row, h, (*dists)[p]) - row_sink;
         w[p] = dot * scale;
+        if (rel) w[p] += bias(row, h, (*dists)[p]) - row_sink;
         mx = std::max(mx, w[p]);
       }
       double sum = rel || sinks.buf ? std::exp(sink - mx) : 0;
@@ -1038,9 +1043,25 @@ larch_status attn_rel(larch_stream*, const larch_tensor* q, const larch_kv_pool*
                        const larch_tensor* rel_w, const larch_tensor* sink, uint32_t window, uint32_t, float scale,
                        const larch_tensor* out) {
   return run("attn_rel", [&] {
-    attend_spans(check_attn_rel(buffer_bytes, q, pool, block_table_i32, q_start_pos_i32, q_lens_i32, mask_or_null,
-                                rel_q, rel_w, sink, out),
-                 pool, scale, window);
+    const attn_checked c = check_attn_rel(buffer_bytes, q, pool, block_table_i32, q_start_pos_i32, q_lens_i32,
+                                          mask_or_null, rel_q, rel_w, sink, out);
+    if (q_lens_i32) return attend_spans(c, pool, scale, window);
+    // Decode's form: row r a span of one row at seq_len - 1; seq_len 0 attends nothing, which gives zeros. (`struct`:
+    // the function attn above hides the type's name.)
+    const struct attn a(c, pool, scale);
+    const view lens = c.lens;
+    std::vector<int64_t> slots, dists;
+    for (int64_t r = 0; r < a.q.rows; ++r) {
+      const int64_t len = lens.i32(r);
+      need(len >= 0, "negative seq_len");
+      slots.clear();
+      dists.clear();
+      for (int64_t p = window ? std::max<int64_t>(0, len - window) : 0; p < len; ++p) {
+        slots.push_back(a.slot(r, p));
+        dists.push_back(len - 1 - p);
+      }
+      a.attend(r, slots, &dists);
+    }
   });
 }
 

@@ -23,13 +23,13 @@
 #include "tests/testdata.h"
 
 using dtypes = uint32_t;  // a set: bit t for larch_dtype t, bit NUL for a NULL tensor
-constexpr int NUL = LARCH_Q2_K + 1;
+constexpr int NUL = LARCH_NVFP4 + 1;
 constexpr dtypes F32 = 1u << LARCH_F32, F16 = 1u << LARCH_F16, I32 = 1u << LARCH_I32, OPT = 1u << NUL;
-constexpr dtypes QUANT = 1u << LARCH_Q2_K | 1u << LARCH_Q3_K | 1u << LARCH_Q4_K | 1u << LARCH_Q5_K | 1u << LARCH_Q6_K | 1u << LARCH_Q8_0 |
+constexpr dtypes QUANT = 1u << LARCH_NVFP4 | 1u << LARCH_Q2_K | 1u << LARCH_Q3_K | 1u << LARCH_Q4_K | 1u << LARCH_Q5_K | 1u << LARCH_Q6_K | 1u << LARCH_Q8_0 |
                          1u << LARCH_Q4_0 | 1u << LARCH_Q5_0;
 constexpr dtypes KV = F16 | 1u << LARCH_Q8_0 | 1u << LARCH_FP8_E4M3;  // the pool dtypes
 const char* const NAMES[] = {"f32",  "f16",  "bf16", "i32",  "q4_k",     "q5_k",
-                             "q6_k", "q8_0", "q4_0", "q5_0", "fp8_e4m3", "q3_k", "q2_k", "NULL"};
+                             "q6_k", "q8_0", "q4_0", "q5_0", "fp8_e4m3", "q3_k", "q2_k", "nvfp4", "NULL"};
 constexpr uint32_t DIM0 = 1, DIM1 = 2, DIM2 = 4, POOL = ~0u;
 
 struct arg {
@@ -600,11 +600,11 @@ static const std::vector<op> OPS = with_bad_pools({
      true},
     {"depth_mix", {{{3, 2, 32}, F32, 0, DIM0}, {{2, 32}, F32}, {{2, 2, 32}, F32}},
      [](larch_stream* s, const larch_tensor* const* t) { return lacking(larch_depth_mix(s, t[0], t[1], t[2])); }},
-    {"loop_gate", {{{2, 32}, F32}, {{2, 32}, F32}, {{2, 32}, F16}, {{2, 32}, F16}, {{2, 32}, F32}},
+    {"loop_gate", {{{2, 32}, F32}, {{2, 32}, F32}, {{2, 32}, F16 | F32}, {{2, 32}, F16 | F32}, {{2, 32}, F32}},
      [](larch_stream* s, const larch_tensor* const* t) {
        return lacking(larch_loop_gate(s, t[0], t[1], t[2], t[3], t[4]));
      }},
-    {"loop_gate, out == x", {{{2, 32}, F32}, {{2, 32}, F32}, {{2, 32}, F16}, {{2, 32}, F16}},
+    {"loop_gate, out == x", {{{2, 32}, F32}, {{2, 32}, F32}, {{2, 32}, F16 | F32}, {{2, 32}, F16 | F32}},
      [](larch_stream* s, const larch_tensor* const* t) {
        return lacking(larch_loop_gate(s, t[0], t[1], t[2], t[3], t[0]));
      }},
@@ -635,6 +635,15 @@ static const std::vector<op> OPS = with_bad_pools({
      {{{1, 2, 32}, F16}, {{1}, KV, 0, POOL}, {{1, 1}, I32, 0, DIM1}, {{1}, I32}, {{1}, I32, 1}, {{1}, I32 | OPT, 1},
       {{1, 2, 16}, F16 | F32}, {{8, 16}, F32, 0, DIM0}, {{1, 2}, F16 | F32}, {{1, 2, 32}, F16}},
      attn_rel},
+    // Decode's form: q_lens NULL, q_start_pos the seq_lens (0: a padding row).
+    {"attn_rel, decode",
+     {{{1, 2, 32}, F16}, {{1}, KV, 0, POOL}, {{1, 1}, I32, 0, DIM1}, {{1}, I32}, {{1, 2, 16}, F16 | F32},
+      {{8, 16}, F32, 0, DIM0}, {{1, 2}, F16 | F32}, {{1, 2, 32}, F16}},
+     [](larch_stream* s, const larch_tensor* const* t) {
+       const larch_status got =
+           larch_attn_rel(s, t[0], pool(t[1]), t[2], t[3], nullptr, nullptr, t[4], t[5], t[6], 2, 0, 0.35f, t[7]);
+       return pool_now.dtype == LARCH_F16 ? lacking(got) : got;
+     }},
     {"softcap", {{{2, 32}, F32}, {{2, 32}, F32}},
      [](larch_stream* s, const larch_tensor* const* t) { return lacking(larch_softcap(s, t[0], 30.0f, t[1])); }},
     {"softcap, cap 0", {{{2, 32}, F32}, {{2, 32}, F32}},
@@ -674,7 +683,8 @@ static const std::vector<op> GDN_OPS = with_bad_states({
 
 // A dense tensor over b; the last dim counts blocks for quant.
 static larch_tensor tensor(larch_buffer* b, int dtype, const std::vector<int64_t>& shape) {
-  const int64_t block = (dtype >= LARCH_Q4_K && dtype <= LARCH_Q6_K) || dtype >= LARCH_Q3_K ? 256
+  const int64_t block = dtype == LARCH_NVFP4                                                ? 64
+                        : (dtype >= LARCH_Q4_K && dtype <= LARCH_Q6_K) || dtype >= LARCH_Q3_K ? 256
                         : dtype >= LARCH_Q8_0 && dtype <= LARCH_FP8_E4M3              ? 32
                                                                                         : 1;
   larch_tensor t = {b, 0, larch_dtype(dtype), uint32_t(shape.size()), {}, {}};
@@ -762,7 +772,7 @@ static int check(larch_device* dev, larch_stream* s, const op& o, bool dtypes) {
       eight_bit = eight_bit || (o.args[i].free == POOL && pick[i] != LARCH_F16);
       const bool q2_kernel = on_cuda && (o.name.starts_with("embed") || o.name.starts_with("dequant") ||
                                          o.name.starts_with("mmvq_id"));
-      may_lack = may_lack || pick[i] == LARCH_Q3_K || (pick[i] == LARCH_Q2_K && !q2_kernel);
+      may_lack = may_lack || pick[i] == LARCH_Q3_K || pick[i] == LARCH_NVFP4 || (pick[i] == LARCH_Q2_K && !q2_kernel);
       if (pick[i] != NUL) t[i] = tensor(bufs[i].first, pick[i], o.args[i].shape);
       p[i] = pick[i] == NUL ? nullptr : &t[i];
       combo += (i ? ", " : "") + std::string(NAMES[pick[i]]);

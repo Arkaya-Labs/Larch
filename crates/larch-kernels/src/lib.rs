@@ -215,6 +215,8 @@ pub enum DType {
     Q5_0,
     Q3K,
     Q2K,
+    /// GGML's NVFP4 (type 40): 64 E2M1 weights and four E4M3 scales in 36 bytes; the CPU devices only.
+    Nvfp4,
 }
 
 impl DType {
@@ -222,6 +224,7 @@ impl DType {
     pub const fn block(self) -> u64 {
         match self {
             DType::Q2K | DType::Q3K | DType::Q4K | DType::Q5K | DType::Q6K => 256,
+            DType::Nvfp4 => 64,
             DType::Q8_0 | DType::Q4_0 | DType::Q5_0 => 32,
             _ => 1,
         }
@@ -240,6 +243,7 @@ impl DType {
             DType::Q5_0 => 22,
             DType::Q3K => 110,
             DType::Q2K => 84,
+            DType::Nvfp4 => 36,
         }
     }
 
@@ -258,7 +262,7 @@ impl DType {
     }
 
     /// The byte alignment of a tensor's offset: the element size, or 2 for a quant block (every block
-    /// size is even, with its f16 scales at even offsets).
+    /// size is even, with its f16 scales at even offsets; NVFP4's are bytes).
     const fn align(self) -> u64 {
         if self.block() == 1 {
             self.block_bytes()
@@ -282,6 +286,7 @@ impl DType {
             DType::Q5_0 => T::LARCH_Q5_0,
             DType::Q3K => T::LARCH_Q3_K,
             DType::Q2K => T::LARCH_Q2_K,
+            DType::Nvfp4 => T::LARCH_NVFP4,
         }
     }
 }

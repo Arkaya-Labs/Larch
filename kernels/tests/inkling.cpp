@@ -265,17 +265,22 @@ static void mix() {
   }
 }
 
-static void gate() {
+static void gate(larch_dtype gf) {
   constexpr int64_t ROWS = 3, D = 16;
   const std::vector<float> x = uniform(ROWS * D, -2, 2), m = uniform(ROWS * D, -2, 2);
   const bytes gn = halves(ROWS * D, g), fg = halves(ROWS * D, g);
-  const larch_tensor xt = f32({ROWS, D}, x), mt = f32({ROWS, D}, m), gt = tensor(LARCH_F16, {ROWS, D}, gn.data(), gn.size()),
-                     ft = tensor(LARCH_F16, {ROWS, D}, fg.data(), fg.size()), ot = out(LARCH_F32, {ROWS, D});
+  std::vector<float> gnf(ROWS * D), fgf(ROWS * D);
+  for (int64_t i = 0; i < ROWS * D; ++i) {
+    gnf[size_t(i)] = half(&gn[size_t(2 * i)]);
+    fgf[size_t(i)] = half(&fg[size_t(2 * i)]);
+  }
+  const larch_tensor gt = gf == LARCH_F16 ? tensor(LARCH_F16, {ROWS, D}, gn.data(), gn.size()) : f32({ROWS, D}, gnf),
+                     ft = gf == LARCH_F16 ? tensor(LARCH_F16, {ROWS, D}, fg.data(), fg.size()) : f32({ROWS, D}, fgf);
+  const larch_tensor xt = f32({ROWS, D}, x), mt = f32({ROWS, D}, m), ot = out(LARCH_F32, {ROWS, D});
   if (!run(larch_loop_gate(st, &xt, &mt, &gt, &ft, &ot))) return;
   const std::vector<float> o = values(ot);
   for (int64_t i = 0; i < ROWS * D; ++i) {
-    const double want = x[size_t(i)] * (1 - std::tanh(double(half(&fg[size_t(2 * i)])))) +
-                        std::tanh(double(half(&gn[size_t(2 * i)]))) * m[size_t(i)];
+    const double want = x[size_t(i)] * (1 - std::tanh(double(fgf[size_t(i)]))) + std::tanh(double(gnf[size_t(i)])) * m[size_t(i)];
     CHECK(near(o[size_t(i)], want, 2e-5));
   }
   OK(larch_loop_gate(st, &xt, &mt, &gt, &ft, &xt));  // in place: the bytes of a separate out
@@ -360,7 +365,7 @@ static void attention(uint32_t window) {
         for (int64_t d = 0; d < HD; ++d) dot += double(half(&q[size_t(((j * H + h) * HD + d) * 2)])) * half(&k[size_t((pp * HD + d) * 2)]);
         if (p - pp < EXT)
           for (int64_t i = 0; i < NREL; ++i) b += double(rq[size_t((j * H + h) * NREL + i)]) * rw[size_t((p - pp) * NREL + i)];
-        l.push_back(SCALE * (dot + b - sink[size_t(j * H + h)]));
+        l.push_back(SCALE * dot + (b - sink[size_t(j * H + h)]));
       }
       const double mx = std::max(0.0, *std::max_element(l.begin(), l.end()));
       double total = std::exp(-mx);  // the sink's logit 0
@@ -385,6 +390,25 @@ static void attention(uint32_t window) {
     OK(larch_attn_rel(st, &qj, &pool, &bt, &sj, &one, nullptr, &rqj, &rwt, &skj, window, 0, SCALE, &oj));
     CHECK(std::memcmp(fetch(oj.buf, H * HD * 2).data(), &whole[size_t(j * H * HD * 2)], size_t(H * HD * 2)) == 0);
   }
+  // Decode's form: the rows as decode rows of 2 sequences each (seq_len p + 1), and a padding row (seq_len 0) of
+  // zeros; the span's bytes again.
+  const std::vector<int32_t> tables = {3, 1, 0, 2, 3, 1, 0, 2, 3, 1, 0, 2, 3, 1, 0, 2, 3, 1, 0, 2};
+  const larch_tensor bt5 = i32({ROWS + 1, 4}, tables), od = out(LARCH_F16, {ROWS + 1, H, HD});
+  const larch_tensor sl = i32({ROWS + 1}, {int32_t(P0 + 1), int32_t(P0 + 2), int32_t(P0 + 3), int32_t(P0 + 4), 0});
+  const bytes q5 = [&] {
+    bytes b(q);
+    b.resize(size_t((ROWS + 1) * H * HD * 2), 0x3c);
+    return b;
+  }();
+  std::vector<float> rq5(rq), sink5(sink);
+  rq5.resize(size_t((ROWS + 1) * H * NREL), 0.5f);
+  sink5.resize(size_t((ROWS + 1) * H), 0.5f);
+  const larch_tensor q5t = tensor(LARCH_F16, {ROWS + 1, H, HD}, q5.data(), q5.size()),
+                     rq5t = f32({ROWS + 1, H, NREL}, rq5), sk5t = f32({ROWS + 1, H}, sink5);
+  OK(larch_attn_rel(st, &q5t, &pool, &bt5, &sl, nullptr, nullptr, &rq5t, &rwt, &sk5t, window, 0, SCALE, &od));
+  const bytes dec = fetch(od.buf, size_t((ROWS + 1) * H * HD * 2));
+  CHECK(std::memcmp(dec.data(), whole.data(), whole.size()) == 0);
+  CHECK(std::all_of(dec.begin() + std::ptrdiff_t(whole.size()), dec.end(), [](uint8_t x) { return x == 0; }));
 }
 
 static void cap() {
@@ -404,7 +428,8 @@ static void all() {
     for (bool positions : {false, true})
       for (larch_dtype t : {LARCH_F16, LARCH_F32}) clip(scaled, positions, t);
   mix();
-  gate();
+  gate(LARCH_F16);
+  gate(LARCH_F32);
   situ(false);
   situ(true);
   route();

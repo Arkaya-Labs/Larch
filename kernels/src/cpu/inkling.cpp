@@ -203,7 +203,8 @@ loop_gate_checked check_loop_gate(const sizer& bytes, const larch_tensor* x, con
                             check_tensor(bytes, out, "out")};
   const auto like = [&](const meta& m, larch_dtype t) { return is(m, t, 2) && m.rows == a.x.rows && m.cols == a.x.cols; };
   need(is(a.x, LARCH_F32, 2) && like(a.msg, LARCH_F32) && like(a.out, LARCH_F32), "x, msg and out must be f32 [rows, d]");
-  need(like(a.gain, LARCH_F16) && like(a.forget, LARCH_F16), "gain and forget must be f16 [rows, d]");
+  const auto half_or_single = [&](const meta& m) { return like(m, LARCH_F16) || like(m, LARCH_F32); };
+  need(half_or_single(a.gain) && half_or_single(a.forget), "gain and forget must be f16 or f32 [rows, d]");
   return a;
 }
 

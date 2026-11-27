@@ -1093,6 +1093,7 @@ fn ggml_name(d: DType) -> &'static str {
         DType::Q5_0 => "Q5_0",
         DType::Q3K => "Q3_K",
         DType::Q2K => "Q2_K",
+        DType::Nvfp4 => "NVFP4",
     }
 }
 

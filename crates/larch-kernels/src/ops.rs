@@ -1026,7 +1026,7 @@ pub fn depth_mix(s: &Stream, states: &Tensor, query: &Tensor, out: &Tensor) -> R
 }
 
 /// Inkling 2's loop controller: `out = (x - tanh(forget) x) + tanh(gain) msg`, `x`, `msg` and `out`
-/// f32 `[n, d]`, `gain` and `forget` f16 `[n, d]`; `out` may be `x`.
+/// f32 `[n, d]`, `gain` and `forget` f16 or f32 `[n, d]`; `out` may be `x`.
 pub fn loop_gate(
     s: &Stream,
     x: &Tensor,
@@ -1090,7 +1090,8 @@ pub fn moe_route_sigmoid(
 
 /// Inkling 2's attention: [`attn`]'s spans (sliding `window` when > 0) with a relative-position bias
 /// (`rel_q` `[n, heads, n_rel]` against `rel_w` f32 `[extent, n_rel]`) and each row's sink logits
-/// `sink` `[n, heads]`.
+/// `sink` `[n, heads]`. `q_lens` `None` is [`attn_decode`]'s form: `q_start_pos` holds each row's
+/// seq_len (0: a padding row, whose output is zero).
 #[allow(clippy::too_many_arguments)]
 pub fn attn_rel(
     s: &Stream,
@@ -1099,7 +1100,7 @@ pub fn attn_rel(
     layer: u32,
     block_table: &Tensor,
     q_start_pos: &Tensor,
-    q_lens: &Tensor,
+    q_lens: Option<&Tensor>,
     rel_q: &Tensor,
     rel_w: &Tensor,
     sink: &Tensor,
@@ -1109,7 +1110,7 @@ pub fn attn_rel(
     out: &Tensor,
 ) -> Result<(), KError> {
     let (q, p, bt) = (on(s, q)?, pool.raw(s, layer)?, on(s, block_table)?);
-    let (st, ql) = (on(s, q_start_pos)?, on(s, q_lens)?);
+    let (st, ql) = (on(s, q_start_pos)?, on_opt(s, q_lens)?);
     let (rq, rw, sk, o) = (on(s, rel_q)?, on(s, rel_w)?, on(s, sink)?, written(s, out)?);
     // SAFETY: see the module docs; a null mask is the causal span.
     check(unsafe {
@@ -1119,7 +1120,7 @@ pub fn attn_rel(
             &p,
             &bt,
             &st,
-            &ql,
+            ptr(&ql),
             std::ptr::null(),
             &rq,
             &rw,
