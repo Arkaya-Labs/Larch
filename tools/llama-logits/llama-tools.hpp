@@ -27,6 +27,15 @@ inline std::string slurp(const std::string & path) {
 // Arguments and parameters go in as llama-server reads them: keys in the caller's order, and string
 // arguments as they are. A bench workload's last message is its timed assistant turn, which has no content
 // (bench/README): the prompt is every message before it.
+// The rendered prompt as one string: b11458 returns it as one, later tags as parts (common_chat_prompt::str).
+inline std::string prompt_text(const std::string & p) {
+    return p;
+}
+
+template <class P> inline auto prompt_text(const P & p) -> decltype(p.str()) {
+    return p.str();
+}
+
 inline std::string render(const common_chat_templates * tmpls, const nlohmann::ordered_json & messages,
                           bool add_generation_prompt, const std::string & date,
                           const nlohmann::ordered_json & tools           = nlohmann::ordered_json::array(),
@@ -58,5 +67,5 @@ inline std::string render(const common_chat_templates * tmpls, const nlohmann::o
     in.add_generation_prompt                = add_generation_prompt;
     in.enable_thinking                      = enable_thinking;
     in.chat_template_kwargs["date_string"] = nlohmann::ordered_json(date).dump();
-    return common_chat_templates_apply(tmpls, in).prompt;
+    return prompt_text(common_chat_templates_apply(tmpls, in).prompt);
 }

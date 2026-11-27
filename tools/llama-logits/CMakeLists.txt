@@ -6,7 +6,9 @@
 cmake_minimum_required(VERSION 3.21)
 project(larch_llama_tools CXX)
 
-set(LLAMA_TAG b11458)
+# -DLLAMA_TAG=<tag> builds against another release (the Inkling 2 dumps take b12723, whose llama.cpp runs
+# inkling2_loop); the dump header records the tag and commit that ran.
+set(LLAMA_TAG b11458 CACHE STRING "llama.cpp release tag")
 include(FetchContent)
 FetchContent_Declare(llama GIT_REPOSITORY https://github.com/ggml-org/llama.cpp GIT_TAG ${LLAMA_TAG} GIT_SHALLOW TRUE)
 set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
