@@ -860,7 +860,7 @@ void run_attention(const arguments& parsed) {
                         "--scale", "--iterations"});
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
   const uint64_t rows = bounded(parsed, "--rows", 1, 16);
-  const uint64_t sequence_length = bounded(parsed, "--seq-len", 1, 8192);
+  const uint64_t sequence_length = bounded(parsed, "--seq-len", 1, 65536);
   const uint64_t heads = bounded(parsed, "--heads", 1, 128);
   const uint64_t kv_heads = bounded(parsed, "--kv-heads", 1, heads);
   const uint64_t head_dim = bounded(parsed, "--head-dim", 1, 256);
@@ -942,7 +942,7 @@ void run_attention_prefill(const arguments& parsed) {
   require_only(parsed, {"--device", "--rows", "--seq-len", "--heads", "--kv-heads", "--head-dim", "--scale",
                         "--iterations"});
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
-  const uint64_t sequence_length = bounded(parsed, "--seq-len", 1, 8192);
+  const uint64_t sequence_length = bounded(parsed, "--seq-len", 1, 65536);
   const uint64_t rows = bounded(parsed, "--rows", 1, sequence_length);
   const uint64_t heads = bounded(parsed, "--heads", 1, 128);
   const uint64_t kv_heads = bounded(parsed, "--kv-heads", 1, heads);

@@ -707,8 +707,8 @@ static void attn_decode_splits() {
 }
 
 // Flash prefill (backend.mm attend): 32-row tiles across sequences, cached prefixes, mid-block starts, an empty
-// chunk, GQA 7, head_dim 64, 96 (inside the 128 tile) and 128, q rows 2-byte aligned, 2-3 rows per sequence.
-// Then the head_dims that keep vv_attn: 6 and 256.
+// chunk, GQA 7, head_dim 64, 96 (inside the 128 tile), 128 and 256, q rows 2-byte aligned, 2-3 rows per sequence,
+// and a few hundred positions; head_dim 6 keeps vv_attn.
 static void attn_prefill_flash() {
   struct shape {
     uint32_t kv_heads, hd;
@@ -719,8 +719,10 @@ static void attn_prefill_flash() {
       {2, 64, 14, 8, {{0, 70}, {37, 45}, {5, 0}, {130, 33}}}, {2, 128, 8, 8, {{0, 70}, {37, 45}, {5, 0}, {130, 33}}},
       {1, 96, 4, 0, {{3, 40}}},  {1, 256, 2, 0, {{0, 40}}}, {1, 6, 2, 0, {{17, 40}}}, {2, 64, 4, 3, {{0, 40}}},
       {2, 64, 4, 8, {{9, 2}, {0, 3}, {40, 2}}}, {1, 80, 4, 0, {{3, 40}}}, {1, 40, 4, 0, {{3, 40}}},
+      // vv_attn_paged_nax: several 64-row (32 at 256) tiles over many 32-position steps, from a mid-block start
+      {2, 128, 8, 0, {{90, 300}, {0, 17}}}, {2, 256, 16, 0, {{7, 260}}},
   };
-  constexpr uint32_t blocks = 16;
+  constexpr uint32_t blocks = 32;
   for (const shape& c : shapes) {
     std::vector<int32_t> start, len, table;
     int64_t rows = 0, width = 0;

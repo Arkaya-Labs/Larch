@@ -53,6 +53,9 @@ struct kernels {
       attn_split_reduce, sp_copy, sp_penalty, sp_part, sp_merge, moe_route, moe_group, moe_gather, moe_reduce,
       sigmoid_mul, gdn_conv, gdn, gdn1, layernorm, gelu, rope_multi, draft_conv;
   id<MTLComputePipelineState> attn_full_sg[2], attn_full_nax;  // head_dim 64 and 72; NAX 64, nil without the tensor API
+  // Paged prefill attention on NAX fragments, head_dim exactly 64, 128 and 256 (attn_full_nax.metal); nil without
+  // macOS 26.2 and the tensor API, or with LARCH_METAL_ATTN_NAX=0
+  id<MTLComputePipelineState> attn_paged_nax[3];
   id<MTLComputePipelineState> gdn_chunk[2];  // head_dim 64 and 128; nil when LARCH_METAL_GDN_CHUNK=0
 };
 // How a device's streams feed the GPU, read from the environment at device_open, which rejects a value other
@@ -77,9 +80,11 @@ struct kernels {
 //   at a time on simdgroup matrices (MLX's chunked delta rule); 0 keeps vv_gdn's row-by-row walk, for A/B timing.
 // LARCH_METAL_MOE_NARROW (default 1): mmvq_id at decode and check row counts on experts under 1024 wide takes
 //   vv_mmvq_id1n, which keeps all 32 lanes busy; 0 keeps vv_mmvq_id1, for A/B timing.
+// LARCH_METAL_ATTN_NAX (default 1): flash prefill at head_dim 64, 128 or 256 takes vv_attn_paged_nax (MLX's NAX
+//   attention over the paged pool, macOS 26.2 and the tensor API); 0 keeps vv_attn_flash, for A/B timing.
 struct feed {
   bool concurrent = true, commit = true, profile = false, simd_kernels = true, moe_prefetch = true, gdn_wide = true,
-       moe_narrow = true, gdn_chunk = true;
+       moe_narrow = true, gdn_chunk = true, attn_nax = true;
 };
 static constexpr uint32_t first_commit = 32, commit_every = 128;
 struct mtl_device : larch_device {
@@ -158,7 +163,8 @@ static larch_status read_feed(feed* f) {
                                  std::pair{"LARCH_METAL_MOE_PREFETCH", &f->moe_prefetch},
                                  std::pair{"LARCH_METAL_GDN_WIDE", &f->gdn_wide},
                                  std::pair{"LARCH_METAL_MOE_NARROW", &f->moe_narrow},
-                                 std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk}}) {
+                                 std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk},
+                                 std::pair{"LARCH_METAL_ATTN_NAX", &f->attn_nax}}) {
     const char* c = std::getenv(name);
     if (c && std::strcmp(c, "0") && std::strcmp(c, "1"))
       return vv_fail(LARCH_ERR_INVALID_ARG, std::string(name) + " must be 0 or 1");
@@ -471,6 +477,8 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
         from = [dev newLibraryWithData:nax error:&err];
         if (!from) return vv_fail(LARCH_ERR_DRIVER, std::string("larch_nax.metallib: ") + err.localizedDescription.UTF8String);
         k.attn_full_nax = opt("vv_attn_full_nax64", 32 * ATTN_FULL_SG, dense);
+        for (int wide = 0; wide < 3 && fed.attn_nax; ++wide)  // 4, 4 and 2 x 4 simdgroups (attn_full_nax.metal)
+          k.attn_paged_nax[wide] = opt("vv_attn_paged_nax" + std::to_string(64 << wide), wide == 2 ? 256 : 128);
         from = lib;
       }
     }
@@ -1593,6 +1601,16 @@ void attend(larch_stream* vs, const attn_view& a, const larch_kv_pool* pool, uin
   if (prefill && flash_ok && flash && pool->block_tokens == ATTN_FLASH_BLOCK && pool->head_dim % 8 == 0 && !(a.k.off % 16) &&
       !(a.v.off % 16)) {
     // Each sequence's rows in tiles: at most one partial tile per sequence.
+    // head_dim exactly 64, 128 or 256 on NAX: 64 q rows a tile (32 at 256), K and V read in place, no staging.
+    // At 512 rows and 8,192 positions vv_attn_flash took 3.2x MLX's time (21.1 vs 6.5 ms at 16 q / 2 kv heads,
+    // d256, M5, 27 Nov).
+    if (const id<MTLComputePipelineState> nax = ks(vs).attn_paged_nax[wide];
+        nax && pool->head_dim == (64u << wide) && !(a.q.rs % 2) && !(a.out.rs % 2)) {
+      const int64_t tile = wide == 2 ? 32 : 64;
+      groups(stream, nax, bufs, args, (a.q.rows + tile - 1) / tile + a.table.rows, wide == 2 ? 256 : 128,
+             a.q.shape[1]);
+      return;
+    }
     const int64_t tile = wide == 2 && flash == ks(vs).attn_flash[wide] ? ATTN_FLASH_ROWS256 : ATTN_FLASH_ROWS;
     groups(stream, flash, bufs, args, (a.q.rows + tile - 1) / tile + a.table.rows, ATTN_FLASH_SG * 32,
            a.q.shape[1]);
