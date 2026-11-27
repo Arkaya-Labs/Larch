@@ -50,10 +50,8 @@ struct kernels {
   id<MTLComputePipelineState> gemm_qs[LARCH_Q3_K + 1], mmvq_id_mm_sg[LARCH_Q3_K + 1];
   id<MTLComputePipelineState> attn_flash_sg[3];  // head_dim up to 64, 128 and 256
   // The q8_0 pages' kernels (larch.h larch_kv_pool): kv_write and the attention readers, which take them in place.
-  // Flash prefill takes attn_flash_sg_q8 on every GPU, nil as attn_flash_sg is.
-  // ponytail: no tensor-API q8_0 flash kernel; stage dequantized blocks into attn_flash if q8_0 prefill on M5 shows
-  // attention in its profile against f16's.
-  id<MTLComputePipelineState> kv_write_q8, attn_q8, attn_split_q8, attn_flash_sg_q8[3];
+  // Flash prefill takes attn_flash_q8 where attn_flash runs (the tensor API), else attn_flash_sg_q8; nil as they are.
+  id<MTLComputePipelineState> kv_write_q8, attn_q8, attn_split_q8, attn_flash_q8[3], attn_flash_sg_q8[3];
   id<MTLComputePipelineState> gemm, gemv, gemm_tensor, gemm_tensor_deep, rmsnorm, qk_norm, rope, silu_mul, add, kv_write, attn, attn_split,
       attn_split_reduce, sp_copy, sp_penalty, sp_part, sp_merge, moe_route, moe_group, moe_gather, moe_reduce,
       sigmoid_mul, gdn_conv, gdn, gdn1, layernorm, gelu, rope_multi, draft_conv;
@@ -487,8 +485,10 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
     k.gdn1 = pipe("vv_gdn1", 32 * GDN_SG);
     for (int wide = 0; wide < 2 && fed.gdn_chunk; ++wide)
       k.gdn_chunk[wide] = opt("vv_gdn_chunk" + std::to_string(64 << wide), 32 * GDN_SG);
-    for (int wide = 0; wide < 3 && tensor_capable && !tensor_off; ++wide)  // nil keeps vv_attn
+    for (int wide = 0; wide < 3 && tensor_capable && !tensor_off; ++wide) {  // nil keeps vv_attn
       k.attn_flash[wide] = opt("vv_attn_flash" + std::to_string(64 << wide), ATTN_FLASH_SG * 32);
+      k.attn_flash_q8[wide] = opt("vv_attn_flash" + std::to_string(64 << wide) + "_q8", ATTN_FLASH_SG * 32);
+    }
     for (int wide = 0; wide < 3 && fed.simd_kernels; ++wide) {  // nil keeps vv_attn
       k.attn_flash_sg[wide] = opt("vv_attn_flash_sg" + std::to_string(64 << wide), ATTN_FLASH_SG * 32);
       k.attn_flash_sg_q8[wide] = opt("vv_attn_flash_sg" + std::to_string(64 << wide) + "_q8", ATTN_FLASH_SG * 32);
@@ -1599,16 +1599,19 @@ void attend(larch_stream* vs, const attn_view& a, const larch_kv_pool* pool, uin
   // ponytail: a batch of many 1-row sequences leaves 31 of 32 tile rows idle; send it to vv_attn if mixed
   // prefill batches show attention in the profile.
   // Without the tensor API, the simdgroup-matrix flash kernel takes the same calls.
-  // q8_0 pages take the simdgroup kernel, which stages each block and so needs no alignment past the pages' 2 bytes.
+  // q8_0 pages take attn_flash_q8 or the simdgroup kernel, which stage each block and so need no alignment past the
+  // pages' 2 bytes.
   const int wide = pool->head_dim <= 64 ? 0 : pool->head_dim <= 128 ? 1 : 2;
   const bool q8 = pool->dtype == LARCH_Q8_0;
-  const id<MTLComputePipelineState> flash = q8                       ? ks(vs).attn_flash_sg_q8[wide]
-                                            : ks(vs).attn_flash[wide] ? ks(vs).attn_flash[wide]
-                                                                      : ks(vs).attn_flash_sg[wide];
+  const auto& k = ks(vs);
+  const id<MTLComputePipelineState> flash = q8 ? (k.attn_flash_q8[wide] ? k.attn_flash_q8[wide] : k.attn_flash_sg_q8[wide])
+                                            : k.attn_flash[wide] ? k.attn_flash[wide]
+                                                                 : k.attn_flash_sg[wide];
   if (prefill && flash_ok && flash && pool->block_tokens == ATTN_FLASH_BLOCK && pool->head_dim % 8 == 0 &&
       (q8 || (!(a.k.off % 16) && !(a.v.off % 16)))) {
     // Each sequence's rows in tiles: at most one partial tile per sequence.
-    const int64_t tile = wide == 2 && flash == ks(vs).attn_flash[wide] ? ATTN_FLASH_ROWS256 : ATTN_FLASH_ROWS;
+    const bool tensor_api = flash == k.attn_flash[wide] || flash == k.attn_flash_q8[wide];
+    const int64_t tile = wide == 2 && tensor_api ? ATTN_FLASH_ROWS256 : ATTN_FLASH_ROWS;
     groups(stream, flash, bufs, args, (a.q.rows + tile - 1) / tile + a.table.rows, ATTN_FLASH_SG * 32,
            a.q.shape[1]);
     return;

@@ -2437,6 +2437,159 @@ template [[host_name("vv_attn_flash64")]] kernel decltype(attn_flash<64>) attn_f
 template [[host_name("vv_attn_flash128")]] kernel decltype(attn_flash<128>) attn_flash<128>;
 template [[host_name("vv_attn_flash256")]] kernel decltype(attn_flash<256>) attn_flash<256>;
 
+// attn_flash over q8_0 pages (the tensor API, M5): the same tiles, grid and online softmax, with each pool block
+// staged in threadgroup memory, since a q8_0 page is no f16 tensor. K stages as its int8 codes (exact in f16) and
+// S sums head_dim's 32-blocks one matmul each, scaled in f32 by that block's key scale, so S meets the decoded keys
+// unrounded, as the reference does. V stages decoded as f16, one rounding of each value like attn_flash's P. K and
+// V take turns in one block's space.
+template <int DK>
+kernel void attn_flash_q8(bytes_in q [[buffer(0)]], bytes_in kp [[buffer(1)]], bytes_in vp [[buffer(2)]],
+                          bytes_in bt [[buffer(3)]], bytes_in lens [[buffer(4)]], bytes_in start [[buffer(5)]],
+                          device uchar* out [[buffer(6)]], constant attn_args& a [[buffer(7)]],
+                          uint2 tg [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  constexpr uint BR = DK > 128 ? ATTN_FLASH_ROWS256 : ATTN_FLASH_ROWS, BT = ATTN_FLASH_BLOCK, LQ = DK + 8;
+  constexpr uint LS = BT + 1, LP = BT + 8, NT = ATTN_FLASH_SG * 32, TPR = NT / BR, CPT = BT / TPR, NB = DK / 32;
+  static_assert(NT % BR == 0 && BT % TPR == 0 && TPR <= 32 && DK % 32 == 0, "attn_flash's tiles, whole blocks");
+  uint t = tg.x, s = 0, first = 0, len = 0;
+  for (; s < a.seqs; ++s, first += len, t -= (len + BR - 1) / BR) {
+    len = uint(max(at<int>(lens, a.lens_rs, s), 0));
+    if (t < (len + BR - 1) / BR) break;
+  }
+  if (s == a.seqs || first + t * BR >= a.q_rows) return;  // the whole threadgroup
+  const uint j0 = t * BR, rows = min(min(BR, len - j0), a.q_rows - first - j0);
+  const uint h = tg.y, kvh = h / (a.heads / a.kv_heads);
+  const uint pos0 = uint(at<int>(start, a.start_rs, s)) + j0, end = pos0 + rows;  // the tile sees [0, end)
+  device const int* table = (device const int*)(bt + s * a.bt_rs);
+
+  threadgroup half4 qs4[BR * LQ / 4];
+  threadgroup half* qs = (threadgroup half*)qs4;
+  threadgroup half4 cs4[BT * LQ / 4];  // a block's K codes, then its decoded V
+  threadgroup half* cs = (threadgroup half*)cs4;
+  threadgroup float ks_[NB * BT];      // key j's scale of 32-block b at b * BT + j (0 past the block's slots)
+  threadgroup float ss[BR * LS], rescale[BR];
+  threadgroup half ps[BR * LP];
+  threadgroup uint moved[2];
+  if (tid == 0) moved[0] = moved[1] = 0;
+  for (uint i = tid; i < BR * DK / 4; i += NT) {  // zero past the tile's rows and head_dim
+    const uint r = i / (DK / 4), d = i % (DK / 4) * 4;
+    qs4[r * LQ / 4 + d / 4] = r < rows && d < a.hd
+        ? half4(*(device const packed_half4*)((device const half*)(q + u64(first + j0 + r) * a.q_rs) + h * a.hd + d))
+        : half4(0);
+  }
+
+  using tg_t = tensor<threadgroup half, dextents<int, 2>, tensor_inline>;
+  constexpr auto qk_desc = matmul2d_descriptor(BR, BT, static_cast<int>(dynamic_extent), false, true, false,
+                                               matmul2d_descriptor::mode::multiply_accumulate);
+  constexpr auto pv_desc = matmul2d_descriptor(BR, DK, static_cast<int>(dynamic_extent), false, false, false,
+                                               matmul2d_descriptor::mode::multiply_accumulate);
+  matmul2d<qk_desc, execution_simdgroups<ATTN_FLASH_SG>> qk;
+  matmul2d<pv_desc, execution_simdgroups<ATTN_FLASH_SG>> pv;
+  auto o = pv.template get_destination_cooperative_tensor<tg_t, tg_t, float>();
+#pragma unroll
+  for (uint16_t i = 0; i < o.get_capacity(); ++i)
+    if (o.is_valid_element(i)) o[i] = 0.0f;
+  const uint r = tid / TPR, part = tid % TPR, pos = pos0 + r;
+  const bool live = r < rows;
+  float m = -INFINITY, l = 0;
+
+  for (uint p0 = 0, step = 0; p0 < end; p0 += BT, ++step) {
+    const uint n = min(BT, end - p0);
+    const u64 slot0 = u64(uint(table[p0 / BT])) * BT;
+    threadgroup_barrier(mem_flags::mem_threadgroup);  // Q staged, or every simdgroup done with the last block's V
+    for (uint i = tid; i < BT * DK / 8; i += NT) {    // 8 dims an item, within one block
+      const uint j = i / (DK / 8), d = i % (DK / 8) * 8;
+      half4 c0 = half4(0), c1 = half4(0);
+      float kscale = 0.0f;
+      if (j < n && d < a.hd) {
+        const bytes_in b = kv_pages<true>::block(kp, slot0 + j, kvh, d, a);
+        c0 = half4(char4(*(device const packed_char4*)(b + 2 + d % 32)));
+        c1 = half4(char4(*(device const packed_char4*)(b + 6 + d % 32)));
+        kscale = h16(b);
+      }
+      cs4[(j * LQ + d) / 4] = c0;
+      cs4[(j * LQ + d) / 4 + 1] = c1;
+      if (d % 32 == 0) ks_[d / 32 * BT + j] = kscale;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    auto sc = qk.template get_destination_cooperative_tensor<tg_t, tg_t, float>();
+#pragma unroll
+    for (uint16_t i = 0; i < sc.get_capacity(); ++i)
+      if (sc.is_valid_element(i)) sc[i] = 0.0f;
+#pragma unroll
+    for (uint b = 0; b < NB; ++b) {  // S += (Q_b C_b^T) diag(key scales of b)
+      auto sb = qk.template get_destination_cooperative_tensor<tg_t, tg_t, float>();
+#pragma unroll
+      for (uint16_t i = 0; i < sb.get_capacity(); ++i)
+        if (sb.is_valid_element(i)) sb[i] = 0.0f;
+      const tg_t qb(qs + 32 * b, dextents<int, 2>(32, int(BR)), array<int, 2>({1, int(LQ)}));
+      const tg_t kb(cs + 32 * b, dextents<int, 2>(32, int(n)), array<int, 2>({1, int(LQ)}));
+      qk.run(qb, kb, sb);
+#pragma unroll
+      for (uint16_t i = 0; i < sc.get_capacity(); ++i)
+        if (sc.is_valid_element(i)) sc[i] += sb[i] * ks_[b * BT + uint(sb.get_multidimensional_index(i)[0])];
+    }
+#pragma unroll
+    for (uint16_t i = 0; i < sc.get_capacity(); ++i)
+      if (sc.is_valid_element(i)) {
+        const auto at_i = sc.get_multidimensional_index(i);
+        ss[at_i[1] * LS + at_i[0]] = sc[i];
+      }
+    threadgroup_barrier(mem_flags::mem_threadgroup);  // S stored, and every simdgroup done with the K codes
+    if (tid == 0) moved[(step + 1) % 2] = 0;
+    for (uint i = tid; i < BT * DK / 8; i += NT) {  // V takes K's place, decoded
+      const uint j = i / (DK / 8), d = i % (DK / 8) * 8;
+      float4 v0 = float4(0), v1 = float4(0);
+      if (j < n && d < a.hd) kv_pages<true>::load8(vp, slot0 + j, kvh, d, a, v0, v1);
+      cs4[(j * LQ + d) / 4] = half4(v0);
+      cs4[(j * LQ + d) / 4 + 1] = half4(v1);
+    }
+    float x[CPT], mx = -INFINITY;
+#pragma unroll
+    for (uint c = 0; c < CPT; ++c) {  // columns past n are past end, so past every row's position
+      const uint col = CPT * part + c;
+      x[c] = !live ? 0.0f : p0 + col <= pos ? ss[r * LS + col] * a.scale : -INFINITY;
+      mx = max(mx, x[c]);
+    }
+    for (ushort o_ = 1; o_ < TPR; o_ *= 2) mx = max(mx, simd_shuffle_xor(mx, o_));
+    const float mn = max(m, mx), corr = exp(m - mn);
+    float sum = 0;
+#pragma unroll
+    for (uint c = 0; c < CPT; ++c) {
+      const float e = exp(x[c] - mn);
+      sum += e;
+      ps[r * LP + CPT * part + c] = half(e);
+    }
+    for (ushort o_ = 1; o_ < TPR; o_ *= 2) sum += simd_shuffle_xor(sum, o_);
+    l = l * corr + sum;
+    m = mn;
+    if (part == 0) rescale[r] = corr;
+    if (corr != 1.0f) moved[step % 2] = 1;
+    threadgroup_barrier(mem_flags::mem_threadgroup);  // P, rescale and V staged
+    if (moved[step % 2]) {
+#pragma unroll
+      for (uint16_t i = 0; i < o.get_capacity(); ++i)
+        if (o.is_valid_element(i)) o[i] *= rescale[o.get_multidimensional_index(i)[1]];
+    }
+    const tg_t pt(ps, dextents<int, 2>(int(n), int(BR)), array<int, 2>({1, int(LP)}));
+    const tg_t vt(cs, dextents<int, 2>(int(a.hd), int(n)), array<int, 2>({1, int(LQ)}));
+    pv.run(pt, vt, o);
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);  // every thread's last read of rescale is done before l
+  if (part == 0) rescale[r] = l;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+#pragma unroll
+  for (uint16_t i = 0; i < o.get_capacity(); ++i) {
+    if (!o.is_valid_element(i)) continue;
+    const auto at_i = o.get_multidimensional_index(i);
+    const uint row = uint(at_i[1]), d = uint(at_i[0]);
+    if (row < rows && d < a.hd)
+      ((device half*)(out + u64(first + j0 + row) * a.out_rs))[h * a.hd + d] = half(o[i] / rescale[row]);
+  }
+}
+template [[host_name("vv_attn_flash64_q8")]] kernel decltype(attn_flash_q8<64>) attn_flash_q8<64>;
+template [[host_name("vv_attn_flash128_q8")]] kernel decltype(attn_flash_q8<128>) attn_flash_q8<128>;
+template [[host_name("vv_attn_flash256_q8")]] kernel decltype(attn_flash_q8<256>) attn_flash_q8<256>;
+
 // Prefill attention, flash style, on simdgroup matrices: attn_flash for the GPUs without the tensor API (M1 to M4,
 // or LARCH_METAL_TENSOR=0), where vv_attn re-reads every earlier K and V row for each q row. Same tiles and grid:
 // threadgroup (tile, q head) takes ATTN_FLASH_ROWS q rows of one sequence. Simdgroup g owns rows 8 g .. 8 g + 7 and
