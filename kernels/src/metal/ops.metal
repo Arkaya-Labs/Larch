@@ -2114,6 +2114,24 @@ struct kv_pages<true> {
     const bytes_in b = block(p, slot, kvh, d, a);
     return float4(char4(*(device const packed_char4*)(b + 2 + d % 32))) * h16(b);
   }
+  // Dims d .. d + 7 (d a multiple of 8, so one block's): one scale read for both halves.
+  static void load8(bytes_in p, u64 slot, uint kvh, uint d, constant attn_args& a, thread float4& lo,
+                    thread float4& hi) {
+    const bytes_in b = block(p, slot, kvh, d, a);
+    const float sc = h16(b);
+    lo = float4(char4(*(device const packed_char4*)(b + 2 + d % 32))) * sc;
+    hi = float4(char4(*(device const packed_char4*)(b + 6 + d % 32))) * sc;
+  }
+};
+// attn_flash_sg's staging type: f16 pages stage as they are; decoded q8_0 values stage in f32, exactly the
+// reference's decoded keys and values (an int8 times an f16 scale is exact in f32, not in f16).
+template <bool Q8>
+struct flash_stage {
+  typedef half T;
+};
+template <>
+struct flash_stage<true> {
+  typedef float T;
 };
 
 // Lane l's accumulator slot i (0..7) holds dim acc_dim(i, l) of its head: 2 chunks of 128 dims, 4
@@ -2428,7 +2446,8 @@ template [[host_name("vv_attn_flash256")]] kernel decltype(attn_flash<256>) attn
 // + P V. P is rounded to f16 for its multiply, as attn_flash does. Our CUDA attn_prefill_tc_k's shape. At DK 256
 // (Qwen 3.5's full attention) K and V take turns in one block's space and Q's tile loads in two halves, which
 // keeps the threadgroup memory near 16 KB.
-// With Q8 it reads q8_0 pages, each value staged as half(q * d): one f16 rounding of the decoded value, as P's.
+// With Q8 it reads q8_0 pages: Q, K and V stage in f32 (flash_stage), so S and P V meet the decoded values unrounded;
+// threadgroup memory stays under 23 KB at each DK.
 template <int DK, bool Q8>
 kernel void attn_flash_sg(bytes_in q [[buffer(0)]], bytes_in kp [[buffer(1)]], bytes_in vp [[buffer(2)]],
                           bytes_in bt [[buffer(3)]], bytes_in lens [[buffer(4)]], bytes_in start [[buffer(5)]],
@@ -2451,8 +2470,10 @@ kernel void attn_flash_sg(bytes_in q [[buffer(0)]], bytes_in kp [[buffer(1)]], b
   const uint pos0 = uint(at<int>(start, a.start_rs, s)) + j0, end = pos0 + rows;  // the tile sees [0, end)
   device const int* table = (device const int*)(bt + s * a.bt_rs);
 
-  threadgroup half4 kv4[KVN * L / 4];  // a block's K slots then (not SPLIT) its V slots; Q's tile before the first
-  threadgroup half* kvs = (threadgroup half*)kv4;
+  typedef typename flash_stage<Q8>::T T;
+  typedef vec<T, 4> T4;
+  threadgroup T4 kv4[KVN * L / 4];  // a block's K slots then (not SPLIT) its V slots; Q's tile before the first
+  threadgroup T* kvs = (threadgroup T*)kv4;
   threadgroup float sb[ATTN_FLASH_SG * 8 * LS];  // a simdgroup's 8 rows of S, then of O on the way out
   threadgroup half pb[ATTN_FLASH_SG * 8 * LP];   // a simdgroup's 8 rows of P
   threadgroup float db[ATTN_FLASH_SG * 64];      // a simdgroup's diag(corr), then diag(1 / l)
@@ -2460,7 +2481,7 @@ kernel void attn_flash_sg(bytes_in q [[buffer(0)]], bytes_in kp [[buffer(1)]], b
   threadgroup half* ps = pb + sg * 8 * LP;
   threadgroup float* dg = db + sg * 64;
   static_assert(QR <= KVN, "a pass of Q's tile fits the K and V space");
-  simdgroup_half8x8 qm[D8];
+  simdgroup_matrix<T, 8, 8> qm[D8];
   simdgroup_float8x8 om[D8];
   for (uint pass = 0; pass < QPASS; ++pass) {
     if (pass) threadgroup_barrier(mem_flags::mem_threadgroup);  // the last pass's simdgroups loaded their rows
@@ -2469,7 +2490,7 @@ kernel void attn_flash_sg(bytes_in q [[buffer(0)]], bytes_in kp [[buffer(1)]], b
       half4 v = half4(0);
       if (r < rows && d < a.hd)
         v = half4(*(device const packed_half4*)((device const half*)(q + u64(first + j0 + r) * a.q_rs) + h * a.hd + d));
-      kv4[(rp * L + d) / 4] = v;
+      kv4[(rp * L + d) / 4] = T4(v);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (sg / (ATTN_FLASH_SG / QPASS) == pass)
@@ -2487,25 +2508,37 @@ kernel void attn_flash_sg(bytes_in q [[buffer(0)]], bytes_in kp [[buffer(1)]], b
     const uint n = min(BT, end - p0);
     const u64 slot0 = u64(uint(table[p0 / BT])) * BT, block = (slot0 * a.kv_heads + kvh) * a.hd;
     threadgroup_barrier(mem_flags::mem_threadgroup);  // Q loaded, or every simdgroup done with the last block
-    for (uint i = tid; i < BT * DK / 4; i += NT) {
-      const uint j = i / (DK / 4), d = i % (DK / 4) * 4;
-      half4 k = half4(0), v = half4(0);
-      if (j < n && d < a.hd) {
-        if (Q8) {
-          k = half4(kv_pages<true>::load4(kp, slot0 + j, kvh, d, a));
-          if (!SPLIT) v = half4(kv_pages<true>::load4(vp, slot0 + j, kvh, d, a));
-        } else {
+    if (Q8) {  // 8 dims an item, within one block (head_dim is whole blocks): one scale read each
+      for (uint i = tid; i < BT * DK / 8; i += NT) {
+        const uint j = i / (DK / 8), d = i % (DK / 8) * 8;
+        float4 k0 = float4(0), k1 = float4(0), v0 = float4(0), v1 = float4(0);
+        if (j < n && d < a.hd) {
+          kv_pages<true>::load8(kp, slot0 + j, kvh, d, a, k0, k1);
+          if (!SPLIT) kv_pages<true>::load8(vp, slot0 + j, kvh, d, a, v0, v1);
+        }
+        kv4[(j * L + d) / 4] = T4(k0);
+        kv4[(j * L + d) / 4 + 1] = T4(k1);
+        if (!SPLIT) {
+          kv4[((BT + j) * L + d) / 4] = T4(v0);
+          kv4[((BT + j) * L + d) / 4 + 1] = T4(v1);
+        }
+      }
+    } else {
+      for (uint i = tid; i < BT * DK / 4; i += NT) {
+        const uint j = i / (DK / 4), d = i % (DK / 4) * 4;
+        half4 k = half4(0), v = half4(0);
+        if (j < n && d < a.hd) {
           k = half4(*(device const packed_half4*)((device const half*)kp + block + u64(j) * slot_rs + d));
           if (!SPLIT) v = half4(*(device const packed_half4*)((device const half*)vp + block + u64(j) * slot_rs + d));
         }
+        kv4[(j * L + d) / 4] = T4(k);
+        if (!SPLIT) kv4[((BT + j) * L + d) / 4] = T4(v);
       }
-      kv4[(j * L + d) / 4] = k;
-      if (!SPLIT) kv4[((BT + j) * L + d) / 4] = v;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     simdgroup_float8x8 s0 = make_filled_simdgroup_matrix<float, 8, 8>(0.0f), s1 = s0;
     for (uint d = 0; d < D8; ++d) {
-      simdgroup_half8x8 k0, k1;
+      simdgroup_matrix<T, 8, 8> k0, k1;
       simdgroup_load(k0, kvs + 8 * d, L, ulong2(0, 0), true);  // K^T: rows d, columns slots 0-7
       simdgroup_load(k1, kvs + 8 * L + 8 * d, L, ulong2(0, 0), true);
       simdgroup_multiply_accumulate(s0, qm[d], k0, s0);
@@ -2542,22 +2575,31 @@ kernel void attn_flash_sg(bytes_in q [[buffer(0)]], bytes_in kp [[buffer(1)]], b
     }
     if (SPLIT) {  // every simdgroup's S is done with K: V takes its place
       threadgroup_barrier(mem_flags::mem_threadgroup);
-      for (uint i = tid; i < BT * DK / 4; i += NT) {
-        const uint j = i / (DK / 4), d = i % (DK / 4) * 4;
-        half4 v = half4(0);
-        if (j < n && d < a.hd)
-          v = Q8 ? half4(kv_pages<true>::load4(vp, slot0 + j, kvh, d, a))
-                 : half4(*(device const packed_half4*)((device const half*)vp + block + u64(j) * slot_rs + d));
-        kv4[(j * L + d) / 4] = v;
+      if (Q8) {
+        for (uint i = tid; i < BT * DK / 8; i += NT) {
+          const uint j = i / (DK / 8), d = i % (DK / 8) * 8;
+          float4 v0 = float4(0), v1 = float4(0);
+          if (j < n && d < a.hd) kv_pages<true>::load8(vp, slot0 + j, kvh, d, a, v0, v1);
+          kv4[(j * L + d) / 4] = T4(v0);
+          kv4[(j * L + d) / 4 + 1] = T4(v1);
+        }
+      } else {
+        for (uint i = tid; i < BT * DK / 4; i += NT) {
+          const uint j = i / (DK / 4), d = i % (DK / 4) * 4;
+          half4 v = half4(0);
+          if (j < n && d < a.hd)
+            v = half4(*(device const packed_half4*)((device const half*)vp + block + u64(j) * slot_rs + d));
+          kv4[(j * L + d) / 4] = T4(v);
+        }
       }
       threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    threadgroup const half* vs = kvs + (SPLIT ? 0 : BT * L);
+    threadgroup const T* vs = kvs + (SPLIT ? 0 : BT * L);
     simdgroup_half8x8 pm0, pm1;
     simdgroup_load(pm0, ps, LP);
     simdgroup_load(pm1, ps + 8, LP);
     for (uint d = 0; d < D8; ++d) {
-      simdgroup_half8x8 v0, v1;
+      simdgroup_matrix<T, 8, 8> v0, v1;
       simdgroup_load(v0, vs + 8 * d, L);
       simdgroup_load(v1, vs + 8 * L + 8 * d, L);
       simdgroup_multiply_accumulate(om[d], pm0, v0, om[d]);

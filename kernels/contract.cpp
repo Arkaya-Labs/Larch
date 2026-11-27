@@ -66,13 +66,16 @@ static larch_gdn_state gdn_now;
 static bool on_gpu = false;
 // CUDA has Q2_K's embed, dequant and mmvq_id calls (larch.h), so it may not refuse those.
 static bool on_cuda = false;
+static bool on_metal = false;  // Metal has q8_0 pages (not fp8_e4m3)
 static larch_status lacking_weights(larch_status got, bool may_lack) {
   return on_gpu && may_lack && got == LARCH_ERR_UNSUPPORTED ? LARCH_OK : got;
 }
 static larch_status lacking(larch_status got) { return on_gpu && got == LARCH_ERR_UNSUPPORTED ? LARCH_OK : got; }
-// lacking, on an f16 pool only: an 8-bit pool's UNSUPPORTED on a GPU is the contract's own answer.
+// lacking, on pages the backend has only (f16, and Metal's q8_0): on 8-bit pages it lacks, a GPU's UNSUPPORTED is
+// the contract's own answer.
 static larch_status lacking_on(const larch_tensor* pool_arg, larch_status got) {
-  return pool_arg && pool_arg->dtype == LARCH_F16 ? lacking(got) : got;
+  return pool_arg && (pool_arg->dtype == LARCH_F16 || (on_metal && pool_arg->dtype == LARCH_Q8_0)) ? lacking(got)
+                                                                                                    : got;
 }
 
 // kv_write and the two attentions predate ABI 3: every backend runs them on f16 pages.
@@ -85,10 +88,11 @@ static larch_status attn_decode(larch_stream* s, const larch_tensor* const* t) {
 static larch_status attn_prefill(larch_stream* s, const larch_tensor* const* t) {
   return larch_attn_prefill(s, t[0], pool(t[1]), t[2], t[3], t[4], 0.35f, t[5]);
 }
-// On an 8-bit pool attn must be refused even where it exists (check()), so only its f16 calls may be lacking.
+// On 8-bit pages a backend lacks, attn must be refused even where it exists (check()), so only its calls on pages
+// the backend has (f16, and Metal's q8_0) may be lacking (Metal: a mask or sinks).
 static larch_status attn(larch_stream* s, const larch_tensor* const* t) {
   const larch_status got = larch_attn(s, t[0], pool(t[1]), t[2], t[3], t[4], t[5], t[6], 2, 0, 0.35f, t[7]);
-  return pool_now.dtype == LARCH_F16 ? lacking(got) : got;
+  return pool_now.dtype == LARCH_F16 || (on_metal && pool_now.dtype == LARCH_Q8_0) ? lacking(got) : got;
 }
 static larch_status gdn_conv(larch_stream* s, const larch_tensor* const* t) {
   return lacking(larch_gdn_conv(s, t[0], t[1], &gdn_now, t[2], t[3], t[4], t[5]));
@@ -623,11 +627,12 @@ static int check(larch_device* dev, larch_stream* s, const op& o, bool dtypes) {
   std::vector<const larch_tensor*> p(n);
   int wrong = 0;
   const auto call = [&](const std::vector<int>& pick) {
-    bool allowed = true, eight_bit = false, may_lack = false;
+    bool allowed = true, unpaged = false, may_lack = false;
     std::string combo;
     for (size_t i = 0; i < n; ++i) {
       allowed = allowed && (o.args[i].allowed >> pick[i] & 1);
-      eight_bit = eight_bit || (o.args[i].free == POOL && pick[i] != LARCH_F16);
+      // The 8-bit pages this GPU backend lacks: all of them but Metal's q8_0.
+      unpaged = unpaged || (o.args[i].free == POOL && pick[i] != LARCH_F16 && !(on_metal && pick[i] == LARCH_Q8_0));
       const bool q2_kernel = on_cuda && (o.name.starts_with("embed") || o.name.starts_with("dequant") ||
                                          o.name.starts_with("mmvq_id"));
       may_lack = may_lack || pick[i] == LARCH_Q3_K || (pick[i] == LARCH_Q2_K && !q2_kernel);
@@ -635,12 +640,11 @@ static int check(larch_device* dev, larch_stream* s, const op& o, bool dtypes) {
       p[i] = pick[i] == NUL ? nullptr : &t[i];
       combo += (i ? ", " : "") + std::string(NAMES[pick[i]]);
     }
-    // No GPU backend has 8-bit pages, and every CUDA paged kernel reads its pages as f16: there a valid call on
-    // an 8-bit pool must be refused, never run.
-    // ponytail: GPU pages are f16 only; when a GPU backend gains 8-bit pages (v20-21), check its output against
-    // the CPU reference's here instead.
+    // A GPU backend refuses a valid call on 8-bit pages it lacks, never runs it: CUDA and HIP read every page as
+    // f16, Metal has q8_0 but not fp8_e4m3. Metal's q8_0 output is checked against the CPU reference's in
+    // metal_compare (kv_q8).
     const larch_status want =
-        !allowed ? LARCH_ERR_INVALID_ARG : on_gpu && eight_bit ? LARCH_ERR_UNSUPPORTED : LARCH_OK;
+        !allowed ? LARCH_ERR_INVALID_ARG : on_gpu && unpaged ? LARCH_ERR_UNSUPPORTED : LARCH_OK;
     // A GPU backend without Q3_K kernels refuses a valid Q3_K call as it does a lacking entry (vv_ops::no_weights), and
     // one without a Q2_K kernel for the op a valid Q2_K call.
     const larch_status got = lacking_weights(o.run(s, p.data()), allowed && may_lack);
@@ -880,6 +884,7 @@ int main() {
     bool ok = larch_device_open(ordinal, &dev) == LARCH_OK && larch_stream_create(dev, &s) == LARCH_OK;
     larch_device_props props{};
     on_cuda = ok && larch_device_props_get(dev, &props) == LARCH_OK && props.backend == LARCH_BACKEND_CUDA;
+    on_metal = ok && props.backend == LARCH_BACKEND_METAL;
     for (larch_buffer** b : {&pool_k, &pool_v, &gdn_conv_buf, &gdn_ssm_buf})
       ok = ok && larch_buffer_alloc(dev, POOL_BYTES, b) == LARCH_OK;
     if (!ok) {
