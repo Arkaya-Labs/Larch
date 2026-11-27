@@ -916,8 +916,8 @@ fn split_layers_decode_their_cold_experts_in_place() {
     );
     // Three guesses checked at once: their one-row decodes' logits.
     sp.clear_kv();
-    for i in 0..4 {
-        sp.step(&[Some((prompt[i], i as i32, &TABLE_A))], &[], &[0]);
+    for (i, &t) in prompt[..4].iter().enumerate() {
+        sp.step(&[Some((t, i as i32, &TABLE_A))], &[], &[0]);
     }
     sp.check = true;
     let checked = sp.step(&[], &[(&prompt[4..7], 4, &TABLE_A)], &[0, 1, 2]);
@@ -926,8 +926,8 @@ fn split_layers_decode_their_cold_experts_in_place() {
     // A decode row beside a prompt chunk: the row's logits alone; the chunk's 7 rows count their
     // 28 pairs in the 2 split layers, a cold one in layer 1 for each row at least.
     sp.clear_kv();
-    for i in 0..5 {
-        sp.step(&[Some((prompt[i], i as i32, &TABLE_A))], &[], &[0]);
+    for (i, &t) in prompt[..5].iter().enumerate() {
+        sp.step(&[Some((t, i as i32, &TABLE_A))], &[], &[0]);
     }
     let alone = sp.step(&[Some((prompt[5], 5, &TABLE_A))], &[], &[0]);
     let chunk = [5, 9, 2, 200, 31, 7, 64];

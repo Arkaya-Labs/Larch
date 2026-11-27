@@ -3291,6 +3291,7 @@ impl Transformer {
     // device's buffers in place, when a profile shows it.
     // ponytail: replayed decode steps go uncounted on both kinds of layer unless all are split, so a cold histogram is
     // prefill and eager steps; add a captured log copy if its plan's hit rate trails a replay-free one.
+    #[allow(clippy::too_many_arguments)] // the section's rows, the check and the count
     fn host_experts(
         &self,
         s: &Stream,
