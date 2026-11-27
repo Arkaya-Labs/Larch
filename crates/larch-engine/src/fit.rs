@@ -137,6 +137,9 @@ pub(crate) struct FitPlan {
     pub(crate) kv_blocks: u32,
     /// Full `max_context` sequences the pool holds.
     pub(crate) max_seqs_fit: u32,
+    /// The graphs are the gate's floor: one seat's capture beside a pool for more seats, whose
+    /// larger buckets run eager (`engine::gated_plan`).
+    pub(crate) graph_floor: bool,
 }
 
 /// Bytes of one 16-token block, K and V, every layer that keeps KV, f16.
@@ -659,6 +662,31 @@ pub(crate) fn fit(
     stream_want: u64,
     checks: u32,
 ) -> Result<FitPlan, LoadError> {
+    let (ctx, f, s) = (max_context, kv_pool_fraction, scratch_bytes);
+    let (held, w) = (arena_held, stream_want);
+    fit_seats(
+        before, free, c, ctx, f, s, max_seqs, max_seqs, graphs, held, mapped, w, checks,
+    )
+}
+
+/// [`fit`] with decode graphs for `graph_seats` seats beside the KV pool's `max_seqs`: the gate's
+/// floor ([`crate::engine`]'s `gated_plan`) plans one seat's capture where all of them do not fit.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fit_seats(
+    before: &DeviceProps,
+    free: u64,
+    c: &ModelConfig,
+    max_context: u32,
+    kv_pool_fraction: f32,
+    scratch_bytes: u64,
+    max_seqs: u32,
+    graph_seats: u32,
+    graphs: bool,
+    arena_held: bool,
+    mapped: bool,
+    stream_want: u64,
+    checks: u32,
+) -> Result<FitPlan, LoadError> {
     if max_context == 0 {
         return Err(LoadError::Backend(KError::InvalidArg.code()));
     }
@@ -670,13 +698,19 @@ pub(crate) fn fit(
     // When decode_graphs is on at load; switching it on live reserves them from what is then free.
     // Buckets past the startup seats run eager if max_batch_seqs rises live.
     // ponytail: graph slots sized at load; graph_bucket_max knob if users raise max_batch_seqs live
-    let (desired_graph_bytes, arena) = graph_need(before, max_seqs, graphs, arena_held, checks);
+    let (desired_graph_bytes, arena) = graph_need(before, graph_seats, graphs, arena_held, checks);
     let graph_room = free
         .saturating_sub(headroom)
         .saturating_sub(scratch_bytes)
         .saturating_sub(pool_min);
     let whole = mapped && matches!(c.arch, Arch::Qwen3Moe | Arch::Qwen35Moe);
-    let graph_bytes = graph_quota(desired_graph_bytes, graph_room.saturating_sub(arena), whole);
+    // The floor's one seat is charged at least the measured one-row capture, host layers or not.
+    let floor = graphs && graph_seats < max_seqs;
+    let graph_bytes = graph_quota(
+        desired_graph_bytes,
+        graph_room.saturating_sub(arena),
+        whole || floor,
+    );
     // No admitted slot means captures are prohibited, so the lazy arena need not be allocated.
     let graph_arena_bytes = if graph_bytes != 0 { arena } else { 0 };
     // The streaming pool is optional as the graphs are, after them: refused, those steps stay on
@@ -712,6 +746,7 @@ pub(crate) fn fit(
         kv_block_bytes: block,
         kv_blocks: blocks as u32,
         max_seqs_fit: (blocks / per_ctx) as u32,
+        graph_floor: floor && graph_bytes != 0,
     })
 }
 

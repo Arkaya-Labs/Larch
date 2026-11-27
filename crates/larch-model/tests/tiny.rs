@@ -928,7 +928,8 @@ fn ineligible_steps_stay_on_the_cpu_path_bit_for_bit() {
     r.clear_kv();
     assert_eq!(r.step(&[], &[prompt], &rows), want);
     assert_eq!(r.model.streamed_steps(), 0, "below R");
-    // A mixed step: decode rows run beside the prefill.
+    // A mixed step: decode rows run beside the prefill. Its chunk streams; its decode row keeps the
+    // CPU path, and every row matches the CPU path's bits here.
     let mixed = |r: &mut Rig| {
         r.clear_kv();
         r.step(&[], &[prompt], &rows);
@@ -939,7 +940,11 @@ fn ineligible_steps_stay_on_the_cpu_path_bit_for_bit() {
     assert!(r.model.alloc_stream_pool(&r.s).unwrap());
     let got = mixed(&mut r);
     assert_eq!(got, mixed(&mut cpu("ineligible-mixed-cpu")));
-    assert_eq!(r.model.streamed_steps(), 1, "only the prefill-only step");
+    assert_eq!(
+        r.model.streamed_steps(),
+        2,
+        "the prefill step and the mixed step's chunk"
+    );
     // Expert adapters run on the CPU; router deltas alone stream.
     let ad = adapters(1.0);
     let [want_ad, _] = prefill7_deltas(&bytes, "ineligible-ad-cpu", place(0), &ad);

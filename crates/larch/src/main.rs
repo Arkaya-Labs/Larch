@@ -31,6 +31,8 @@ enum Cmd {
     Parity(larch::parity::Options),
     /// Rewrite the routed experts of some layers to Q2_K, as a GGUF llama.cpp loads.
     Repack(larch::repack::Options),
+    /// Make the faster copy of a model this GPU holds only in part (the 35B on a 16 GB card).
+    Faster(larch::faster::Options),
     /// Prove each architecture-gated route on this card and write the card profile with those that
     /// passed.
     RoutesCheck(larch::routes_check::Options),
@@ -71,6 +73,7 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Info(opts) => larch::info::run(opts, &mut io::stdout().lock()),
         Cmd::Repack(opts) => larch::repack::run(&opts),
+        Cmd::Faster(opts) => larch::faster::run(&opts),
         Cmd::Knob { cmd: KnobCmd::List } => larch::knob::list(&mut io::stdout().lock()),
         Cmd::Parity(opts) => {
             let _install_lock = larch_fetch::hold_install_lock()?;

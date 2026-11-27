@@ -11,6 +11,8 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Free bytes at the faster copy's folder (faster.rs); in the lock already (larch-agent, larch-task).
+fs2 = "0.4"
 larch-fetch = { path = "../larch-fetch" }
 larch-engine = { path = "../larch-engine" }
 larch-kernels = { path = "../larch-kernels" }

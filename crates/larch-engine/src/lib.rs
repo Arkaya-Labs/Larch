@@ -1159,6 +1159,8 @@ struct Published {
     state_slots: u32,
     /// Device memory free when this load began ([`EngineHandle::free_before`]).
     free_before: u64,
+    /// Expert layers this load keeps in host memory ([`EngineHandle::host_expert_layers`]).
+    host_layers: u32,
 }
 
 /// State the engine publishes to every handle.
@@ -1578,16 +1580,16 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                 if free >= need(slots) || !c.arch.hybrid() {
                     return fits_after_load(m, planned, before.vram_free, free, need(slots));
                 }
-                let freed = |k: u32| free + u64::from(slots - k) * t.slot_bytes;
-                let low = floor.min(slots);
-                match (low..slots).rev().find(|&k| freed(k) >= need(k)) {
-                    Some(k) => slots = k,
+                // Only a planned GPU load with a layer left to move can trade one for a slot.
+                let keep = planned && !last && before.backend == larch_kernels::Backend::Cuda;
+                let low = settle_low(slots, floor, keep);
+                match settle_slots(free, slots, low, t.slot_bytes, need) {
+                    Ok(k) => slots = k,
                     // Short even at the floor: the host layers cover what it leaves.
-                    None if planned || slots == low => {
-                        let (free, need) = (freed(low), need(low));
-                        return fits_after_load(m, planned, before.vram_free, free, need);
+                    Err(freed) if planned || slots == low => {
+                        return fits_after_load(m, planned, before.vram_free, freed, need(low));
                     }
-                    None => slots = low,
+                    Err(_) => slots = low,
                 }
             }
         };
@@ -2156,6 +2158,38 @@ fn graphs_paid(planned: bool, seats: u32, layers: u32, total: usize) -> bool {
     planned && seats != 0 && layers > 0 && (layers as usize) < total
 }
 
+/// The fewest state slots the check after a load gives up to: the plan's `floor`, but where the
+/// load can move another layer (`keep`: planned, on CUDA, a layer left) never below
+/// [`engine::MANY_SEATS`] when the plan gave that many. Four chats on three seats queue one (W4@4
+/// on the hybrid MoE target, 5070 Ti: 112.7 against 174 tok/s, its graphs eager), so such a load
+/// short of its fourth slot refuses with the shortfall and moves one more host layer instead, at
+/// one chat's cost of that layer. A setup of fewer than MANY_SEATS seats (max_batch_seqs 1 to 3)
+/// never plans that many slots (they stop at [`engine::hybrid_slots`] of it), so it gives the slot
+/// up and keeps the layer.
+fn settle_low(slots: u32, floor: u32, keep: bool) -> u32 {
+    match keep && slots >= engine::MANY_SEATS {
+        true => floor.max(engine::MANY_SEATS),
+        false => floor,
+    }
+    .min(slots)
+}
+
+/// The most state slots, from `slots` down to `low`, whose freed state (`slot_bytes` each) leaves
+/// `free` at least `need` of them; else what `low` slots would leave free.
+fn settle_slots(
+    free: u64,
+    slots: u32,
+    low: u32,
+    slot_bytes: u64,
+    need: impl Fn(u32) -> u64,
+) -> Result<u32, u64> {
+    let freed = |k: u32| free + u64::from(slots - k) * slot_bytes;
+    (low..slots)
+        .rev()
+        .find(|&k| freed(k) >= need(k))
+        .ok_or(freed(low))
+}
+
 /// A refused load: its error, and the bytes more host layers must free when a load fitted but left
 /// too little free; 0 when that is unknown.
 type Refusal = (LoadError, u64);
@@ -2609,6 +2643,12 @@ impl EngineHandle {
     /// Unstable: may change before 1.0.
     pub fn free_before(&self) -> u64 {
         self.shared.info.read().expect("model info").free_before
+    }
+
+    /// The routed expert layers the loaded model keeps in host memory, as its load placed them: 0
+    /// for a model on the device whole, a dense model or one not loaded from a file.
+    pub fn host_expert_layers(&self) -> u32 {
+        self.shared.info.read().expect("model info").host_layers
     }
 
     /// Sequences of recurrent state the loaded model holds, 0 for a model without recurrent
@@ -3370,6 +3410,61 @@ mod tests {
     /// A planned load that succeeds but leaves less than the serving need is dropped and retried
     /// once with the layers that cover the shortfall, such as a hybrid's recurrent state, which the
     /// plan does not count; a forced load is kept as it is; a shortfall past the last layer fails.
+    /// m13 on the 5070 Ti (26 Nov): a load planned for 4 state slots read 630,738,944 B free against
+    /// 637,157,298 needed, and 608,244,358 at 3 slots. It gave a slot up, so 4 chats ran on 3 seats
+    /// (112.7 against 174 tok/s at W4@4, graphs eager). Short of the 4th slot, it now keeps MANY_SEATS
+    /// and refuses with the shortfall, so the load moves one more host layer for the slot.
+    #[test]
+    fn a_load_planned_for_four_seats_keeps_them_and_moves_a_layer() {
+        let slot = 64_389_120u64;
+        let need = |k: u32| match k {
+            4 => 637_157_298,
+            3 => 608_244_358,
+            k => 608_244_358 - u64::from(3 - k) * 28_912_940,
+        };
+        let free = 630_738_944;
+        let low = |slots, floor| super::settle_low(slots, floor, true);
+        // Planned 4, floor 1: the check may not drop below the 4 seats the plan gave.
+        assert_eq!(
+            super::settle_slots(free, 4, low(4, 1), slot, need),
+            Err(free)
+        );
+        // Planned 7 (the faster copy): dropping to 5 still seats 4 chats.
+        let roomy = |k: u32| 500_000_000 + u64::from(k) * 30_000_000;
+        assert_eq!(
+            super::settle_slots(600_000_000, 7, low(7, 1), slot, roomy),
+            Ok(5)
+        );
+        // A plan of fewer slots than MANY_SEATS gives them up to its floor, as before.
+        assert_eq!(
+            super::settle_slots(free - slot, 3, low(3, 1), slot, need),
+            Ok(2)
+        );
+        // A load that cannot move a layer (not planned, every layer on the host, not CUDA) gives
+        // slots up to its floor as before.
+        assert_eq!(super::settle_low(4, 1, false), 1);
+        assert_eq!(
+            super::settle_slots(free, 4, super::settle_low(4, 1, false), slot, need),
+            Ok(3)
+        );
+        // A setup that serves fewer than MANY_SEATS chats at once (max_batch_seqs 1 to 3) plans at
+        // most hybrid_slots of it, so every slot count it can have gives slots up to its floor and
+        // keeps the layer.
+        for seats in 1..crate::engine::MANY_SEATS {
+            let cap = crate::engine::hybrid_slots(seats);
+            assert!(cap < crate::engine::MANY_SEATS, "max_batch_seqs {seats}");
+            for slots in 1..=cap {
+                assert_eq!(
+                    super::settle_low(slots, 1, true),
+                    1,
+                    "{seats}: {slots} slots"
+                );
+            }
+        }
+        // The floor itself is never dropped below; short there, the load refuses.
+        assert_eq!(super::settle_slots(100, 2, low(2, 2), slot, need), Err(100));
+    }
+
     #[test]
     fn a_planned_load_short_of_serving_memory_moves_more_host_layers() {
         use std::cell::Cell;

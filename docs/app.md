@@ -49,6 +49,22 @@ itself.
 
 Switching models unloads the current one first. Chats keep their history but start a fresh context.
 
+### Faster on this computer
+
+Some models are larger than the GPU. For those Larch knows how to speed up, the model's card offers
+**Faster on this computer** on an NVIDIA GPU that cannot hold the whole file. **Make it faster** writes
+a second copy of the model in which the experts it rarely uses are stored in less detail, so all of
+it fits on the GPU. Quality is slightly lower; the copy takes a few minutes and about 17 GB of disk
+for the 35B, in Larch's data folder (on Windows usually the system drive), not the model's folder. Chats keep running on the original meanwhile, and the app switches to the copy when it is
+ready. **Use the original** switches back. The original file is never changed.
+
+![The faster version on a model card: offered, being made, and in use](assets/app-faster-light.png#gh-light-mode-only)
+![The faster version on a model card: offered, being made, and in use](assets/app-faster-dark.png#gh-dark-mode-only)
+
+After switching, the app checks that the copy loaded entirely on the GPU. If another program holds
+too much GPU memory for that, the copy would run slower than the original, so the app loads the
+original again and keeps the copy for later. Deleting a model deletes its faster copy too.
+
 ## Tasks
 
 A task is a list of steps that runs without you: read a folder, ask the model, decide, notify you.

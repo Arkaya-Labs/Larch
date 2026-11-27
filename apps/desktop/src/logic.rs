@@ -55,6 +55,23 @@ impl Ledger {
 /// Bytes in a GiB, which the app calls GB as the OS does.
 pub const GIB: f64 = 1024. * 1024. * 1024.;
 
+/// What the 35B card says of its faster version before it is made: where it helps and what it
+/// costs, in plain words. No speed figure: the gain was measured on one card, not this one.
+pub const FASTER_NOTE: &str = "Faster on GPUs that can't hold the whole model. The experts it rarely uses are kept in less detail, so quality is slightly lower. Takes a few minutes and 17 GB of disk in Larch's data folder.";
+
+/// The faster version's progress line at `frac` (0 to 1) after `secs` seconds: "42 % · 3 min left".
+pub fn making_left(frac: f64, secs: f64) -> String {
+    let pct = format!("{:.0} %", frac * 100.);
+    if frac < 0.02 || secs <= 0. {
+        return pct;
+    }
+    let left = secs * (1. - frac) / frac;
+    match left < 90. {
+        true => format!("{pct} · {left:.0} s left"),
+        false => format!("{pct} · {:.0} min left", left / 60.),
+    }
+}
+
 /// `b` bytes as "13.1 GB".
 pub fn gb(b: u64) -> String {
     format!("{:.1} GB", b as f64 / GIB)
@@ -1340,6 +1357,19 @@ pub fn keys(k: &str, m: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn making_left_reads_as_the_download_rows_do() {
+        assert_eq!(super::making_left(0., 0.), "0 %");
+        assert_eq!(super::making_left(0.01, 5.), "1 %");
+        assert_eq!(super::making_left(0.5, 30.), "50 % · 30 s left");
+        assert_eq!(super::making_left(0.25, 120.), "25 % · 6 min left");
+        assert!(!super::FASTER_NOTE.to_lowercase().contains("repack"));
+        assert!(
+            !super::FASTER_NOTE.contains('%'),
+            "no speed figure measured on another card"
+        );
+    }
+
     #[test]
     fn a_quoted_link_keeps_its_words() {
         let p = |s: &str| super::plain_links(s).into_owned();

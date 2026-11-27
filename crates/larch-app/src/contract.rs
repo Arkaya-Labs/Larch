@@ -130,6 +130,19 @@ pub struct ModelEntry {
     /// false once that projector failed to load with it.
     #[serde(default)]
     pub vision: bool,
+    /// "Faster on this computer": offered for this model here, and its copy once made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faster: Option<Faster>,
+}
+
+/// A model's faster copy on this computer (`build_faster`, `use_faster`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Faster {
+    /// The copy's path once it is made.
+    pub copy: Option<String>,
+    /// It is being made now.
+    pub building: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -637,6 +650,35 @@ pub struct DownloadDone {
     /// Why a download meant for the shared Hugging Face cache went to Larch's own library.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+/// `faster:progress`, about 4 a second while a faster copy is made.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FasterProgress {
+    /// The original model's path.
+    pub path: String,
+    /// How far it got, 0 to 1.
+    pub fraction: f64,
+    /// Seconds since it started.
+    pub seconds: f64,
+}
+
+/// `faster:done`: the copy is made and passed its check.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FasterDone {
+    pub path: String,
+    pub copy: String,
+}
+
+/// `faster:failed`: nothing was kept; `cancelled` true when cancel_faster stopped it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FasterFailed {
+    pub path: String,
+    pub message: String,
+    pub cancelled: bool,
 }
 
 /// `download:failed`: `cancelled` true when cancel_download stopped it.

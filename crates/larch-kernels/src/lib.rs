@@ -317,6 +317,8 @@ impl DeviceProps {
 
 struct RawDevice {
     raw: *mut sys::larch_device,
+    /// A CPU device ([`CPU`] or [`CPU_COMPUTE`]): its streams take any device's host buffers.
+    cpu: bool,
     /// Every file map a buffer of this device wraps, unmapped after the close ([`Buffer::wrap_host`]).
     // ponytail: kept until the device closes (one GGUF per process, a reload is a restart, 9.11);
     // release a map at a stream sync if a process ever swaps models in place.
@@ -367,8 +369,16 @@ impl Device {
         check(unsafe { sys::larch_device_open(ordinal, &mut raw) })?;
         Ok(Device(Arc::new(RawDevice {
             raw,
+            cpu: ordinal < 0,
             maps: Mutex::default(),
         })))
+    }
+
+    /// The threads a CPU device's ops may use; 0, the default, is one per logical CPU. A GPU device
+    /// answers `Unsupported`.
+    pub fn set_threads(&self, threads: u32) -> Result<(), KError> {
+        // SAFETY: the device is open.
+        check(unsafe { sys::larch_device_set_threads(self.raw(), threads) })
     }
 
     /// Current properties (`vram_free` changes as memory is allocated).
@@ -415,26 +425,35 @@ struct RawBuffer {
     /// A wrapped file map: uploads and op outputs are refused.
     readonly: bool,
     dev: Device,
+    /// A host buffer's memory ([`Buffer::alloc_host`]), else null.
+    host: *mut u8,
 }
 
-// SAFETY: Rust never dereferences `raw`; it only hands it to the backend, and frees it once, when the
-// last Arc drops. Another thread reaches it only through a Graph replay, and graphs exist only on GPU
-// backends, whose ops touch device memory (or a wrapped map, read-only), never host memory the
-// owner's thread could be writing at the same time.
+// SAFETY: Rust never dereferences `raw` or `host`; it only hands them to the backend, and frees the
+// buffer once, when the last Arc drops. Another thread reaches it only through a Graph replay, and
+// graphs exist only on GPU backends, whose ops touch device memory (or a wrapped map, read-only),
+// never host memory the owner's thread could be writing at the same time; or through a HostCopy, which
+// only copies from a host buffer that nothing writes from its share on (Buffer::share_host).
 unsafe impl Send for RawBuffer {}
 // SAFETY: as above.
 unsafe impl Sync for RawBuffer {}
 
 impl Drop for RawBuffer {
     fn drop(&mut self) {
-        // SAFETY: made by larch_buffer_alloc or larch_buffer_wrap_host on a device that is still open
-        // (self.dev). Work still queued on it must keep it alive in the backend: Metal command buffers
-        // retain it, CUDA's cudaFree waits for the device, and the CPU reference queues nothing.
+        // SAFETY: made by larch_buffer_alloc, larch_buffer_wrap_host or larch_buffer_alloc_host on a
+        // device that is still open (self.dev). Work still queued on it must keep it alive in the
+        // backend: Metal command buffers retain it, CUDA's cudaFree waits for the device (and
+        // cudaFreeHost, a host buffer's, for the copies still reading it: Stream::upload_from), and
+        // the CPU reference queues nothing.
         // larch.h does not say so yet (an A1 contract item); a backend that frees asynchronously
         // breaks this.
         unsafe { sys::larch_buffer_free(self.raw) }
     }
 }
+
+/// A frozen host buffer, shared as a copy source ([`Buffer::share_host`]); it keeps the memory alive.
+#[derive(Clone)]
+pub struct HostCopy(Arc<RawBuffer>);
 
 /// Device memory. Never exposes a pointer; reach it through [`Tensor`]s and [`Stream`] copies.
 pub struct Buffer {
@@ -452,6 +471,7 @@ impl Buffer {
                 bytes,
                 readonly,
                 dev: dev.clone(),
+                host: ptr::null_mut(),
             }),
             _not_sync: PhantomData,
         }
@@ -463,6 +483,32 @@ impl Buffer {
         // SAFETY: the device is open and `raw` is a valid out pointer; RawBuffer frees the buffer.
         check(unsafe { sys::larch_buffer_alloc(dev.raw(), bytes, &mut raw) })?;
         Ok(Buffer::new(raw, bytes, false, dev))
+    }
+
+    /// `bytes` of host memory `dev` copies to and from at full speed (page-locked on a GPU;
+    /// `larch_buffer_alloc_host`): every CPU device's streams take it as their own buffer, while
+    /// `dev`'s ops refuse it; once filled, [`Buffer::share_host`] makes it a copy source for any
+    /// thread. `Unsupported` where the backend has none.
+    pub fn alloc_host(dev: &Device, bytes: u64) -> Result<Buffer, KError> {
+        let (mut raw, mut host) = (ptr::null_mut(), ptr::null_mut());
+        // SAFETY: the device is open and both are valid out pointers; RawBuffer frees the buffer, and
+        // with it the host memory.
+        check(unsafe { sys::larch_buffer_alloc_host(dev.raw(), bytes, &mut raw, &mut host) })?;
+        let mut b = Buffer::new(raw, bytes, false, dev);
+        Arc::get_mut(&mut b.inner).expect("a new buffer").host = host.cast();
+        Ok(b)
+    }
+
+    /// Freezes a host buffer ([`Buffer::alloc_host`]) read-only, as a wrapped map is (uploads and op
+    /// outputs refused), and returns a handle any thread may copy from ([`Stream::upload_from`]), so
+    /// nothing writes the memory while a copy reads it. `None` for any other buffer.
+    pub fn share_host(&mut self) -> Option<HostCopy> {
+        let inner = Arc::get_mut(&mut self.inner)?;
+        if inner.host.is_null() {
+            return None;
+        }
+        inner.readonly = true;
+        Some(HostCopy(Arc::clone(&self.inner)))
     }
 
     /// Bytes `range` of a file map as a read-only buffer, without a copy: Metal's zero-copy weights
@@ -771,9 +817,11 @@ impl Stream {
         Ok(())
     }
 
-    /// `b` is on this stream's device; inside a capture, the graph now holds it.
+    /// `b` is on this stream's device, or a host buffer of any device on a CPU device's stream
+    /// ([`Buffer::alloc_host`]); inside a capture, the graph now holds it.
     fn uses(&self, b: &Buffer) -> Result<(), KError> {
-        if !b.inner.dev.same(&self.dev) {
+        let host = self.dev.0.cpu && !b.inner.host.is_null();
+        if !b.inner.dev.same(&self.dev) && !host {
             return Err(KError::InvalidArg);
         }
         if let Some(held) = self.captured.borrow_mut().as_mut() {
@@ -815,6 +863,41 @@ impl Stream {
                 off,
                 bytes.as_ptr().cast(),
                 bytes.len() as u64,
+            )
+        })
+    }
+
+    /// [`Stream::upload`] of bytes `range` of a shared host buffer ([`Buffer::share_host`]), which a
+    /// GPU copies straight from, asynchronously, until this stream syncs.
+    pub fn upload_from(
+        &self,
+        buf: &Buffer,
+        off: u64,
+        src: &HostCopy,
+        range: Range<u64>,
+    ) -> Result<(), KError> {
+        self.outside_capture()?;
+        let bytes = range.end.saturating_sub(range.start);
+        let host = src.0.host;
+        if range.is_empty() || range.end > src.0.bytes {
+            return Err(KError::InvalidArg);
+        }
+        if buf.inner.readonly || !buf.in_range(off, bytes) {
+            return Err(KError::InvalidArg);
+        }
+        self.uses(buf)?;
+        // SAFETY: `range` lies inside `src`'s host memory, which is read-only from its share on (no
+        // upload or op writes it), and `off..off + bytes` inside `buf`, on this stream's device. A GPU
+        // reads the source until the stream syncs; the memory outlives that read even if `src` drops
+        // first, since the backend frees a host buffer only after its device's copies finish (as for
+        // every buffer, RawBuffer's drop).
+        check(unsafe {
+            sys::larch_upload(
+                self.raw,
+                buf.inner.raw,
+                off,
+                host.wrapping_add(range.start as usize).cast(),
+                bytes,
             )
         })
     }

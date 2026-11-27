@@ -21,6 +21,7 @@ fn model(name: &str, quant: &str, gb: f64, lib: &str, fit: Fit, supported: bool)
         source: "Larch".into(),
         library: lib.into(),
         vision: false,
+        faster: None,
     }
 }
 
@@ -56,9 +57,9 @@ pub fn seed(s: &mut Ecl) {
     };
     s.models = vec![
         model(
-            "Qwen3 35B A3B",
-            "Q4_K_M",
-            19.7,
+            "Qwen3.5 35B A3B",
+            "Q3_K_M",
+            15.9,
             "/home/you/models",
             fits(3),
             true,
@@ -97,6 +98,22 @@ pub fn seed(s: &mut Ecl) {
         ),
     ];
     s.st.model = Some(s.models[0].path.clone());
+    // The 35B card's faster version: offered, being made (`LARCH_DEMO_FASTER=making`) or in use
+    // (`on`), to see each state without making one.
+    let big = s.models[0].path.clone();
+    let copy = big.replace(".gguf", ".faster.gguf");
+    let state = std::env::var("LARCH_DEMO_FASTER").unwrap_or_default();
+    s.models[0].faster = Some(Faster {
+        copy: (state == "on").then(|| copy.clone()),
+        building: state == "making",
+    });
+    match state.as_str() {
+        "making" => {
+            s.fasters.insert(big, (0.62, 150.));
+        }
+        "on" => s.st.model = Some(copy),
+        _ => {}
+    }
     for (m, t) in s.models.iter().zip([47., 168., 96., 121.]) {
         s.prefs.tok_s.insert(m.path.clone(), t);
     }
