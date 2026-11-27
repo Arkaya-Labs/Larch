@@ -1,0 +1,13 @@
+# Z0 (z0.cu), one GPU hold between two grid runs, 27 Nov 2026 06:45:23-06:45:32Z
+pinned 1600 MB: attr type 1, attr devicePointer 0x204c00000, cudaHostGetDevicePointer 0x204c00000 (host 0x204c00000)
+70 SMs, kernel 560 x 512, 50 reps, CPU threads 6 of 8
+MB            mapped GB/s      device GB/s   memcpyAsync GB/s         CPU GB/s
+12                   52.9            676.0               57.5             23.8
+42                   53.2            797.0               57.7             50.2
+64                   53.5            817.4               57.7             55.6
+
+# per-layer profile (zk.cpp), linked against the Z build's kernels (ac-kcuda)
+mapped rows=1: 1.297 ms per host layer (gate+up+down); 9.2 GB/s by pairs (11.9 MB), 9.2 GB/s by unique experts (11.9 MB)
+device rows=1: 0.082 ms per host layer (gate+up+down); 144.9 GB/s by pairs (11.9 MB), 144.9 GB/s by unique experts (11.9 MB)
+mapped rows=4: 4.649 ms per host layer (gate+up+down); 10.3 GB/s by pairs (47.7 MB), 9.8 GB/s by unique experts (45.6 MB)
+device rows=4: 0.227 ms per host layer (gate+up+down); 209.7 GB/s by pairs (47.7 MB), 200.4 GB/s by unique experts (45.6 MB)

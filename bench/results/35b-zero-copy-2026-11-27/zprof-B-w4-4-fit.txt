@@ -1,0 +1,32 @@
+larch_host_experts_plan,4,15631122432,17066033152,15890541056,648016256,2560,0.85,576,318767104,true
+larch_host_experts_mapped,layers=0..4,bytes=1526726656
+larch_host_experts_load,4,752279552,637157298,4
+larch_graph_fit,1262,1469,true,0
+larch_context_fit,2560,free=752279552,scratch=68520704,vision=0,kv_blocks=783,graph_bytes=12582912,graphs=true
+larch_fit_ledger,free_before=15631122432,host_layers=4,weights_on_device=14363814400,activation=56332288,routers=41943040,hybrid=330225280,reserve_scratch=68520704,reserve_graph_slots=12582912,reserve_graph_arena=67108864,graphs_paid=true,fit_scratch=68520704,headroom=117440512,free_after_load=752279552,model_bytes=14878842880,kv_blocks=783,kv_block_bytes=327680,graph_quota=12582912,graph_arena=67108864
+larch_stream_pool,184549376,184549376,true,64
+larch_graph_capture,1,0,1,1,4194304,12582912,true,165076992,97968128,67108864
+larch_graph_capture,4,0,4,1,4194304,8388608,true,95870976,93773824,0
+larch_graph_capture,2,0,2,1,4194304,4194304,true,42115072,40017920,0
+# step profile by shape (prof.py)
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+decode4                      replay     1587       0.10       27.81    27.98    44.41
+mixed d3+chunk>=256          eager        19      99.02       55.70   156.95     2.98
+decode1                      replay      267       0.07        9.85    10.00     2.67
+decode3                      replay       90       0.07       27.75    27.87     2.51
+decode2                      replay       33       0.09       16.53    16.80     0.55
+prefill p16                  eager         1     384.56       19.75   410.35     0.41
+mixed d1+chunk>=256          eager         2      92.50       62.80   160.28     0.32
+mixed d3+p173                eager         1     117.50        1.01   122.45     0.12
+mixed d3+p244                eager         1     116.85        1.11   118.06     0.12
+mixed d3+p230                eager         1     104.13        4.39   114.11     0.11
+mixed d3+p251                eager         1     104.18        7.64   111.92     0.11
+mixed d3+p63                 eager         1      84.80       22.55   110.05     0.11
+mixed d3+p186                eager         1      73.90       32.29   108.77     0.11
+prefill p225                 eager         1      61.85       39.12   103.66     0.10
+mixed d3+p171                eager         1      65.45       35.69   101.26     0.10
+mixed d3+p108                eager         1      72.56       15.87    94.90     0.09
+mixed d3+p101                eager         1      76.22       11.55    93.57     0.09
+mixed d3+p94                 eager         1      63.28       25.22    88.61     0.09
+mixed d3+p77                 eager         1      57.73       23.51    84.76     0.08
+larch_stream_step: 32 streamed steps, rows mean 368, layers 4, copy ms mean 35.5, wait ms mean 32.4
