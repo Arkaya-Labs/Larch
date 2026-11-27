@@ -1,0 +1,4 @@
+larch 0.0.0 (ef28629)
+b3a53bf36b1c945b5bd28760a8b588414d99f39de05b026c790d421f8ecb1ff8  larch-final
+ef28629 Keep the whole-layer plan and its prefill pool at many chats
+2026-11-27T05:19:21Z

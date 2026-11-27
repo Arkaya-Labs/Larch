@@ -1,0 +1,3 @@
+No load lines: this run predates -lv 4, which was added from --n-cpu-moe 3 r2 at W4@1 on (the report's Protocol notes).
+The total below is the parser's empty sum, not a reading.
+CUDA0 buffers total 0 MiB

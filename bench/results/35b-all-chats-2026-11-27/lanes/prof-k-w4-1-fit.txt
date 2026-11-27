@@ -1,0 +1,26 @@
+larch_host_experts_plan,4,15631122432,17066033152,15890541056,648016256,2560,0.85,576,318767104,true
+larch_host_experts_load,4,700563456,637157298,4
+larch_context_fit,2560,free=684830720,scratch=68520704,vision=0,kv_blocks=608,graph_bytes=12582912,graphs=true
+larch_fit_ledger,free_before=15631122432,host_layers=4,weights_on_device=14363814400,activation=56332288,routers=41943040,hybrid=330225280,reserve_scratch=68520704,reserve_graph_slots=12582912,reserve_graph_arena=67108864,graphs_paid=true,fit_scratch=68520704,headroom=117440512,free_after_load=684830720,model_bytes=14946291712,kv_blocks=608,kv_block_bytes=327680,graph_quota=12582912,graph_arena=67108864
+larch_stream_pool,184549376,184549376,true,64
+# step profile by shape (prof.py: interval 3 = CPU side of the forward, interval 4 = GPU wait + download)
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+decode1                      replay     7043       2.09        4.64     6.81    47.93
+prefill chunk>=256           eager        20      81.01       58.35   141.53     2.83
+prefill p16                  eager         1     335.63       19.89   360.59     0.36
+prefill p101                 eager         1     125.37        0.79   131.88     0.13
+prefill p225                 eager         1     120.77        1.18   127.43     0.13
+prefill p63                  eager         1      89.41       20.75   115.39     0.12
+prefill p251                 eager         1      89.05       15.53   104.69     0.10
+prefill p244                 eager         1      58.51       43.16   101.79     0.10
+prefill p230                 eager         1      54.85       41.05    98.61     0.10
+prefill p186                 eager         1      58.37       34.45    98.27     0.10
+prefill p210                 eager         1      57.01       38.70    95.75     0.10
+prefill p155                 eager         1      55.44       31.28    92.13     0.09
+prefill p171                 eager         1      55.04       34.55    89.66     0.09
+prefill p173                 eager         1      49.97       34.17    87.27     0.09
+prefill p108                 eager         1      48.47       26.17    80.80     0.08
+prefill p77                  eager         1      48.61       22.51    76.13     0.08
+prefill p79                  eager         1      53.16       22.81    76.09     0.08
+prefill p94                  eager         1      48.00       24.23    72.39     0.07
+larch_stream_step: 34 streamed steps, rows mean 346, layers 4, copy ms mean 27.7, wait ms mean 23.6

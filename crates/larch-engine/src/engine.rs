@@ -1283,19 +1283,14 @@ pub(crate) fn hybrid_slots(seats: u32) -> u32 {
 /// hybrid (`slots` state slots) whose experts partly sit in host memory (`in_ram`), planned for
 /// `planned` slots: when it asks for more slots than the load holds, or for fewer than its host
 /// layers pay for. Elsewhere the slots grow live from free memory ([`Engine::grow_seats`]) or cost
-/// no host layer.
-/// Where the loader picks the expert cache by seats (`flips`: CUDA, `LARCH_EXPERT_CACHE`
-/// unset), many chats ([`MANY_SEATS`] or more) also flip it, a plan of its own.
-fn replan_due(want: u32, slots: u32, in_ram: bool, planned: Option<u32>, flips: bool) -> bool {
-    let many = |n| n >= MANY_SEATS;
-    slots > 0
-        && in_ram
-        && planned.is_some_and(|p| want > slots || want < p || (flips && many(want) != many(p)))
+/// no host layer. Seats pick no other plan: only `LARCH_EXPERT_CACHE` takes the expert cache.
+fn replan_due(want: u32, slots: u32, in_ram: bool, planned: Option<u32>) -> bool {
+    slots > 0 && in_ram && planned.is_some_and(|p| want > slots || want < p)
 }
 
-/// The state slots a hybrid's many-chats plan pays for, with the expert cache (the loader's
-/// `cache`); fast mode plans for one. 5070 Ti, 35B, 11 Nov, 3 alternating rounds: 4 chats 169
-/// against 126 tok/s (TTFT p50 264 against 811 ms), 1 chat 66 against 98.
+/// The state slots a hybrid's many-chats plan pays for, with whole host layers and the prefill
+/// pool (the expert cache only where `LARCH_EXPERT_CACHE` asks: the loader's `cache`); fast mode
+/// plans for one. A load that already holds this many never switches up ([`Demand::seats`]).
 pub(crate) const MANY_SEATS: u32 = 4;
 
 /// Requests waiting on full seats this long switch a fast plan to many chats.
@@ -1329,9 +1324,18 @@ struct Demand {
 impl Demand {
     /// The seats to re-plan for once demand at `now` (ns) held past its threshold: `running`
     /// requests on `slots` seats and `waiting` behind them. It flips only once a switch loads.
+    /// A load that already holds the [`MANY_SEATS`] slots the many-chats plan pays for is never
+    /// pressed up: its waiting requests take slots as they free or as they grow live
+    /// ([`Engine::grow_seats`]). On the 5070 Ti at W4@8 (the hybrid MoE target, `--slice 0/10`,
+    /// 26/27 Nov) such a load runs 237 tok/s on 4 slots with the prefill pool; the switch reloaded
+    /// it onto 7 slots without the pool (152.7, no histogram), and the expert cache from a
+    /// recorded histogram ran 188.5.
     fn seats(&mut self, now: u64, running: usize, waiting: usize, slots: u32) -> Option<u32> {
         let (pressed, hold) = match self.many {
-            false => (running >= slots as usize && waiting >= 2, DEMAND_UP_NS),
+            false => (
+                slots < MANY_SEATS && running >= slots as usize && waiting >= 2,
+                DEMAND_UP_NS,
+            ),
             true => (running + waiting <= 1, DEMAND_DOWN_NS),
         };
         if !pressed || now < self.quiet_until {
@@ -3872,9 +3876,7 @@ impl Engine {
     fn replan_due(&self, want: u32) -> bool {
         let l = self.loaded.as_ref().expect("loaded engine");
         let in_ram = l.info.class.experts_in_ram;
-        let flips = l.info.caps.backend == Backend::Cuda
-            && std::env::var_os("LARCH_EXPERT_CACHE").is_none();
-        replan_due(want, l.model.state_slots(), in_ram, l.seats_planned, flips)
+        replan_due(want, l.model.state_slots(), in_ram, l.seats_planned)
     }
 
     /// Queues a reload with the plan's seats as `partial` asks and returns its reply; None when
@@ -4604,7 +4606,10 @@ impl Engine {
             let chunks = plan.prefill.len();
             check_key(backend, nd, np, chunks, rows.len(), splits, *drafted)
         } else if plan.prefill.is_empty() {
-            let bucket = graph_decode_bucket(backend, nd).min(loaded.dims.seqs);
+            // A hybrid's buckets stop at its state slots, as vLLM's at max_num_seqs: its padding
+            // rows take free slots, so a bucket past the slots could never pad there.
+            let seats = servable_seats(loaded.model.state_slots(), loaded.dims.seqs as u32);
+            let bucket = graph_decode_bucket(backend, nd).min(seats as usize);
             (!hybrid || self.sched.free_state_slots().len() >= bucket - nd).then_some(GraphKey {
                 decode: bucket,
                 prefill: 0,
@@ -9015,11 +9020,7 @@ mod tests {
         asked: Option<u32>,
         auto: Option<PathBuf>,
     ) -> (Loaded, EffectiveConfig, u32, crate::Ledger) {
-        let path = std::env::temp_dir().join(format!(
-            "larch-fake-cuda-{before}-{forced:?}-{:?}-{}.gguf",
-            std::thread::current().id(),
-            std::process::id()
-        ));
+        let path = fake_cuda_path(before, forced);
         std::fs::write(&path, tiny::gguf(Arch::Qwen35Moe, 3)).unwrap();
         let mut opts = EngineOptions::new(path.clone(), CPU);
         opts.max_context = tiny::CTX;
@@ -9058,6 +9059,15 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         let (n, l) = (host.load(Ordering::Relaxed), *ledger.lock().unwrap());
         (loaded.expect("the load fits"), cfg, n, l)
+    }
+
+    /// The model file [`fake_cuda_seats`] writes and loads for `before` and `forced`.
+    fn fake_cuda_path(before: u64, forced: Option<u32>) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "larch-fake-cuda-{before}-{forced:?}-{:?}-{}.gguf",
+            std::thread::current().id(),
+            std::process::id()
+        ))
     }
 
     /// (fake props at `before`, the tiny hybrid's config, the weight bytes its plan places on the
@@ -9137,6 +9147,53 @@ mod tests {
         assert_eq!(plan(bytes + one, Some(layer), None).0, 0, "resident");
     }
 
+    /// Through the real loader on a fake CUDA card: a many-chats load (4 seats asked) plans whole
+    /// layers with the stream pool, as a one-chat load does, with or without a recorded route
+    /// histogram beside the model: a card a layer short of the weights and four slots moves one
+    /// layer without the pool and two with it. The expert cache (only `LARCH_EXPERT_CACHE` takes
+    /// it) ran slower there (5070 Ti, the hybrid MoE target, W4@8: with no histogram it kept no
+    /// pool, prompt chunks beside decode rows 472 ms against 130, 26 Nov; from a recorded one
+    /// 188.5 tok/s against 237.1, 27 Nov).
+    #[test]
+    fn a_many_chats_load_keeps_whole_layers_and_the_stream_pool() {
+        use larch_model::{Histogram, MoeCfg};
+        let (props, c, bytes, l, slot) = fake_cuda_terms();
+        let need = |beside, seats| {
+            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+        };
+        let four = need(reserve_at(&l, slot, 4), 4) + crate::FREE_SWING;
+        let file = tiny::gguf(Arch::Qwen35Moe, 3);
+        let g = larch_model::gguf::Gguf::parse(&file).unwrap();
+        let layer: u64 = (g.tensors.iter())
+            .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
+            .map(|t| t.bytes)
+            .sum();
+        let short = bytes - layer + four;
+        let m = MoeCfg::from_gguf(&g, c.arch).unwrap().unwrap();
+        let mut hot = Histogram::uniform(file.len() as u64, c.n_layers, m.experts);
+        hot.counts[0] = 1;
+        let hist = Histogram::path(&fake_cuda_path(short, None));
+        let plan = |pool, recorded: bool| {
+            if recorded {
+                hot.write(&hist).unwrap();
+            }
+            crate::FAKE_POOL.set(pool);
+            let (loaded, _, n, _) = fake_cuda_seats(short, |_, _| 1 << 30, None, Some(4), None);
+            crate::FAKE_POOL.set(None);
+            if recorded {
+                std::fs::remove_file(&hist).unwrap();
+            }
+            (n, loaded.model.state_slots())
+        };
+        assert_eq!(plan(Some(0), false), (1, 4), "no pool");
+        assert_eq!(plan(Some(layer), false), (2, 4), "the pool's layer");
+        assert_eq!(
+            plan(Some(layer), true),
+            (2, 4),
+            "a histogram beside the model"
+        );
+    }
+
     /// Through the real loader on a fake CUDA card: a host layer moved without the pool that
     /// already leaves its room keeps it, so the check after the load wants the pool too (Windows
     /// 5070 Ti, 24 Nov: a documents reload at 10 host layers cleared the check by 24 MB and left
@@ -9208,29 +9265,21 @@ mod tests {
     #[test]
     fn only_a_differing_plan_replans() {
         use super::replan_due;
-        assert!(replan_due(4, 2, true, Some(1), true));
-        assert!(replan_due(1, 4, true, Some(4), true));
+        assert!(replan_due(4, 2, true, Some(1)));
+        assert!(replan_due(1, 4, true, Some(4)));
         assert!(
-            !replan_due(2, 2, true, Some(1), true),
+            !replan_due(2, 2, true, Some(1)),
             "the plan for one chat already holds 2"
         );
         assert!(
-            !replan_due(4, 2, false, Some(1), true),
+            !replan_due(4, 2, false, Some(1)),
             "no host experts: the slots grow live"
         );
-        assert!(!replan_due(4, 0, true, Some(1), true), "no recurrent state");
+        assert!(!replan_due(4, 0, true, Some(1)), "no recurrent state");
+        assert!(!replan_due(4, 2, true, None), "a forced or custom load");
         assert!(
-            !replan_due(4, 2, true, None, true),
-            "a forced or custom load"
-        );
-        assert!(
-            replan_due(4, 4, true, Some(1), true),
-            "many chats take the expert cache"
-        );
-        assert!(!replan_due(8, 8, true, Some(4), true), "already many chats");
-        assert!(
-            !replan_due(4, 8, true, Some(1), false),
-            "off CUDA or with a forced cache, crossing 4 seats changes no plan"
+            !replan_due(4, 4, true, Some(1)),
+            "crossing 4 seats on slots it holds picks no other plan"
         );
     }
 
@@ -9465,9 +9514,9 @@ mod tests {
     /// step (decode rows 5 to 1), and each step's state batch. As [`decode`], `graphs` runs the
     /// padded shape a replay runs. The longest request has a repeat penalty, whose window rows
     /// change with the real rows of a bucket.
-    fn hybrid_decode(graphs: bool) -> (Vec<Vec<u32>>, Vec<StateStep>) {
+    fn hybrid_decode(graphs: bool, slots: u32) -> (Vec<Vec<u32>>, Vec<StateStep>) {
         let path = std::env::temp_dir().join(format!(
-            "larch-pad-hybrid-{graphs}-{}.gguf",
+            "larch-pad-hybrid-{graphs}-{slots}-{}.gguf",
             std::process::id()
         ));
         std::fs::write(&path, tiny::gguf(Arch::Qwen35, 3)).unwrap();
@@ -9475,7 +9524,7 @@ mod tests {
         let (spy, p) = (seen.clone(), path.clone());
         let load = Box::new(move |dev: &_, s: &_, rows| {
             let mut m = Transformer::load(&p, dev, s, rows)?;
-            m.alloc_state(s, 8)?;
+            m.alloc_state(s, slots)?;
             Ok(Box::new(StateSpy(m, spy)) as Box<dyn Model>)
         });
         let mut opts = EngineOptions::new(path.clone(), CPU);
@@ -9510,7 +9559,7 @@ mod tests {
     /// bucket's steps read the state batch at the offsets its capture froze.
     #[test]
     fn padded_hybrid_decode_keeps_held_states() {
-        let ((on, padded), (off, exact)) = (hybrid_decode(true), hybrid_decode(false));
+        let ((on, padded), (off, exact)) = (hybrid_decode(true, 8), hybrid_decode(false, 8));
         assert_eq!(on, off);
         assert_eq!(padded.len(), exact.len());
         let (mut buckets, mut frozen) = (Vec::new(), std::collections::HashMap::new());
@@ -9530,6 +9579,22 @@ mod tests {
             assert!(lens[nd..rows].iter().all(|&l| l == 1), "{lens:?}");
         }
         assert_eq!(buckets, [(5, 8), (4, 4), (3, 4), (2, 2), (1, 1)]);
+    }
+
+    /// A hybrid's decode buckets stop at its state slots, as vLLM's stop at max_num_seqs: on 6
+    /// slots, 5 rows pad to 6, which one free slot holds, where a bucket of 8 found too few free
+    /// slots to pad into and ran eager (5070 Ti, the hybrid MoE target, W4@8, 26 Nov: 6-row steps
+    /// eager at 25.7 ms against 13.8 for a replayed 4-row step). Padded or exact, the tokens match.
+    #[test]
+    fn hybrid_decode_buckets_stop_at_the_state_slots() {
+        let ((on, padded), (off, exact)) = (hybrid_decode(true, 6), hybrid_decode(false, 6));
+        assert_eq!(on, off);
+        assert_eq!(padded.len(), exact.len());
+        let buckets: Vec<_> = (padded.iter().zip(&exact))
+            .filter(|(p, _)| p.1 == 0)
+            .map(|(p, x)| (x.0, p.0))
+            .collect();
+        assert_eq!(buckets.first(), Some(&(5, 6)), "{buckets:?}");
     }
 
     /// Speculative decoding (guess.rs): checked guesses never change greedy output, and sampled
@@ -10020,6 +10085,72 @@ mod tests {
             assert!(!e.auto && e.switch.is_none(), "the demand switch ends");
             assert_eq!((e.demand.many, e.partial.seats_auto), (many, from));
             assert_eq!(drive(&mut e, &[queued])[0].ids.len(), 2);
+        }
+
+        /// Eight chats whose turns end and come back, on a load that already holds MANY_SEATS
+        /// state slots, gated as the hybrid MoE target on CUDA (W4@8): four run while the rest
+        /// wait, the demand that switched it on 26 Nov, yet no switch arms. That switch reloaded
+        /// onto whole layers without the prefill pool (no route histogram), 186.6 tok/s. The load
+        /// stays, so its pool does, and its seats never drop.
+        #[test]
+        fn many_chats_on_held_seats_keep_their_load() {
+            let path = std::env::temp_dir().join(format!("larch-held-{}.gguf", std::process::id()));
+            std::fs::write(&path, tiny::gguf(Arch::Qwen35, 3)).unwrap();
+            let p = path.clone();
+            let load = Box::new(move |dev: &_, s: &_, rows| {
+                let mut m = Transformer::load(&p, dev, s, rows)?;
+                m.alloc_state(s, MANY_SEATS)?;
+                Ok(Box::new(m) as Box<dyn Model>)
+            });
+            let mut opts = EngineOptions::new(path.clone(), CPU);
+            opts.max_context = 512;
+            let clock = Arc::new(AtomicU64::new(0));
+            opts.clock = Some(clock.clone());
+            // The file stays while the engine runs: a switch's reload reads it again.
+            let (mut e, h) = Engine::init(opts, load, None).unwrap();
+            let l = e.loaded.as_mut().unwrap();
+            (l.info.caps.backend, l.info.class.experts_in_ram) = (Backend::Cuda, true);
+            l.seats_planned = Some(1);
+            // No room for a fifth slot, as the 5070 Ti at 4 host layers: every live grow defers.
+            e.grow_at = u64::MAX;
+            assert!(e.auto, "nobody set the seats");
+            // Answers of 24 tokens: a turn holds its seat for well over the second demand waits.
+            let submit = |i: usize| {
+                h.submit(Request::new(vec![1, 2, 3 + i as u32], 24))
+                    .unwrap()
+            };
+            let mut chats: Vec<_> = (0..8).map(submit).collect();
+            let (mut turns, mut pressed) = (0, 0u64);
+            for step in 0.. {
+                if turns >= 24 {
+                    break;
+                }
+                assert!(step < 10_000, "{turns} turns ended in {step} steps");
+                clock.fetch_add(100_000_000, Ordering::Release);
+                assert!(e.turn().unwrap());
+                let full = e.sched.n_running() == MANY_SEATS as usize;
+                pressed += u64::from(full && e.sched.n_waiting() >= 2);
+                for (i, c) in chats.iter_mut().enumerate() {
+                    if c.events
+                        .try_iter()
+                        .any(|ev| matches!(ev, EngineEvent::Done { .. }))
+                    {
+                        *c = submit(i);
+                        turns += 1;
+                    }
+                }
+                let switched = e.switch.is_some() || e.demand.many || !e.auto;
+                assert!(
+                    !switched,
+                    "turn {turns}, {pressed} pressed: a switch armed or ran"
+                );
+                assert!(e.loaded.as_ref().unwrap().model.state_slots() >= MANY_SEATS);
+            }
+            std::fs::remove_file(&path).unwrap();
+            assert!(
+                pressed >= 10,
+                "chats waited on full seats for {pressed} turns"
+            );
         }
 
         /// Demand's clock stops while a gate blocks it: one chat before and after a blocked

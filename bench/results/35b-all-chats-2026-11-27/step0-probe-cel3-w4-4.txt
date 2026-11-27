@@ -1,0 +1,8 @@
+# Lane B probe, dev 91c3bff, LARCH_CPU_EXPERT_LAYERS=3, W4@4 --slice 1/10, LARCH_FIT_DIAGNOSTICS=1; run 2026-11-27T02:35:39Z 2026-11-27T02:36:34Z
+724 MiB, 15272 MiB, 36
+larch_host_experts_load,3,303149056,452607922,4
+larch_host_experts_load,3,498466816,394442796,2
+larch_context_fit,2560,free=498466816,scratch=68520704,vision=0,kv_blocks=614,graph_bytes=8388608,graphs=true
+larch_fit_ledger,free_before=15631122432,host_layers=3,weights_on_device=14745496064,activation=56332288,routers=41943040,hybrid=201447040,reserve_scratch=68520704,reserve_graph_slots=12582912,reserve_graph_arena=67108864,graphs_paid=false,fit_scratch=68520704,headroom=117440512,free_after_load=498466816,model_bytes=15132655616,kv_blocks=614,kv_block_bytes=327680,graph_quota=8388608,graph_arena=67108864
+larch_stream_pool,184549376,0,false,64
+chat.jsonl c=4: 20 requests, 0 failed, 0 cancelled, 159.13 tok/s, TTFT p50 5145.2 p99 6944.3 ms, TPOT p50 9.82 p99 14.35 ms

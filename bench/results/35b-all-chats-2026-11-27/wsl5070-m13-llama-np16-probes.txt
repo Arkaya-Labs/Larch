@@ -1,0 +1,50 @@
+== --n-cpu-moe 3, -np 16, -c 40960: free 15009 MiB, CUDA0 buffers 16972 MiB (exit 0)
+0.00.303.205 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.00.836.591 I load_tensors:        CUDA0 model buffer size = 14157.71 MiB
+0.03.831.865 I llama_context: n_seq_max             = 16
+0.03.853.396 I llama_kv_cache:      CUDA0 KV buffer size =   800.00 MiB
+0.04.253.249 I llama_memory_recurrent:      CUDA0 RS buffer size =  1005.00 MiB
+0.04.297.629 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+== --n-cpu-moe 4, -np 16, -c 40960: free 15009 MiB, CUDA0 buffers 16608 MiB (exit 0)
+0.00.281.342 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.00.793.229 I load_tensors:        CUDA0 model buffer size = 13793.71 MiB
+0.01.993.422 I llama_context: n_seq_max             = 16
+0.02.017.141 I llama_kv_cache:      CUDA0 KV buffer size =   800.00 MiB
+0.02.070.389 I llama_memory_recurrent:      CUDA0 RS buffer size =  1005.00 MiB
+0.02.130.406 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+== --n-cpu-moe 5, -np 16, -c 40960: free 15009 MiB, CUDA0 buffers 16244 MiB (exit 0)
+0.00.276.789 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.00.795.150 I load_tensors:        CUDA0 model buffer size = 13429.71 MiB
+0.02.470.178 I llama_context: n_seq_max             = 16
+0.02.491.318 I llama_kv_cache:      CUDA0 KV buffer size =   800.00 MiB
+0.02.504.175 I llama_memory_recurrent:      CUDA0 RS buffer size =  1005.00 MiB
+0.02.570.164 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+== --n-cpu-moe 6, -np 16, -c 40960: free 15009 MiB, CUDA0 buffers 15914 MiB (exit 0)
+0.00.257.227 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.00.762.740 I load_tensors:        CUDA0 model buffer size = 13099.71 MiB
+0.01.919.107 I llama_context: n_seq_max             = 16
+0.01.944.623 I llama_kv_cache:      CUDA0 KV buffer size =   800.00 MiB
+0.01.957.766 I llama_memory_recurrent:      CUDA0 RS buffer size =  1005.00 MiB
+0.02.031.054 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+== --n-cpu-moe 7, -np 16, -c 40960: free 15009 MiB, CUDA0 buffers 15584 MiB (exit 0)
+0.00.260.889 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.00.768.318 I load_tensors:        CUDA0 model buffer size = 12769.71 MiB
+0.01.883.367 I llama_context: n_seq_max             = 16
+0.01.902.535 I llama_kv_cache:      CUDA0 KV buffer size =   800.00 MiB
+0.01.915.270 I llama_memory_recurrent:      CUDA0 RS buffer size =  1005.00 MiB
+0.01.970.834 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+== --n-cpu-moe 8, -np 16, -c 40960: free 15009 MiB, CUDA0 buffers 15220 MiB (exit 0)
+0.00.263.172 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.00.762.999 I load_tensors:        CUDA0 model buffer size = 12405.71 MiB
+0.01.979.246 I llama_context: n_seq_max             = 16
+0.02.002.749 I llama_kv_cache:      CUDA0 KV buffer size =   800.00 MiB
+0.02.014.566 I llama_memory_recurrent:      CUDA0 RS buffer size =  1005.00 MiB
+0.02.054.790 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+== --n-cpu-moe 9, -np 16, -c 40960: free 15009 MiB, CUDA0 buffers 14890 MiB (exit 0)
+0.00.253.797 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.00.752.444 I load_tensors:        CUDA0 model buffer size = 12075.71 MiB
+0.01.915.682 I llama_context: n_seq_max             = 16
+0.01.935.581 I llama_kv_cache:      CUDA0 KV buffer size =   800.00 MiB
+0.01.948.350 I llama_memory_recurrent:      CUDA0 RS buffer size =  1005.00 MiB
+0.01.985.600 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+fewest --n-cpu-moe that fits -np 16: 9

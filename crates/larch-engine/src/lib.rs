@@ -1412,13 +1412,15 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
     let host_plan = plan_experts(&experts, block_experts);
     let moe = MoeCfg::from_gguf(&header, c.arch)?;
     // The expert cache (per-expert residency): 0 keeps whole host layers, 1 places experts
-    // statically, 2 adds dynamic residency. 5070 Ti, 35B, 11 Nov: 4 chats +35 %, 1 chat -33 %
-    // against whole layers, so the demand switch's many-chats plan takes it.
-    // ponytail: only a planned many-chats load records routes, so a card's first one has no
-    // histogram and keeps whole layers; record in fast mode too if that first switch shows.
-    let forced_cache = std::env::var("LARCH_EXPERT_CACHE")
+    // statically, 2 adds dynamic residency. Only LARCH_EXPERT_CACHE takes it: on the 5070 Ti at
+    // W4@8 (the hybrid MoE target, 27 Nov) the cache from a recorded histogram ran 188.5 tok/s
+    // against 237.1 for whole layers and the prefill pool, so neither seats nor a histogram beside
+    // the model pick it.
+    // ponytail: only a load that takes the cache records routes. Pick it by seats again, and
+    // record on whole-layer loads, if a measured per-expert plan beats whole layers with the pool.
+    let cache = std::env::var("LARCH_EXPERT_CACHE")
         .ok()
-        .map(|v| expert_cache(&v));
+        .and_then(|v| expert_cache(&v));
     let load = Box::new(move |dev: &Device, s: &Stream, rows| {
         let before = device_props(dev).map_err(|e| LoadError::Backend(e.code()))?;
         // The effective max_context and fraction, as the fit after the load sees them.
@@ -1455,9 +1457,6 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
             true => asked.load(Ordering::Relaxed).clamp(1, cap.max(1)),
             false => 1,
         };
-        // Measured on CUDA only (the 5070 Ti); elsewhere many chats keep whole layers.
-        let many = before.backend == larch_kernels::Backend::Cuda && floor >= engine::MANY_SEATS;
-        let cache = forced_cache.unwrap_or(many.then_some(false));
         // A hybrid's seats stop at its state slots, so the buckets past them never capture.
         let seats_of = |slots: u32| {
             if c.arch.hybrid() {

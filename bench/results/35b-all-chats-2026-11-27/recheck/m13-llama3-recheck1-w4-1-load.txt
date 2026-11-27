@@ -1,0 +1,7 @@
+0.00.589.743 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.01.161.640 I load_tensors:        CUDA0 model buffer size = 14157.71 MiB
+0.02.577.816 I llama_context: n_seq_max             = 1
+0.02.587.146 I llama_kv_cache:      CUDA0 KV buffer size =    50.00 MiB
+0.02.588.373 I llama_memory_recurrent:      CUDA0 RS buffer size =    62.81 MiB
+0.02.649.499 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+CUDA0 buffers total 15280 MiB

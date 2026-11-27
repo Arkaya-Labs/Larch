@@ -1,0 +1,32 @@
+larch_expert_cache_plan,8,9514,15631122432,17066033152,15890541056,577490095,2560,0.85,576
+larch_expert_cache_load,8,225554432,452607922,4
+larch_expert_cache_hits,0,0,0,0
+larch_expert_cache_plan,8,9321,15631122432,17066033152,15890541056,877337697,2560,0.85,576
+larch_expert_cache_load,8,592838656,452607922,4
+larch_context_fit,2560,free=592838656,scratch=68520704,vision=0,kv_blocks=848,graph_bytes=12582912,graphs=true
+larch_fit_ledger,free_before=15631122432,host_layers=8,weights_on_device=14520363520,activation=56332288,routers=41943040,hybrid=330225280,reserve_scratch=68520704,reserve_graph_slots=12582912,reserve_graph_arena=67108864,graphs_paid=true,fit_scratch=68520704,headroom=117440512,free_after_load=592838656,model_bytes=15038283776,kv_blocks=848,kv_block_bytes=327680,graph_quota=12582912,graph_arena=67108864
+larch_stream_pool,0,0,false,0
+larch_graph_eager,decode=1,reason=quota,short_bytes=54808576,free_bytes=12582912,quota_bytes=12582912
+larch_expert_cache_hits,30362,1318,1458,2048
+larch_expert_cache_hits,1176814,32530,37693,56632
+# step profile by shape (prof.py: interval 3 = CPU side of the forward, interval 4 = GPU wait + download)
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+decode1                      replay     6789       7.12        0.58     7.76    52.70
+decode1                      eager       254      12.85        0.59    13.49     3.43
+prefill chunk>=256           eager        20     122.83        0.38   125.09     2.50
+prefill p16                  eager         1     409.51        1.09   414.11     0.41
+prefill p108                 eager         1     110.53        0.56   116.47     0.12
+prefill p79                  eager         1     110.56        0.55   111.22     0.11
+prefill p230                 eager         1      95.34        0.56   101.00     0.10
+prefill p225                 eager         1      86.92        0.68    90.16     0.09
+prefill p244                 eager         1      84.34        0.60    85.05     0.09
+prefill p251                 eager         1      83.46        0.65    84.14     0.08
+prefill p210                 eager         1      72.74        0.56    73.34     0.07
+prefill p186                 eager         1      68.02        0.61    71.71     0.07
+prefill p77                  eager         1      65.29        0.66    71.26     0.07
+prefill p155                 eager         1      61.52        0.59    67.44     0.07
+prefill p94                  eager         1      64.38        0.55    64.97     0.06
+prefill p171                 eager         1      63.00        0.64    63.68     0.06
+prefill p173                 eager         1      60.22        0.60    63.46     0.06
+prefill p101                 eager         1      49.36        0.59    52.71     0.05
+prefill p63                  eager         1      43.24        0.59    46.58     0.05
