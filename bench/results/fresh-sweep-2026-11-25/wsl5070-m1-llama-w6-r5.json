@@ -1,0 +1,80 @@
+{
+ "schema": "larch-bench/1",
+ "engine": "llama.cpp",
+ "driver": "llama-serve-bench",
+ "mode": "fixed",
+ "llama_cpp": {
+  "tag": "b12723",
+  "commit": "abca692"
+ },
+ "build": "d28ab07fd41b63c1023f43614ad4f741c3ae399e7abd0e1cad8df8ec0aaedf85",
+ "system_info": "CUDA : ARCHS = 1200 | USE_GRAPHS = 1 | FA_QUANTS = q4_0-q4_0,q8_0-q8_0,f16-f16,bf16-bf16,f8_e4m3-f8_e4m3 | NATIVE_FP8 = 1 | BLACKWELL_NATIVE_FP4 = 1 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX_VNNI = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | ",
+ "machine": "wsl5070",
+ "started_at": "2026-11-25T07:51:35Z",
+ "model": "m1.gguf",
+ "date_string": "26 Jul 2024",
+ "params": {
+  "n_ctx": 16384,
+  "n_ctx_seq": 1024,
+  "n_seq_max": 16,
+  "n_batch": 2048,
+  "n_ubatch": 1024,
+  "n_gpu_layers": 99,
+  "flash_attn": "enabled",
+  "type_k": "f16",
+  "type_v": "f16",
+  "n_threads": 4,
+  "n_threads_batch": 4,
+  "kv_unified": false
+ },
+ "fixed": [
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 1,
+   "n_kv": 640,
+   "t_pp": 0.10080028199999999,
+   "speed_pp": 5079.350869276338,
+   "t_tg": 0.902696985,
+   "speed_tg": 141.79730532721342,
+   "t": 1.003497267,
+   "speed": 637.7695496005771
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 4,
+   "n_kv": 2560,
+   "t_pp": 0.283641072,
+   "speed_pp": 7220.392961989652,
+   "t_tg": 1.070219235,
+   "speed_tg": 478.40665095128855,
+   "t": 1.353860307,
+   "speed": 1890.8893234876411
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 8,
+   "n_kv": 5120,
+   "t_pp": 0.537458652,
+   "speed_pp": 7621.051377176454,
+   "t_tg": 1.1111806469999999,
+   "speed_tg": 921.5423277615814,
+   "t": 1.6486392989999998,
+   "speed": 3105.5913826060023
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 16,
+   "n_kv": 10240,
+   "t_pp": 1.073456045,
+   "speed_pp": 7631.425653763029,
+   "t_tg": 1.3230169209999998,
+   "speed_tg": 1547.9771781392055,
+   "t": 2.3964729659999997,
+   "speed": 4272.94617768703
+  }
+ ]
+}

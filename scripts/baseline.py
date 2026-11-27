@@ -6,7 +6,7 @@
 machines: win5070 wsl5070 win4060 sm86 mac, plus cpu (driver checks only, never a baseline number)
 steps, in order:
     models        fetch the machine's GGUFs from bench/models.toml as <dir>/<alias>.gguf; verify sha256
-    build         llama.cpp b11458 (llama-bench, llama-batched-bench, llama-server) + tools/llama-serve-bench
+    build         llama.cpp b11458, or --llama-src's tag (llama-bench, llama-batched-bench, llama-server) + tools/llama-serve-bench
     manifest      bench/manifest/<alias>.jsonl: every workload turn tokenised by the real GGUF (vocab only)
     flags         the honest flag search: -ngl 99 (0 on cpu) -fa on -ctk f16 -ctv f16 fixed; -t, -b, -ub searched
     run           every row of the machine into <out>/<machine>-<alias>-<row>.json
@@ -684,7 +684,7 @@ def main():
     p.add_argument("--out", type=pathlib.Path, default=BENCH / "results")
     p.add_argument("--alias", action="append", help="only these models (default: the machine's)")
     p.add_argument("--row", action="append", help="run: only these rows (single, fixed, w1, w2-4, w4-16, ...)")
-    p.add_argument("--llama-src", type=pathlib.Path, help="build: a checkout of llama.cpp b11458, instead of fetching")
+    p.add_argument("--llama-src", type=pathlib.Path, help="build: a llama.cpp checkout on a tag, instead of fetching b11458; results record its tag")
     p.add_argument("--parallel", type=int, default=1, help="ollama-serve: OLLAMA_NUM_PARALLEL")
     p.add_argument("step", choices=["models", "build", "manifest", "flags", "run", "check", "server", "ollama",
                                     "ollama-serve", "compare"])

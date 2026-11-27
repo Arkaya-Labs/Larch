@@ -1,0 +1,33 @@
+probe n_cpu_moe=41  : exit 0, CUDA0 buffers 2357 MiB of 14857 MiB free, fits yes, S 404.54 t/s CPU_Mapped 14088 MiB
+probe n_cpu_moe=20  : exit 0, CUDA0 buffers 9265 MiB of 14857 MiB free, fits yes, S 762.36 t/s CPU_Mapped 7148 MiB
+probe n_cpu_moe=9  : exit 0, CUDA0 buffers 13031 MiB of 14857 MiB free, fits yes, S 1239.55 t/s CPU_Mapped 3382 MiB
+probe n_cpu_moe=4  : exit 0, CUDA0 buffers 14749 MiB of 14857 MiB free, fits yes, S 1563.97 t/s CPU_Mapped 1664 MiB
+probe n_cpu_moe=1  : exit 0, CUDA0 buffers 15841 MiB of 15267 MiB free, fits no, S 1979.33 t/s CPU_Mapped 572 MiB
+probe n_cpu_moe=2  : exit 134, CUDA0 buffers 15477 MiB of 15803 MiB free, fits no,  CPU_Mapped 936 MiB
+probe n_cpu_moe=3  : exit 0, CUDA0 buffers 15113 MiB of 15758 MiB free, fits yes, S 1204.42 t/s CPU_Mapped 1300 MiB
+fewest layers on the CPU that run (default -b/-ub): 3
+t=4 b=512 ub=128: pp2048 1271.0 tg128 130.42
+t=4 b=512 ub=256: pp2048 2027.2 tg128 135.22
+t=4 b=512 ub=512: pp2048 3058.4 tg128 143.93
+t=4 b=1024 ub=128: pp2048 1022.5 tg128 144.66
+t=4 b=1024 ub=256: pp2048 1656.2 tg128 145.68
+t=4 b=1024 ub=512: pp2048 3369.8 tg128 148.23
+t=4 b=1024 ub=1024: pp2048 5019.6 tg128 145.17
+t=4 b=2048 ub=128: pp2048 1135.3 tg128 142.91
+t=4 b=2048 ub=256: pp2048 1994.3 tg128 147.48
+t=4 b=2048 ub=512: pp2048 3289.2 tg128 147.37
+t=4 b=2048 ub=1024: pp2048 4799.1 tg128 149.15
+t=8 b=512 ub=128: pp2048 1235.8 tg128 56.30
+t=8 b=512 ub=256: pp2048 1947.8 tg128 145.63
+t=8 b=512 ub=512: pp2048 3019.8 tg128 142.90
+t=8 b=1024 ub=128: pp2048 1111.3 tg128 144.76
+t=8 b=1024 ub=256: pp2048 1743.7 tg128 147.35
+t=8 b=1024 ub=512: pp2048 3208.2 tg128 144.02
+t=8 b=1024 ub=1024: pp2048 4845.7 tg128 143.60
+t=8 b=2048 ub=128: pp2048 1119.5 tg128 144.53
+t=8 b=2048 ub=256: pp2048 1914.8 tg128 148.52
+t=8 b=2048 ub=512: pp2048 3242.7 tg128 147.16
+t=8 b=2048 ub=1024: pp2048 4759.7 tg128 147.33
+best 4 1024 1024
+probe n_cpu_moe=3 -t 4 -b 1024 -ub 1024 : exit 0, CUDA0 buffers 15618 MiB of 15713 MiB free, fits yes, S 2529.47 t/s CPU_Mapped 1300 MiB
+final: n_cpu_moe=3 -t 4 -b 1024 -ub 1024

@@ -1,0 +1,80 @@
+{
+ "schema": "larch-bench/1",
+ "engine": "llama.cpp",
+ "driver": "llama-serve-bench",
+ "mode": "fixed",
+ "llama_cpp": {
+  "tag": "b12723",
+  "commit": "abca692"
+ },
+ "build": "d28ab07fd41b63c1023f43614ad4f741c3ae399e7abd0e1cad8df8ec0aaedf85",
+ "system_info": "CUDA : ARCHS = 1200 | USE_GRAPHS = 1 | FA_QUANTS = q4_0-q4_0,q8_0-q8_0,f16-f16,bf16-bf16,f8_e4m3-f8_e4m3 | NATIVE_FP8 = 1 | BLACKWELL_NATIVE_FP4 = 1 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX_VNNI = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | ",
+ "machine": "wsl5070",
+ "started_at": "2026-11-25T08:43:56Z",
+ "model": "m5.gguf",
+ "date_string": "26 Jul 2024",
+ "params": {
+  "n_ctx": 16384,
+  "n_ctx_seq": 1024,
+  "n_seq_max": 16,
+  "n_batch": 2048,
+  "n_ubatch": 1024,
+  "n_gpu_layers": 99,
+  "flash_attn": "enabled",
+  "type_k": "f16",
+  "type_v": "f16",
+  "n_threads": 8,
+  "n_threads_batch": 8,
+  "kv_unified": false
+ },
+ "fixed": [
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 1,
+   "n_kv": 640,
+   "t_pp": 0.09743490099999999,
+   "speed_pp": 5254.790580635989,
+   "t_tg": 0.847393378,
+   "speed_tg": 151.05145180872537,
+   "t": 0.944828279,
+   "speed": 677.3717660921112
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 4,
+   "n_kv": 2560,
+   "t_pp": 0.245344391,
+   "speed_pp": 8347.449850606123,
+   "t_tg": 0.989658082,
+   "speed_tg": 517.3503953661442,
+   "t": 1.235002473,
+   "speed": 2072.8703431511267
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 8,
+   "n_kv": 5120,
+   "t_pp": 0.49480827499999996,
+   "speed_pp": 8277.953718538762,
+   "t_tg": 0.9802032580000002,
+   "speed_tg": 1044.681285888972,
+   "t": 1.4750115330000002,
+   "speed": 3471.159299742234
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 16,
+   "n_kv": 10240,
+   "t_pp": 0.980357553,
+   "speed_pp": 8356.134937637391,
+   "t_tg": 1.1275954429999997,
+   "speed_tg": 1816.2542361391936,
+   "t": 2.107952996,
+   "speed": 4857.793328139277
+  }
+ ]
+}

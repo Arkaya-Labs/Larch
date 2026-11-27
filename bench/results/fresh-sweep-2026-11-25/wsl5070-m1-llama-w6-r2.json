@@ -1,0 +1,80 @@
+{
+ "schema": "larch-bench/1",
+ "engine": "llama.cpp",
+ "driver": "llama-serve-bench",
+ "mode": "fixed",
+ "llama_cpp": {
+  "tag": "b12723",
+  "commit": "abca692"
+ },
+ "build": "d28ab07fd41b63c1023f43614ad4f741c3ae399e7abd0e1cad8df8ec0aaedf85",
+ "system_info": "CUDA : ARCHS = 1200 | USE_GRAPHS = 1 | FA_QUANTS = q4_0-q4_0,q8_0-q8_0,f16-f16,bf16-bf16,f8_e4m3-f8_e4m3 | NATIVE_FP8 = 1 | BLACKWELL_NATIVE_FP4 = 1 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX_VNNI = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | ",
+ "machine": "wsl5070",
+ "started_at": "2026-11-25T07:50:46Z",
+ "model": "m1.gguf",
+ "date_string": "26 Jul 2024",
+ "params": {
+  "n_ctx": 16384,
+  "n_ctx_seq": 1024,
+  "n_seq_max": 16,
+  "n_batch": 2048,
+  "n_ubatch": 1024,
+  "n_gpu_layers": 99,
+  "flash_attn": "enabled",
+  "type_k": "f16",
+  "type_v": "f16",
+  "n_threads": 4,
+  "n_threads_batch": 4,
+  "kv_unified": false
+ },
+ "fixed": [
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 1,
+   "n_kv": 640,
+   "t_pp": 0.105079513,
+   "speed_pp": 4872.500693831727,
+   "t_tg": 0.8931284080000002,
+   "speed_tg": 143.31645802940352,
+   "t": 0.9982079210000001,
+   "speed": 641.1489896402054
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 4,
+   "n_kv": 2560,
+   "t_pp": 0.269836157,
+   "speed_pp": 7589.79086705567,
+   "t_tg": 1.0821906639999999,
+   "speed_tg": 473.1144123047065,
+   "t": 1.352026821,
+   "speed": 1893.4535618949826
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 8,
+   "n_kv": 5120,
+   "t_pp": 0.537946012,
+   "speed_pp": 7614.14697503139,
+   "t_tg": 1.124877246,
+   "speed_tg": 910.3215516548905,
+   "t": 1.662823258,
+   "speed": 3079.100545032189
+  },
+  {
+   "pp": 512,
+   "tg": 128,
+   "pl": 16,
+   "n_kv": 10240,
+   "t_pp": 1.074034402,
+   "speed_pp": 7627.31620583602,
+   "t_tg": 1.3222797579999996,
+   "speed_tg": 1548.8401660913883,
+   "t": 2.3963141599999997,
+   "speed": 4273.229349861205
+  }
+ ]
+}
