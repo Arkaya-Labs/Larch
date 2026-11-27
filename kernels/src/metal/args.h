@@ -243,3 +243,57 @@ struct sample_row {
   float repeat_penalty;
   u32 penalty_window;
 };
+
+/// Inkling 2's entries (larch.h ABI 6, inkling.metal). f32_* flags pick a tensor's f32 form over f16.
+/// softcap and loop_gate: thread (column, row); rs as each tensor's row stride.
+struct softcap_args {
+  u64 x_rs, out_rs;
+  float cap;
+};
+struct loop_gate_args {
+  u64 x_rs, msg_rs, gain_rs, forget_rs, out_rs;
+};
+/// situ_mul: thread (k, slot, row) of gu [rows, slots, 2 ff].
+struct situ_args {
+  u64 gu_rs, ids_rs, scale_rs, out_rs;
+  u32 ff, f32_in, has_scale, experts;
+  float beta, lin_beta;
+};
+/// clip_norm: one simdgroup per (head, row), up to CLIP_MAX_DIM elements a head.
+#define CLIP_MAX_DIM 256
+struct clip_args {
+  u64 x_rs, scale_rs, pos_rs, out_rs;
+  u32 heads, dim, f32_in, f32_out, has_scale, has_pos, floor;
+  float t, alpha;
+};
+/// depth_mix: one threadgroup of DEPTH_THREADS per row, up to DEPTH_MAX_STATES states and DEPTH_MAX_Q queries, so
+/// each thread holds a partial sum of squares per state and a partial dot per (state, query) in registers.
+#define DEPTH_THREADS 256
+#define DEPTH_MAX_STATES 16
+#define DEPTH_MAX_Q 4
+struct depth_args {
+  u64 st_rs, q_rs, out_rs;
+  u32 n, d, nq;
+};
+/// moe_route_sigmoid: route_args' one simdgroup a row, with the bias and the down projections' scales.
+struct route_sigmoid_args {
+  u64 lg_rs, ids_rs, w_rs, bias_rs, down_rs;
+  u32 experts, k, has_bias, has_down;
+  float eps, scale;
+};
+/// short_conv: thread (channel c, sequence s), gdn_conv's walk, kernels up to GDN_MAX_TAPS wide. The state's slot
+/// rows are state_rs bytes apart; a slot's tap i of channel c is element i * channels + offset + c.
+struct short_conv_args {
+  u64 x_rs, w_rs, dyn_rs, res_rs, out_rs, slots_rs, lens_rs, snaps_rs, state_rs;
+  u32 seqs, c, taps, channels, offset, heads, has_dyn, f32_dyn, has_res, f32_out, has_snaps;
+  float scale;
+};
+/// attn_rel: simdgroup (split, q head, row), up to ATTN_REL_MAX_NREL relative dims; attn_args' strides and geometry,
+/// with mask, rel_q, rel_w and sink. Each row uses at most min(splits, its positions / ATTN_SPLIT_POS) splits, and
+/// never fewer than 1, so a row's bits depend only on its own positions and the call's splits.
+#define ATTN_REL_MAX_NREL 128
+struct attn_rel_args {
+  attn_args at;
+  u64 mask_rs, relq_rs, relw_rs, sink_rs;
+  u32 n_rel, extent, window, has_mask, f32_relq, f32_sink;
+};

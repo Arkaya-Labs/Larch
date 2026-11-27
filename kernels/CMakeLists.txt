@@ -241,6 +241,11 @@ if(LARCH_BUILD_TESTS)
   # gdn again with its half on GPU 0 (77 where that is not CUDA, so Metal's entries go untested here).
   add_test(NAME gdn_gpu COMMAND gdn)
   set_tests_properties(gdn_gpu PROPERTIES ENVIRONMENT LARCH_TEST_GDN_GPU=1 SKIP_RETURN_CODE 77)
+  # inkling again with its GPU half (77 without a GPU or where GPU 0 lacks an entry); inkling_shapes checks GPU 0
+  # against the CPU reference at Inkling 2 Mini's shapes (77 likewise).
+  add_test(NAME inkling_gpu COMMAND inkling)
+  set_tests_properties(inkling_gpu PROPERTIES ENVIRONMENT LARCH_TEST_INKLING_GPU=1 SKIP_RETURN_CODE 77)
+  set_tests_properties(inkling_shapes PROPERTIES SKIP_RETURN_CODE 77)
   if(BACKEND STREQUAL "CUDA")
     # ops.cu picks the tensor-core prefill and decode from LARCH_PREFILL_TC and LARCH_DECODE_TC once, at library
     # load; unset they are the default on sm_120, so `attention` pins both CUDA-core dispatches, attention_prefill_tc

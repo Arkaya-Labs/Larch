@@ -52,6 +52,9 @@ struct kernels {
   id<MTLComputePipelineState> gemm, gemv, gemm_tensor, gemm_tensor_deep, rmsnorm, qk_norm, rope, silu_mul, add, kv_write, attn, attn_split,
       attn_split_reduce, sp_copy, sp_penalty, sp_part, sp_merge, moe_route, moe_group, moe_gather, moe_reduce,
       sigmoid_mul, gdn_conv, gdn, gdn1, layernorm, gelu, rope_multi, draft_conv;
+  // Inkling 2's entries (inkling.metal)
+  id<MTLComputePipelineState> short_conv, clip_norm, depth_mix, loop_gate, situ_mul, moe_route_sigmoid, attn_rel,
+      attn_rel_reduce, softcap;
   id<MTLComputePipelineState> attn_full_sg[2], attn_full_nax;  // head_dim 64 and 72; NAX 64, nil without the tensor API
   id<MTLComputePipelineState> gdn_chunk[2];  // head_dim 64 and 128; nil when LARCH_METAL_GDN_CHUNK=0
 };
@@ -456,6 +459,15 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
     k.gelu = pipe("vv_gelu", 256);  // each
     k.rope_multi = pipe("vv_rope_multi", 256);  // each
     k.draft_conv = pipe("vv_draft_conv", 256);  // each
+    k.short_conv = pipe("vv_short_conv", 256);  // each, as are loop_gate, situ_mul and softcap
+    k.loop_gate = pipe("vv_loop_gate", 256);
+    k.situ_mul = pipe("vv_situ_mul", 256);
+    k.softcap = pipe("vv_softcap", 256);
+    k.clip_norm = pipe("vv_clip_norm", 32);
+    k.depth_mix = pipe("vv_depth_mix", DEPTH_THREADS);
+    k.moe_route_sigmoid = pipe("vv_moe_route_sigmoid", 32);
+    k.attn_rel = pipe("vv_attn_rel", 32);
+    k.attn_rel_reduce = pipe("vv_attn_rel_reduce", 32);
     // MLX attention's constants: no mask, causal, sinks, window or lse; unaligned, so the last query and key
     // blocks always take the bounds-checked loads (a uniform branch per block, nothing on whole blocks).
     MTLFunctionConstantValues* dense = [MTLFunctionConstantValues new];
@@ -1615,6 +1627,17 @@ uint32_t automatic_attn_splits(const mtl_stream* stream, const attn_view& a, con
   return u32(std::clamp(desired, int64_t(1), std::min<int64_t>(ATTN_MAX_SPLITS, a.table.cols)));
 }
 
+// Grows the stream's split-K scratch to every (row, q head, split)'s partial_stride floats.
+void split_scratch(mtl_stream* stream, const attn_view& a, uint32_t split_count, uint32_t partial_stride) {
+  const int64_t partials = cpu::mul(cpu::mul(a.q.rows, a.q.shape[1]), int64_t(split_count));
+  const uint64_t bytes = uint64_t(cpu::mul(cpu::mul(partials, int64_t(partial_stride)), int64_t(sizeof(float))));
+  if (bytes > stream->dev->dev.maxBufferLength) throw std::bad_alloc();
+  if (stream->attn_scratch.length < bytes) {
+    stream->attn_scratch = [stream->dev->dev newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+    if (!stream->attn_scratch) throw std::bad_alloc();
+  }
+}
+
 // Split-K decode, or with span 1 larch_attn's causal spans on decode's kernels (vv_attn_split's prefill rows).
 void attend_split_k(larch_stream* vs, const attn_view& a, const larch_kv_pool* pool, uint32_t splits, float scale,
                     uint32_t span = 0) {
@@ -1630,14 +1653,8 @@ void attend_split_k(larch_stream* vs, const attn_view& a, const larch_kv_pool* p
   const arg query = input(a.q), key = input(a.k), value = input(a.v), table = input(a.table),
             lengths = input(a.lens), starts = input_or(a.start, at(a.lens)), output = at(a.out);
   const uint32_t partial_stride = pool->head_dim + 2;
-  const int64_t partials = cpu::mul(cpu::mul(a.q.rows, a.q.shape[1]), int64_t(split_count));
-  const uint64_t bytes = uint64_t(cpu::mul(cpu::mul(partials, int64_t(partial_stride)), int64_t(sizeof(float))));
   auto* mutable_stream = static_cast<mtl_stream*>(vs);
-  if (bytes > mutable_stream->dev->dev.maxBufferLength) throw std::bad_alloc();
-  if (mutable_stream->attn_scratch.length < bytes) {
-    mutable_stream->attn_scratch = [mutable_stream->dev->dev newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
-    if (!mutable_stream->attn_scratch) throw std::bad_alloc();
-  }
+  split_scratch(mutable_stream, a, split_count, partial_stride);
   const attn_args args{a.q.rs, a.out.rs, a.table.rs, a.lens.rs, a.start.rs, u32(a.q.shape[1]), pool->n_kv_heads,
                        pool->head_dim, pool->block_tokens, u32(a.table.rows), span, split_count, partial_stride, scale,
                        u32(a.q.rows)};
@@ -1762,6 +1779,160 @@ larch_status sample_prep(larch_stream* vs, const larch_tensor* logits, const lar
   });
 }
 
+// Inkling 2's entries (larch.h ABI 6): the CPU reference's checks, then inkling.metal's kernels.
+
+larch_status short_conv(larch_stream* vs, const larch_tensor* x, const larch_tensor* w, const larch_tensor* dyn,
+                         const larch_tensor* residual, const larch_conv_state* state, uint32_t offset,
+                         const larch_tensor* slots_i32, const larch_tensor* q_lens_i32,
+                         const larch_tensor* snap_slots_or_null, const larch_tensor* out) {
+  return run("short_conv", [&] {
+    const cpu::short_conv_checked c = cpu::check_short_conv(sizer(vs), x, w, dyn, residual, state, offset, slots_i32,
+                                                            q_lens_i32, snap_slots_or_null, out);
+    const view xv = c.in, wv = c.w, dv = c.dyn, rv = c.residual, o = c.out, st = c.state, slots = c.slots,
+               lens = c.lens, snaps = c.snaps;
+    writable(o);
+    writable(st);
+    if (state->kernel > GDN_MAX_TAPS)
+      throw unsupported("a conv kernel wider than " + std::to_string(GDN_MAX_TAPS));
+    const float scale = 1.0f / sqrtf(float((dv.b ? 2 : 1) * state->kernel + 1));
+    const short_conv_args args{xv.rs, wv.rs, dv.rs, rv.rs, o.rs, slots.rs, lens.rs, snaps.rs, st.rs, u32(slots.rows),
+                               u32(xv.cols), state->kernel, state->channels, offset, dv.b ? u32(dv.shape[1]) : 1u,
+                               dv.b ? 1u : 0u, dv.dtype == LARCH_F32 ? 1u : 0u, rv.b ? 1u : 0u,
+                               o.dtype == LARCH_F32 ? 1u : 0u, snaps.b ? 1u : 0u, scale};
+    each(static_cast<mtl_stream*>(vs), ks(vs).short_conv,
+         {input(xv), input(wv), input_or(dv, at(xv)), input_or(rv, at(xv)), at(st), input(slots), input(lens),
+          input_or(snaps, at(lens)), at(o)},
+         args, xv.cols, slots.rows);
+  });
+}
+
+larch_status clip_norm(larch_stream* vs, const larch_tensor* x, const larch_tensor* scale, float t,
+                        const larch_tensor* pos_i32, uint32_t floor, float alpha, const larch_tensor* out) {
+  return run("clip_norm", [&] {
+    const cpu::clip_norm_checked c = cpu::check_clip_norm(sizer(vs), x, scale, t, pos_i32, floor, alpha, out);
+    const view xv = c.x, sv = c.scale, pv = c.pos, o = c.out;
+    writable(o);
+    if (xv.shape[2] > CLIP_MAX_DIM) throw unsupported("a head wider than " + std::to_string(CLIP_MAX_DIM));
+    const clip_args args{xv.rs,
+                         sv.rs,
+                         pv.rs,
+                         o.rs,
+                         u32(xv.shape[1]),
+                         u32(xv.shape[2]),
+                         xv.dtype == LARCH_F32 ? 1u : 0u,
+                         o.dtype == LARCH_F32 ? 1u : 0u,
+                         sv.b ? 1u : 0u,
+                         pv.b ? 1u : 0u,
+                         pv.b ? floor : 1u,
+                         t,
+                         alpha};
+    groups(static_cast<mtl_stream*>(vs), ks(vs).clip_norm,
+           {input(xv), input_or(sv, at(xv)), input_or(pv, at(xv)), at(o)}, args, xv.shape[1], 32, xv.rows);
+  });
+}
+
+larch_status depth_mix(larch_stream* vs, const larch_tensor* states, const larch_tensor* query,
+                        const larch_tensor* out) {
+  return run("depth_mix", [&] {
+    const auto c = cpu::check_depth_mix(sizer(vs), states, query, out);
+    const view sv = c.a, qv = c.b, o = c.out;
+    writable(o);
+    if (sv.shape[0] > DEPTH_MAX_STATES || qv.rows > DEPTH_MAX_Q)
+      throw unsupported("more than " + std::to_string(DEPTH_MAX_STATES) + " states or " +
+                        std::to_string(DEPTH_MAX_Q) + " queries");
+    groups(static_cast<mtl_stream*>(vs), ks(vs).depth_mix, {input(sv), input(qv), at(o)},
+           depth_args{sv.rs, qv.rs, o.rs, u32(sv.shape[0]), u32(sv.shape[2]), u32(qv.rows)}, sv.shape[1],
+           DEPTH_THREADS);
+  });
+}
+
+larch_status loop_gate(larch_stream* vs, const larch_tensor* x, const larch_tensor* msg, const larch_tensor* gain,
+                        const larch_tensor* forget, const larch_tensor* out) {
+  return run("loop_gate", [&] {
+    const cpu::loop_gate_checked c = cpu::check_loop_gate(sizer(vs), x, msg, gain, forget, out);
+    const view xv = c.x, mv = c.msg, gv = c.gain, fv = c.forget, o = c.out;
+    writable(o);
+    each(static_cast<mtl_stream*>(vs), ks(vs).loop_gate, {input(xv), input(mv), input(gv), input(fv), at(o)},
+         loop_gate_args{xv.rs, mv.rs, gv.rs, fv.rs, o.rs}, xv.cols, xv.rows);
+  });
+}
+
+larch_status situ_mul(larch_stream* vs, const larch_tensor* gate_up, const larch_tensor* ids,
+                       const larch_tensor* scale, float beta, float lin_beta, const larch_tensor* out) {
+  return run("situ_mul", [&] {
+    const cpu::situ_checked c = cpu::check_situ_mul(sizer(vs), gate_up, ids, scale, beta, lin_beta, out);
+    const view gv = c.gate_up, iv = c.ids, sv = c.scale, o = c.out;
+    writable(o);
+    const situ_args args{gv.rs, iv.rs, sv.rs, o.rs, u32(o.shape[2]), gv.dtype == LARCH_F32 ? 1u : 0u,
+                         sv.b ? 1u : 0u, sv.b ? u32(sv.rows) : 0u, beta, lin_beta};
+    each(static_cast<mtl_stream*>(vs), ks(vs).situ_mul, {input(gv), input(iv), input_or(sv, at(iv)), at(o)}, args,
+         o.shape[2], o.shape[1], o.shape[0]);
+  });
+}
+
+larch_status moe_route_sigmoid(larch_stream* vs, const larch_tensor* logits, const larch_tensor* bias, float eps,
+                                float scale, const larch_tensor* down_scale, const larch_tensor* out_ids,
+                                const larch_tensor* out_weights) {
+  return run("moe_route_sigmoid", [&] {
+    const cpu::route_sigmoid_checked c =
+        cpu::check_moe_route_sigmoid(sizer(vs), logits, bias, eps, scale, down_scale, out_ids, out_weights);
+    const view lv = c.logits, bv = c.bias, dv = c.down_scale, iv = c.ids, wv = c.weights;
+    writable(iv);
+    writable(wv);
+    if (lv.cols > MOE_ROUTE_MAX) throw unsupported("more than " + std::to_string(MOE_ROUTE_MAX) + " experts");
+    const route_sigmoid_args args{lv.rs, iv.rs, wv.rs, bv.rs, dv.rs, u32(lv.cols), u32(iv.cols), bv.b ? 1u : 0u,
+                                  dv.b ? 1u : 0u, eps, scale};
+    groups(static_cast<mtl_stream*>(vs), ks(vs).moe_route_sigmoid,
+           {input(lv), input_or(bv, at(lv)), input_or(dv, at(lv)), at(iv), at(wv)}, args, lv.rows, 32);
+  });
+}
+
+// Split-K always, through the stream's attention scratch: splits 0 means 16, and a row takes at most one split per
+// ATTN_SPLIT_POS of its positions (vv_attn_rel), so rows of a span and rows alone run the same bounds.
+// ponytail: one lane a position, its head's q . k a serial walk of head_dim; the fused one-pass kernel Splash
+// shows is the speed step, after parity.
+larch_status attn_rel(larch_stream* vs, const larch_tensor* q, const larch_kv_pool* pool,
+                       const larch_tensor* block_table_i32, const larch_tensor* q_start_pos_i32,
+                       const larch_tensor* q_lens_i32, const larch_tensor* mask_or_null, const larch_tensor* rel_q,
+                       const larch_tensor* rel_w, const larch_tensor* sink, uint32_t window, uint32_t splits,
+                       float scale, const larch_tensor* out) {
+  return run("attn_rel", [&] {
+    const cpu::attn_checked c = cpu::check_attn_rel(sizer(vs), q, pool, block_table_i32, q_start_pos_i32, q_lens_i32,
+                                                    mask_or_null, rel_q, rel_w, sink, out);
+    const attn_view a = c;
+    const view mv = c.mask, rq = c.rel_q, rw = c.rel_w, sk = c.sinks;
+    writable(a.out);
+    if (pool->head_dim > ATTN_MAX_HEAD_DIM) throw unsupported("head_dim > 256");
+    if (rw.cols > ATTN_REL_MAX_NREL)
+      throw unsupported("more than " + std::to_string(ATTN_REL_MAX_NREL) + " relative dims");
+    if (!a.q.rows) return;
+    const uint32_t split_count = splits ? std::min<uint32_t>(splits, ATTN_MAX_SPLITS) : 16, stride = pool->head_dim + 2;
+    auto* stream = static_cast<mtl_stream*>(vs);
+    split_scratch(stream, a, split_count, stride);
+    const attn_args at_args{a.q.rs, a.out.rs, a.table.rs, a.lens.rs, a.start.rs, u32(a.q.shape[1]), pool->n_kv_heads,
+                            pool->head_dim, pool->block_tokens, u32(a.table.rows), 1, split_count, stride, scale,
+                            u32(a.q.rows)};
+    const attn_rel_args args{at_args, mv.rs, rq.rs, rw.rs, sk.rs, u32(rw.cols), u32(rw.rows), window,
+                             mv.b ? 1u : 0u, rq.dtype == LARCH_F32 ? 1u : 0u, sk.dtype == LARCH_F32 ? 1u : 0u};
+    groups(stream, ks(vs).attn_rel,
+           {input(a.q), input(a.k), input(a.v), input(a.table), input(a.lens), input(a.start),
+            input_or(mv, at(a.lens)), input(rq), input(rw), input(sk), {stream->attn_scratch, 0}},
+           args, cpu::mul(a.q.shape[1], int64_t(split_count)), 32, a.q.rows);
+    groups(stream, ks(vs).attn_rel_reduce, {input(arg{stream->attn_scratch, 0}), at(a.out)}, at_args, a.q.shape[1],
+           32, a.q.rows);
+  });
+}
+
+larch_status softcap(larch_stream* vs, const larch_tensor* x, float cap, const larch_tensor* out) {
+  return run("softcap", [&] {
+    const auto c = cpu::check_softcap(sizer(vs), x, cap, out);
+    const view xv = c.a, o = c.out;
+    writable(o);
+    each(static_cast<mtl_stream*>(vs), ks(vs).softcap, {input(xv), at(o)}, softcap_args{xv.rs, o.rs, cap}, xv.cols,
+         xv.rows);
+  });
+}
+
 }  // namespace
 
 static const vv_ops table = {
@@ -1812,6 +1983,14 @@ static const vv_ops table = {
     .attn_full = attn_full,
     .rope_multi = rope_multi,
     .draft_conv = draft_conv,
+    .short_conv = short_conv,
+    .clip_norm = clip_norm,
+    .depth_mix = depth_mix,
+    .loop_gate = loop_gate,
+    .situ_mul = situ_mul,
+    .moe_route_sigmoid = moe_route_sigmoid,
+    .attn_rel = attn_rel,
+    .softcap = softcap,
 };
 
 const vv_ops* vv_metal_ops() { return &table; }
