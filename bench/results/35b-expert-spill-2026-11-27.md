@@ -188,6 +188,26 @@ B = `larch 0.0.0 (1b29835)`, sha256 `b202456c…`, clean tree. One run, W4@4 `--
   Decode at 1 and 4 seats gives the same KL to five figures: decode rows take the resident load's bits whatever the
   placement (Lane Z's resident-bit decode read 0.00405). `--mode all` runs after the report, as planned.
 
+## Debt
+
+Each row has a marker in the code (`ponytail:`) or is named here.
+
+| Row | What | Numbers | When to revisit |
+|---|---|---|---|
+| Cold gate/up read slowly in place | `mmvq_id_mixed` reads a cold Q3_K gate or up expert over the bus at about 3 GB/s; cold Q4_K down at about 24 GB/s (G1). A cold pair costs 359.9, 369.4 and 307.1 µs a step at 1, 4 and 8 rows; gate+up is 336 of the 360 µs at one row. Not chased this run. | G1 table above; the bus does 53 GB/s for a streaming read (Lane Z's Z0) | Before a larger cap or a low-bit cold tail: a cold-path decode with loads in flight together (`id_dot`'s unroll, a wider read per lane), measured with `g1.cu` |
+| Split layers' decode rows uncounted | Decode and check rows of split layers run on the device with no download, eager or replayed, so the histogram and `larch_expert_cache_hits` count only their prompt rows while resident layers count every eager row: the saved file makes split layers look colder. | the review's first finding | Before the default flip or before a load plans from a file it wrote itself |
+| Fused gate_up/down over a mixed layer | Split layers run unfused. | 11.3, 18.1, 23.1 µs a split layer at 1, 4, 8 rows (`SPLIT_LAYER_US`) | If a profile shows split layers |
+| Mixed steps eager | A step with decode and prompt rows on split layers is refused for capture and runs eagerly (its host section has no tag for rows past 0). | about 180 ms for 3 decode rows and a 512-row chunk on SMOKE's 20-layer split | If TTFT matters at many chats: a host tag that carries the row offset |
+| Cost assumes the in-place path | `cheapest_split` charges no round trip; dynamic residency (`LARCH_EXPERT_CACHE=2`) and a backend without the wrap still pay one a split layer (`split_ffn`). Fewer layers than the old uncapped plan's 37. | Lane E: 8 round trips cost more than 1.7 ms at one row | When dynamic residency or another backend is used: a round-trip cost a split layer there |
+| The cap under the first charge | The cost picks the cap under the planned charge; the check after the load is short (pre-existing, about 173 MB on m13) and the loader plans again with a larger charge, so 15 becomes 20. | SMOKE plan lines | Charge what the check finds missing before the first plan |
+| Adaptive swaps | Dynamic residency keeps `split_ffn` for the whole layer; no table update between replays. | — | After the default flip |
+| Low-bit cold experts | Cold experts keep their file dtype; a Q2_K cold copy would read a third fewer bytes. | — | With the cold-path decode row above |
+| Hit counters for replayed split steps | (the brief's row) replayed steps of split layers count nothing; no download was added to keep them. | — | With the uncounted-rows row |
+| The histogram at install | `bench/routes/m13.experts` is copied by hand; nothing ships it beside the model. | — | Before the default flip |
+| The default flip (K4) | Only `LARCH_EXPERT_CACHE=1` takes the cache. A default split needs a measured win at 1, 4 and 8 chats, no recording of its own, and `replan_due` reloading only where seats change the plan. | M below | After the shipped profile |
+| Prompt rows depend on placement | Decode and check rows give the resident load's bits whatever the placement; prompt rows of split layers still take `split_ffn`'s sums (host part in f32). | parity prefill mean KL 0.00418 | With a prompt path that keeps the resident bits |
+| HIP | The wrap answers UNSUPPORTED on HIP until a HIP run checks it. | — | On HIP hardware |
+
 ## Method
 
 - **Machine and order.** One session. Every GPU job (runs, ctest, benches, GPU tests, parity) is its own process in one
@@ -212,3 +232,18 @@ B = `larch 0.0.0 (1b29835)`, sha256 `b202456c…`, clean tree. One run, W4@4 `--
 | `larch 0.0.0 (ef28629)` | `c1ad854a…` | `ef28629` (#20's branch head, before its review fix) | A: rebuilt today, as the night's `b3a53bf3…` binary was gone; the same commit, not the same bytes |
 | `larch 0.0.0 (1b29835)` | `b202456c…` | `1b29835`, this branch, clean tree | B: SMOKE |
 | `larch 0.0.0 (e3ffd4b)` | `582252d6…` | `e3ffd4b`, this branch, clean tree | B: parity and M (the review fixes) |
+
+## M (interim: the session's usage limit cut the run short)
+
+A B B A, `--slice 1/10`, A = `ef28629` (`c1ad854a…`), B = `e3ffd4b` (`582252d6…`, 20 split layers, mapped=1, every plan
+line checked), step profile and graph lines on every run:
+
+| Load | A (A1 / A2) | B (B1 / B2) | tok/s | TTFT p50 | TTFT p99 | TPOT p99 |
+|---|---|---|---|---|---|---|
+| W4@4 | 237.3 (237.2 / 237.4) | 289.6 (289.8 / 289.4) | **+22.0 %** | −1.0 %, noise | −8.4 % | −17.3 % |
+| W4@1 | 135.4 (135.6 / 135.3) | 162.6 (163.1 / 162.1) | **+20.0 %** | −7.9 % | −13.9 % | −17.5 % |
+
+Full W4@4 on B: 298.2 tok/s (TTFT p50 130, p99 617; TPOT p99 15.20), and llama.cpp `--n-cpu-moe 3` straight after it
+261.9 (TPOT p99 17.14): +13.9 %. **That B run is void by the protocol**: its load planned 15 split layers (no replan this
+time), not the 20 the checks expect; it was not run again. The full W4@8, W4@8 at 8 seats and W4@16 runs were still
+running when the session stopped; their files land in the results directory unchecked.
