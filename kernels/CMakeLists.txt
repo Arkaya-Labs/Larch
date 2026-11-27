@@ -227,6 +227,8 @@ if(LARCH_BUILD_TESTS)
   set_tests_properties(fast_mmvq_id PROPERTIES TIMEOUT 120)
   # verify skips (77) where GPU 0 is absent or neither CUDA nor Metal with the staged tile: HIP has no mmvq_verify.
   set_tests_properties(verify PROPERTIES SKIP_RETURN_CODE 77)
+  # wrap_host skips (77) without a CUDA GPU 0 that keeps page-locked host buffers.
+  set_tests_properties(wrap_host PROPERTIES SKIP_RETURN_CODE 77)
   # quant.cu routes Q4_K, Q6_K and Q3_K mmvq (one row, routed rows) to half2 on sm_86/89 unless LARCH_DECODE_H2=0;
   # verify pins the half2 decoder's bytes, verify_f32 the f32 decoder's (Q3_K's row prints its hash and pins nothing
   # yet), and both run the whole gate on their path.

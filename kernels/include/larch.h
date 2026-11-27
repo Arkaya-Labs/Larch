@@ -195,7 +195,9 @@ larch_status larch_device_set_threads(larch_device*, uint32_t threads);
 const char* larch_last_error(const larch_device*);
 
 larch_status larch_buffer_alloc(larch_device*, uint64_t bytes, larch_buffer** out);
-/* Metal: zero-copy mmap; others: UNSUPPORTED */
+/* Metal: zero-copy mmap. CUDA: a range inside page-locked host memory (larch_buffer_alloc_host), which
+ * the device's ops read in place over the bus, until larch_buffer_free of the wrap, which must come
+ * before that host buffer's; any other memory is UNSUPPORTED there. Others: UNSUPPORTED */
 larch_status larch_buffer_wrap_host(larch_device*, void* host, uint64_t bytes, larch_buffer** out);
 /* Host memory at *host, until larch_buffer_free, that the device copies to and from at full speed
  * and asynchronously (page-locked on a GPU, plain memory on a CPU device). Every CPU device's ops take

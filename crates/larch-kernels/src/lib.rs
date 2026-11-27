@@ -427,6 +427,8 @@ struct RawBuffer {
     dev: Device,
     /// A host buffer's memory ([`Buffer::alloc_host`]), else null.
     host: *mut u8,
+    /// The host buffer a view reads in place ([`Buffer::view_host`]), kept alive while the view is.
+    keep: Option<Arc<RawBuffer>>,
 }
 
 // SAFETY: Rust never dereferences `raw` or `host`; it only hands them to the backend, and frees the
@@ -472,6 +474,7 @@ impl Buffer {
                 readonly,
                 dev: dev.clone(),
                 host: ptr::null_mut(),
+                keep: None,
             }),
             _not_sync: PhantomData,
         }
@@ -535,6 +538,29 @@ impl Buffer {
             maps.push(Arc::clone(m));
         }
         Ok(Buffer::new(raw, bytes, true, dev))
+    }
+
+    /// Bytes `range` of `host`, a host buffer of `dev` ([`Buffer::alloc_host`]), as a read-only
+    /// buffer `dev`'s ops read in place, over the bus, without a copy (CUDA's page-locked memory;
+    /// `Unsupported` where the backend wraps none). `range` is not empty and lies inside `host`;
+    /// another buffer, or another device's, is `InvalidArg`. The view keeps `host` alive, and
+    /// uploads to it and op outputs on it are refused, as a wrapped map's are.
+    pub fn view_host(dev: &Device, host: &Buffer, range: Range<u64>) -> Result<Buffer, KError> {
+        let h = &host.inner;
+        let own = h.dev.same(dev);
+        if h.host.is_null() || !own || range.is_empty() || range.end > h.bytes {
+            return Err(KError::InvalidArg);
+        }
+        let bytes = range.end - range.start;
+        let at = h.host.wrapping_add(range.start as usize);
+        let mut raw = ptr::null_mut();
+        // SAFETY: `range` lies inside `host`'s live memory, a host buffer of this open device; the view
+        // keeps that buffer (`keep`), so the memory outlives every op queued on the view, and nothing
+        // writes it through the view, which is read-only on this side of the ABI as a wrapped map is.
+        check(unsafe { sys::larch_buffer_wrap_host(dev.raw(), at.cast(), bytes, &mut raw) })?;
+        let mut b = Buffer::new(raw, bytes, true, dev);
+        Arc::get_mut(&mut b.inner).expect("a new buffer").keep = Some(Arc::clone(h));
+        Ok(b)
     }
 
     /// Its size as allocated.
