@@ -215,6 +215,8 @@ pub enum DType {
     Q5_0,
     Q3K,
     Q2K,
+    /// GGML's NVFP4 (type 40): 64 E2M1 weights and four E4M3 scales in 36 bytes; the CPU devices only.
+    Nvfp4,
 }
 
 impl DType {
@@ -222,6 +224,7 @@ impl DType {
     pub const fn block(self) -> u64 {
         match self {
             DType::Q2K | DType::Q3K | DType::Q4K | DType::Q5K | DType::Q6K => 256,
+            DType::Nvfp4 => 64,
             DType::Q8_0 | DType::Q4_0 | DType::Q5_0 => 32,
             _ => 1,
         }
@@ -240,6 +243,7 @@ impl DType {
             DType::Q5_0 => 22,
             DType::Q3K => 110,
             DType::Q2K => 84,
+            DType::Nvfp4 => 36,
         }
     }
 
@@ -258,7 +262,7 @@ impl DType {
     }
 
     /// The byte alignment of a tensor's offset: the element size, or 2 for a quant block (every block
-    /// size is even, with its f16 scales at even offsets).
+    /// size is even, with its f16 scales at even offsets; NVFP4's are bytes).
     const fn align(self) -> u64 {
         if self.block() == 1 {
             self.block_bytes()
@@ -282,6 +286,7 @@ impl DType {
             DType::Q5_0 => T::LARCH_Q5_0,
             DType::Q3K => T::LARCH_Q3_K,
             DType::Q2K => T::LARCH_Q2_K,
+            DType::Nvfp4 => T::LARCH_NVFP4,
         }
     }
 }
@@ -1470,6 +1475,47 @@ impl GdnState<'_> {
             k_heads: self.k_heads,
             v_heads: self.v_heads,
             head_dim: self.head_dim,
+        })
+    }
+}
+
+/// The short convolutions' state of one layer group (Inkling 2), in `n_slots` slots per layer: `conv` f16
+/// `[n_layers][n_slots][kernel - 1][channels]`, several convolutions of a layer at their own channel offsets
+/// (larch.h's `larch_conv_state`).
+#[derive(Clone, Copy)]
+pub struct ConvState<'a> {
+    pub conv: &'a Buffer,
+    pub n_slots: u32,
+    pub n_layers: u32,
+    pub kernel: u32,
+    pub channels: u32,
+}
+
+impl ConvState<'_> {
+    /// Bytes `conv` needs.
+    pub fn bytes(&self) -> Option<u64> {
+        [self.n_slots, self.kernel.checked_sub(1)?, self.channels, 2]
+            .iter()
+            .try_fold(u64::from(self.n_layers), |a, &d| {
+                a.checked_mul(u64::from(d))
+            })
+    }
+
+    /// The state at `layer`, checked as [`GdnState::raw`] checks its buffers: writable, large enough and on
+    /// `s`'s device. The backend checks the geometry.
+    fn raw(&self, s: &Stream, layer: u32) -> Result<sys::larch_conv_state, KError> {
+        let need = self.bytes().ok_or(KError::InvalidArg)?;
+        if layer >= self.n_layers || self.conv.inner.readonly || self.conv.inner.bytes < need {
+            return Err(KError::InvalidArg);
+        }
+        s.uses(self.conv)?;
+        Ok(sys::larch_conv_state {
+            conv: self.conv.inner.raw,
+            n_slots: self.n_slots,
+            n_layers: self.n_layers,
+            layer,
+            kernel: self.kernel,
+            channels: self.channels,
         })
     }
 }

@@ -13,7 +13,7 @@
 //! SAFETY (every call below): the first two checks hold, so the backend reads and writes only the
 //! tensors' ranges, apart from the device values above.
 
-use crate::{GdnState, KError, KvPool, SampleParams, Stream, Tensor, check};
+use crate::{ConvState, GdnState, KError, KvPool, SampleParams, Stream, Tensor, check};
 use larch_sys as sys;
 
 fn on(s: &Stream, t: &Tensor) -> Result<sys::larch_tensor, KError> {
@@ -941,4 +941,201 @@ pub fn sample_prep(
     );
     // SAFETY: see the module docs; `per_row` holds one entry per logits row (above).
     check(unsafe { sys::larch_sample_prep(s.raw, &l, per_row.as_ptr(), ptr(&pen), &v, &i, &e) })
+}
+
+/// Inkling 2's causal short convolution with a residual over channels `offset..` of `state`'s `layer`:
+/// `x` f16 `[n, C]`, `w` f32 `[C, kernel]`, optional per-head taps `dyn_taps` `[n, heads, kernel]` and
+/// residual f32 `[n, C]`; sequences and snapshots as [`gdn_conv`]. `out` f16 or f32 `[n, C]` may be the
+/// residual.
+#[allow(clippy::too_many_arguments)]
+pub fn short_conv(
+    s: &Stream,
+    x: &Tensor,
+    w: &Tensor,
+    dyn_taps: Option<&Tensor>,
+    residual: Option<&Tensor>,
+    state: &ConvState,
+    layer: u32,
+    offset: u32,
+    slots: &Tensor,
+    q_lens: &Tensor,
+    snaps: Option<&Tensor>,
+    out: &Tensor,
+) -> Result<(), KError> {
+    let (x, w, d, r) = (
+        on(s, x)?,
+        on(s, w)?,
+        on_opt(s, dyn_taps)?,
+        on_opt(s, residual)?,
+    );
+    let st = state.raw(s, layer)?;
+    let (sl, ql, sn, o) = (
+        on(s, slots)?,
+        on(s, q_lens)?,
+        on_opt(s, snaps)?,
+        written(s, out)?,
+    );
+    // SAFETY: see the module docs; the state buffer holds every layer (ConvState::raw).
+    check(unsafe {
+        sys::larch_short_conv(
+            s.raw,
+            &x,
+            &w,
+            ptr(&d),
+            ptr(&r),
+            &st,
+            offset,
+            &sl,
+            &ql,
+            ptr(&sn),
+            &o,
+        )
+    })
+}
+
+/// Inkling 2's clip of `x` `[n, heads, dim]` to an L2 norm of at most `t` per head, after the optional
+/// per-channel `scale` f32 `[heads, dim]`; with `pos` (i32 `[n]`, and `floor`, `alpha`) times the
+/// log-scaled position. `out` may be `x`.
+#[allow(clippy::too_many_arguments)]
+pub fn clip_norm(
+    s: &Stream,
+    x: &Tensor,
+    scale: Option<&Tensor>,
+    t: f32,
+    pos: Option<&Tensor>,
+    floor: u32,
+    alpha: f32,
+    out: &Tensor,
+) -> Result<(), KError> {
+    let (x, sc, p, o) = (
+        on(s, x)?,
+        on_opt(s, scale)?,
+        on_opt(s, pos)?,
+        written(s, out)?,
+    );
+    // SAFETY: see the module docs.
+    check(unsafe { sys::larch_clip_norm(s.raw, &x, ptr(&sc), t, ptr(&p), floor, alpha, &o) })
+}
+
+/// Inkling 2's attention over the depth: `states` f32 `[states, n, d]` normalised and mixed per row by
+/// the softmax of their scores against each `query` f32 `[q, d]`, into `out` f32 `[n, q, d]`.
+pub fn depth_mix(s: &Stream, states: &Tensor, query: &Tensor, out: &Tensor) -> Result<(), KError> {
+    let (st, q, o) = (on(s, states)?, on(s, query)?, written(s, out)?);
+    // SAFETY: see the module docs.
+    check(unsafe { sys::larch_depth_mix(s.raw, &st, &q, &o) })
+}
+
+/// Inkling 2's loop controller: `out = (x - tanh(forget) x) + tanh(gain) msg`, `x`, `msg` and `out`
+/// f32 `[n, d]`, `gain` and `forget` f16 or f32 `[n, d]`; `out` may be `x`.
+pub fn loop_gate(
+    s: &Stream,
+    x: &Tensor,
+    msg: &Tensor,
+    gain: &Tensor,
+    forget: &Tensor,
+    out: &Tensor,
+) -> Result<(), KError> {
+    let (x, m, g, f, o) = (
+        on(s, x)?,
+        on(s, msg)?,
+        on(s, gain)?,
+        on(s, forget)?,
+        written(s, out)?,
+    );
+    // SAFETY: see the module docs.
+    check(unsafe { sys::larch_loop_gate(s.raw, &x, &m, &g, &f, &o) })
+}
+
+/// Inkling 2's expert activation (SITU) on the fused gate-up output `gate_up` `[n, slots, 2 ff]`, each
+/// slot's expert `ids` i32 `[n, slots]` scaling it by `scale[expert]` when given; `out` f16
+/// `[n, slots, ff]`.
+pub fn situ_mul(
+    s: &Stream,
+    gate_up: &Tensor,
+    ids: &Tensor,
+    scale: Option<&Tensor>,
+    beta: f32,
+    lin_beta: f32,
+    out: &Tensor,
+) -> Result<(), KError> {
+    let (gu, i, sc, o) = (
+        on(s, gate_up)?,
+        on(s, ids)?,
+        on_opt(s, scale)?,
+        written(s, out)?,
+    );
+    // SAFETY: see the module docs.
+    check(unsafe { sys::larch_situ_mul(s.raw, &gu, &i, ptr(&sc), beta, lin_beta, &o) })
+}
+
+/// MoE routing with sigmoid gating: the `k` largest `sigmoid(logits) + bias` per row of `logits` f32
+/// `[n, experts]`, their unbiased sigmoids divided by their sum plus `eps`, times `scale` (0 means 1)
+/// and each expert's `down_scale`.
+#[allow(clippy::too_many_arguments)]
+pub fn moe_route_sigmoid(
+    s: &Stream,
+    logits: &Tensor,
+    bias: Option<&Tensor>,
+    eps: f32,
+    scale: f32,
+    down_scale: Option<&Tensor>,
+    ids: &Tensor,
+    weights: &Tensor,
+) -> Result<(), KError> {
+    let (l, b, d) = (on(s, logits)?, on_opt(s, bias)?, on_opt(s, down_scale)?);
+    let (i, w) = (written(s, ids)?, written(s, weights)?);
+    // SAFETY: see the module docs.
+    check(unsafe { sys::larch_moe_route_sigmoid(s.raw, &l, ptr(&b), eps, scale, ptr(&d), &i, &w) })
+}
+
+/// Inkling 2's attention: [`attn`]'s spans (sliding `window` when > 0) with a relative-position bias
+/// (`rel_q` `[n, heads, n_rel]` against `rel_w` f32 `[extent, n_rel]`) and each row's sink logits
+/// `sink` `[n, heads]`. `q_lens` `None` is [`attn_decode`]'s form: `q_start_pos` holds each row's
+/// seq_len (0: a padding row, whose output is zero).
+#[allow(clippy::too_many_arguments)]
+pub fn attn_rel(
+    s: &Stream,
+    q: &Tensor,
+    pool: &KvPool,
+    layer: u32,
+    block_table: &Tensor,
+    q_start_pos: &Tensor,
+    q_lens: Option<&Tensor>,
+    rel_q: &Tensor,
+    rel_w: &Tensor,
+    sink: &Tensor,
+    window: u32,
+    splits: u32,
+    scale: f32,
+    out: &Tensor,
+) -> Result<(), KError> {
+    let (q, p, bt) = (on(s, q)?, pool.raw(s, layer)?, on(s, block_table)?);
+    let (st, ql) = (on(s, q_start_pos)?, on_opt(s, q_lens)?);
+    let (rq, rw, sk, o) = (on(s, rel_q)?, on(s, rel_w)?, on(s, sink)?, written(s, out)?);
+    // SAFETY: see the module docs; a null mask is the causal span.
+    check(unsafe {
+        sys::larch_attn_rel(
+            s.raw,
+            &q,
+            &p,
+            &bt,
+            &st,
+            ptr(&ql),
+            std::ptr::null(),
+            &rq,
+            &rw,
+            &sk,
+            window,
+            splits,
+            scale,
+            &o,
+        )
+    })
+}
+
+/// The logits' soft cap, `out = cap tanh(x / cap)`, `x` and `out` f32 `[n, vocab]`; `out` may be `x`.
+pub fn softcap(s: &Stream, x: &Tensor, cap: f32, out: &Tensor) -> Result<(), KError> {
+    let (x, o) = (on(s, x)?, written(s, out)?);
+    // SAFETY: see the module docs.
+    check(unsafe { sys::larch_softcap(s.raw, &x, cap, &o) })
 }

@@ -129,7 +129,7 @@ static void f16_conversion() {
 }
 
 // Known answers for every quant type, from quant_answers.py: 2 rows of 512 elements of LCG bytes with
-// the f16 scale fields masked to [0, 1), decoded by gguf-py. Then mmvq on the same weights against a
+// the f16 scale fields masked to [0, 1) (NVFP4's E4M3 scale bytes below 1), decoded by gguf-py. Then mmvq on the same weights against a
 // naive dot product over those decoded values.
 static void quant_known_answers() {
   struct answer {
@@ -148,13 +148,16 @@ static void quant_known_answers() {
       {LARCH_Q8_0, 34, {0}, 0x018f1636440f15edu, 0x1b27dd5ef720afadu, -3.36914062f, -0.310546875f},
       {LARCH_Q4_0, 18, {0}, 0x248f8e34b93ae30au, 0x572d3032e27fcabdu, -0.0142478943f, 0.000392198563f},
       {LARCH_Q5_0, 22, {0}, 0x8d6c2dec59caa3d5u, 0xe719fcba43eb9a39u, -0.000108003616f, -0.00174188614f},
+      {LARCH_NVFP4, 36, {}, 0x1fcf880fb5b7f92fu, 0x7b9f31909de7e894u, -0.0625f, 0.0f},
   };
   for (const answer& a : answers) {
     std::vector<uint8_t> raw(size_t(2 * 512 / block_of(a.t) * a.bytes));
     uint64_t s = uint64_t(a.t);
     for (uint8_t& b : raw) b = uint8_t((s = s * 6364136223846793005u + 1442695040888963407u) >> 56);
-    for (size_t blk = 0; blk < raw.size(); blk += size_t(a.bytes))
+    for (size_t blk = 0; blk < raw.size(); blk += size_t(a.bytes)) {
       for (const int o : a.scales) raw[blk + size_t(o) + 1] &= 0x3b;
+      for (size_t o = 0; a.t == LARCH_NVFP4 && o < 4; ++o) raw[blk + o] &= 0x3f;  // E4M3 scales below 1
+    }
     const larch_tensor w = tensor(a.t, {2, 512}, raw.data(), raw.size()), ids = i32({2}, {0, 1});
     const larch_tensor y = out(LARCH_F32, {2, 512}), h = out(LARCH_F16, {2, 512});
     OK(larch_embed(st, &w, &ids, &y));

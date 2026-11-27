@@ -287,6 +287,23 @@ larch_status fast_fused_moe_gate_up(larch_stream*, const larch_tensor*, const la
                                     const larch_tensor*, const larch_tensor*);
 larch_status fast_mmvq_id_mixed(larch_stream*, const larch_tensor*, const larch_tensor*, const larch_tensor*,
                                  const larch_tensor*, const larch_tensor*, const larch_tensor*, const larch_tensor*);
+// inkling.cpp, and attn_rel in ops.cpp
+larch_status short_conv(larch_stream*, const larch_tensor*, const larch_tensor*, const larch_tensor*,
+                         const larch_tensor*, const larch_conv_state*, uint32_t, const larch_tensor*,
+                         const larch_tensor*, const larch_tensor*, const larch_tensor*);
+larch_status clip_norm(larch_stream*, const larch_tensor*, const larch_tensor*, float, const larch_tensor*, uint32_t,
+                        float, const larch_tensor*);
+larch_status depth_mix(larch_stream*, const larch_tensor*, const larch_tensor*, const larch_tensor*);
+larch_status loop_gate(larch_stream*, const larch_tensor*, const larch_tensor*, const larch_tensor*,
+                        const larch_tensor*, const larch_tensor*);
+larch_status situ_mul(larch_stream*, const larch_tensor*, const larch_tensor*, const larch_tensor*, float, float,
+                       const larch_tensor*);
+larch_status moe_route_sigmoid(larch_stream*, const larch_tensor*, const larch_tensor*, float, float,
+                                const larch_tensor*, const larch_tensor*, const larch_tensor*);
+larch_status attn_rel(larch_stream*, const larch_tensor*, const larch_kv_pool*, const larch_tensor*,
+                       const larch_tensor*, const larch_tensor*, const larch_tensor*, const larch_tensor*,
+                       const larch_tensor*, const larch_tensor*, uint32_t, uint32_t, float, const larch_tensor*);
+larch_status softcap(larch_stream*, const larch_tensor*, float, const larch_tensor*);
 // gdn.cpp
 larch_status gdn_conv(larch_stream*, const larch_tensor*, const larch_tensor*, const larch_gdn_state*,
                        const larch_tensor*, const larch_tensor*, const larch_tensor*, const larch_tensor*);
@@ -367,6 +384,14 @@ static constexpr vv_ops table = {
     .fused_gdn = cpu::fused_gdn,
     .fused_attn_in = cpu::fused_attn_in,
     .draft_conv = cpu::draft_conv,
+    .short_conv = cpu::short_conv,
+    .clip_norm = cpu::clip_norm,
+    .depth_mix = cpu::depth_mix,
+    .loop_gate = cpu::loop_gate,
+    .situ_mul = cpu::situ_mul,
+    .moe_route_sigmoid = cpu::moe_route_sigmoid,
+    .attn_rel = cpu::attn_rel,
+    .softcap = cpu::softcap,
 };
 // A table of its own, so handles know their device and the fast CPU backend (lane c1) can replace these
 // slots without touching the reference's.

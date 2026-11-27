@@ -623,6 +623,87 @@ larch_status larch_draft_conv(larch_stream* s, const larch_tensor* x_f16, const 
   VV_FORWARD(s, draft_conv, s, x_f16, dyn_f32, base_f32, stage, out);
 }
 
+larch_status larch_short_conv(larch_stream* s, const larch_tensor* x_f16, const larch_tensor* w_f32,
+                                const larch_tensor* dyn_or_null, const larch_tensor* residual_or_null,
+                                const larch_conv_state* state, uint32_t offset, const larch_tensor* slots_i32,
+                                const larch_tensor* q_lens_i32, const larch_tensor* snap_slots_or_null,
+                                const larch_tensor* out) {
+  if (s && !s->ops->short_conv)
+    return unsupported("short_conv", s, NO_OP, [&](const cpu::sizer& b) {
+      cpu::check_short_conv(b, x_f16, w_f32, dyn_or_null, residual_or_null, state, offset, slots_i32, q_lens_i32,
+                            snap_slots_or_null, out);
+    });
+  VV_FORWARD(s, short_conv, s, x_f16, w_f32, dyn_or_null, residual_or_null, state, offset, slots_i32, q_lens_i32,
+             snap_slots_or_null, out);
+}
+
+larch_status larch_clip_norm(larch_stream* s, const larch_tensor* x, const larch_tensor* scale_or_null, float t,
+                               const larch_tensor* pos_or_null, uint32_t floor, float alpha, const larch_tensor* out) {
+  if (s && !s->ops->clip_norm)
+    return unsupported("clip_norm", s, NO_OP, [&](const cpu::sizer& b) {
+      cpu::check_clip_norm(b, x, scale_or_null, t, pos_or_null, floor, alpha, out);
+    });
+  VV_FORWARD(s, clip_norm, s, x, scale_or_null, t, pos_or_null, floor, alpha, out);
+}
+
+larch_status larch_depth_mix(larch_stream* s, const larch_tensor* states_f32, const larch_tensor* query_f32,
+                               const larch_tensor* out_f32) {
+  if (s && !s->ops->depth_mix)
+    return unsupported("depth_mix", s, NO_OP,
+                       [&](const cpu::sizer& b) { cpu::check_depth_mix(b, states_f32, query_f32, out_f32); });
+  VV_FORWARD(s, depth_mix, s, states_f32, query_f32, out_f32);
+}
+
+larch_status larch_loop_gate(larch_stream* s, const larch_tensor* x_f32, const larch_tensor* msg_f32,
+                               const larch_tensor* gain, const larch_tensor* forget, const larch_tensor* out) {
+  if (s && !s->ops->loop_gate)
+    return unsupported("loop_gate", s, NO_OP,
+                       [&](const cpu::sizer& b) { cpu::check_loop_gate(b, x_f32, msg_f32, gain, forget, out); });
+  VV_FORWARD(s, loop_gate, s, x_f32, msg_f32, gain, forget, out);
+}
+
+larch_status larch_situ_mul(larch_stream* s, const larch_tensor* gate_up, const larch_tensor* ids_i32,
+                              const larch_tensor* scale_or_null, float beta, float lin_beta, const larch_tensor* out) {
+  if (s && !s->ops->situ_mul)
+    return unsupported("situ_mul", s, NO_OP, [&](const cpu::sizer& b) {
+      cpu::check_situ_mul(b, gate_up, ids_i32, scale_or_null, beta, lin_beta, out);
+    });
+  VV_FORWARD(s, situ_mul, s, gate_up, ids_i32, scale_or_null, beta, lin_beta, out);
+}
+
+larch_status larch_moe_route_sigmoid(larch_stream* s, const larch_tensor* logits_f32, const larch_tensor* bias_or_null,
+                                       float eps, float scale, const larch_tensor* down_scale_or_null,
+                                       const larch_tensor* out_ids_i32, const larch_tensor* out_weights_f32) {
+  if (s && !s->ops->moe_route_sigmoid)
+    return unsupported("moe_route_sigmoid", s, NO_OP, [&](const cpu::sizer& b) {
+      cpu::check_moe_route_sigmoid(b, logits_f32, bias_or_null, eps, scale, down_scale_or_null, out_ids_i32,
+                                   out_weights_f32);
+    });
+  VV_FORWARD(s, moe_route_sigmoid, s, logits_f32, bias_or_null, eps, scale, down_scale_or_null, out_ids_i32,
+             out_weights_f32);
+}
+
+larch_status larch_attn_rel(larch_stream* s, const larch_tensor* q, const larch_kv_pool* pool,
+                              const larch_tensor* block_table_i32, const larch_tensor* q_start_pos_i32,
+                              const larch_tensor* q_lens_i32, const larch_tensor* mask_or_null,
+                              const larch_tensor* rel_q, const larch_tensor* rel_w_f32, const larch_tensor* sink,
+                              uint32_t window, uint32_t splits, float scale, const larch_tensor* out) {
+  const char* why = !s ? nullptr : !s->ops->attn_rel ? NO_OP : no_pages(s, pool) ? NO_PAGES : nullptr;
+  if (why)
+    return unsupported("attn_rel", s, why, [&](const cpu::sizer& b) {
+      cpu::check_attn_rel(b, q, pool, block_table_i32, q_start_pos_i32, q_lens_i32, mask_or_null, rel_q, rel_w_f32,
+                          sink, out);
+    });
+  VV_FORWARD(s, attn_rel, s, q, pool, block_table_i32, q_start_pos_i32, q_lens_i32, mask_or_null, rel_q, rel_w_f32,
+             sink, window, splits, scale, out);
+}
+
+larch_status larch_softcap(larch_stream* s, const larch_tensor* x_f32, float cap, const larch_tensor* out) {
+  if (s && !s->ops->softcap)
+    return unsupported("softcap", s, NO_OP, [&](const cpu::sizer& b) { cpu::check_softcap(b, x_f32, cap, out); });
+  VV_FORWARD(s, softcap, s, x_f32, cap, out);
+}
+
 extern "C" {
 int vv_fault_quant_i8_probe = 0;
 }

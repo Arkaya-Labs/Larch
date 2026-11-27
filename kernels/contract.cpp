@@ -23,13 +23,13 @@
 #include "tests/testdata.h"
 
 using dtypes = uint32_t;  // a set: bit t for larch_dtype t, bit NUL for a NULL tensor
-constexpr int NUL = LARCH_Q2_K + 1;
+constexpr int NUL = LARCH_NVFP4 + 1;
 constexpr dtypes F32 = 1u << LARCH_F32, F16 = 1u << LARCH_F16, I32 = 1u << LARCH_I32, OPT = 1u << NUL;
-constexpr dtypes QUANT = 1u << LARCH_Q2_K | 1u << LARCH_Q3_K | 1u << LARCH_Q4_K | 1u << LARCH_Q5_K | 1u << LARCH_Q6_K | 1u << LARCH_Q8_0 |
+constexpr dtypes QUANT = 1u << LARCH_NVFP4 | 1u << LARCH_Q2_K | 1u << LARCH_Q3_K | 1u << LARCH_Q4_K | 1u << LARCH_Q5_K | 1u << LARCH_Q6_K | 1u << LARCH_Q8_0 |
                          1u << LARCH_Q4_0 | 1u << LARCH_Q5_0;
 constexpr dtypes KV = F16 | 1u << LARCH_Q8_0 | 1u << LARCH_FP8_E4M3;  // the pool dtypes
 const char* const NAMES[] = {"f32",  "f16",  "bf16", "i32",  "q4_k",     "q5_k",
-                             "q6_k", "q8_0", "q4_0", "q5_0", "fp8_e4m3", "q3_k", "q2_k", "NULL"};
+                             "q6_k", "q8_0", "q4_0", "q5_0", "fp8_e4m3", "q3_k", "q2_k", "nvfp4", "NULL"};
 constexpr uint32_t DIM0 = 1, DIM1 = 2, DIM2 = 4, POOL = ~0u;
 
 struct arg {
@@ -96,6 +96,19 @@ static larch_status gdn_conv(larch_stream* s, const larch_tensor* const* t) {
 static larch_status gdn(larch_stream* s, const larch_tensor* const* t) {
   return lacking(larch_gdn(s, t[0], t[1], t[2], t[3], t[4], 1e-6f, &gdn_now, t[5], t[6], t[7], t[8]));
 }
+// Inkling 2's short convolutions' state (ABI 6), set up by check() over the GDN conv buffer: 2 slots of one layer,
+// kernel 4, 64 channels, of which the rows below take 32 at offset 32.
+static larch_conv_state conv_now;
+static larch_status short_conv(larch_stream* s, const larch_tensor* const* t, const larch_conv_state* st,
+                               uint32_t offset) {
+  return lacking(larch_short_conv(s, t[0], t[1], t[2], t[3], st, offset, t[4], t[5], t[6], t[7]));
+}
+// attn_rel on an 8-bit pool must be refused on a GPU even where it exists, as attn.
+static larch_status attn_rel(larch_stream* s, const larch_tensor* const* t) {
+  const larch_status got =
+      larch_attn_rel(s, t[0], pool(t[1]), t[2], t[3], t[4], t[5], t[6], t[7], t[8], 2, 0, 0.35f, t[9]);
+  return pool_now.dtype == LARCH_F16 ? lacking(got) : got;
+}
 
 static const larch_sample_params SAMPLE = {1.0f, 0, 1.0f, 1};
 static const larch_draw_params DRAW = {0.7f, 0.9f, 0, 0, 42};
@@ -108,6 +121,13 @@ static const std::vector<arg> DRAW_ARGS = {{{1, 64}, F32}, {{1, 64}, I32}, {{1},
                                            {{1}, I32},     {{1}, I32, 5},  {{1}, F32}};
 static const std::vector<arg> CONV_ARGS = {{{1, 32}, F16}, {{32, 4}, F32}, {{1}, I32}, {{1}, I32, 1}, {{1}, I32, 1},
                                            {{1, 32}, F16}};
+// short_conv: x, w, dyn, residual, slots, q_lens, snaps, out (the valid arguments of its `bad` rows).
+static const std::vector<arg> SHORT_CONV_ARGS = {{{2, 32}, F16},           {{32, 4}, F32},
+                                                 {{2, 2, 4}, F16 | F32 | OPT}, {{2, 32}, F32 | OPT},
+                                                 {{1}, I32},               {{1}, I32, 2},
+                                                 {{2}, I32 | OPT, -1},     {{2, 32}, F16 | F32}};
+static const std::vector<arg> CLIP_ARGS = {{{2, 2, 32}, F16 | F32}, {{2, 32}, F32 | OPT}, {{2}, I32 | OPT},
+                                           {{2, 2, 32}, F16 | F32}};
 static const std::vector<arg> GDN_ARGS = {{{1, 32}, F16}, {{1, 2}, F32}, {{1, 2}, F32}, {{2}, F32}, {{2}, F32},
                                           {{1}, I32}, {{1}, I32, 1}, {{1}, I32, 1}, {{1, 16}, F16}};
 static larch_status draw(larch_stream* s, const larch_tensor* const* t, const larch_draw_params* p) {
@@ -508,6 +528,126 @@ static const std::vector<op> OPS = with_bad_pools({
        return lacking(larch_moe_route(s, t[0], 0.0f, t[1], t[2]));
      },
      true},
+    // Inkling 2's entries (ABI 6): a GPU backend may lack each.
+    {"short_conv", SHORT_CONV_ARGS,
+     [](larch_stream* s, const larch_tensor* const* t) { return short_conv(s, t, &conv_now, 32); }},
+    {"short_conv, out == residual", {{{2, 32}, F16}, {{32, 4}, F32}, {{2, 2, 4}, F16 | F32 | OPT}, {{2, 32}, F32},
+                                     {{1}, I32}, {{1}, I32, 2}, {{2}, I32 | OPT, -1}},
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_short_conv(s, t[0], t[1], t[2], t[3], &conv_now, 0, t[4], t[5], t[6], t[3]));
+     }},
+    {"short_conv, offset + C past the channels", SHORT_CONV_ARGS,
+     [](larch_stream* s, const larch_tensor* const* t) { return short_conv(s, t, &conv_now, 33); }, true},
+    {"short_conv, state NULL", SHORT_CONV_ARGS,
+     [](larch_stream* s, const larch_tensor* const* t) { return short_conv(s, t, nullptr, 0); }, true},
+    {"short_conv, conv NULL", SHORT_CONV_ARGS,
+     [](larch_stream* s, const larch_tensor* const* t) {
+       larch_conv_state st = conv_now;
+       st.conv = nullptr;
+       return short_conv(s, t, &st, 0);
+     },
+     true},
+    {"short_conv, layer >= n_layers", SHORT_CONV_ARGS,
+     [](larch_stream* s, const larch_tensor* const* t) {
+       larch_conv_state st = conv_now;
+       st.layer = 1;
+       return short_conv(s, t, &st, 0);
+     },
+     true},
+    {"short_conv, state past its buffer", SHORT_CONV_ARGS,
+     [](larch_stream* s, const larch_tensor* const* t) {
+       larch_conv_state st = conv_now;
+       st.n_slots = 8;
+       return short_conv(s, t, &st, 0);
+     },
+     true},
+    {"short_conv, kernel 1", SHORT_CONV_ARGS,
+     [](larch_stream* s, const larch_tensor* const* t) {
+       larch_conv_state st = conv_now;
+       st.kernel = 1;
+       return short_conv(s, t, &st, 0);
+     },
+     true},
+    {"short_conv, n_slots 0", SHORT_CONV_ARGS,
+     [](larch_stream* s, const larch_tensor* const* t) {
+       larch_conv_state st = conv_now;
+       st.n_slots = 0;
+       return short_conv(s, t, &st, 0);
+     },
+     true},
+    {"clip_norm", CLIP_ARGS,
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_clip_norm(s, t[0], t[1], 2.0f, t[2], 8, 0.1f, t[3]));
+     }},
+    {"clip_norm, out == x", {{{2, 2, 32}, F16 | F32}, {{2, 32}, F32 | OPT}, {{2}, I32 | OPT}},
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_clip_norm(s, t[0], t[1], 2.0f, t[2], 8, 0.1f, t[0]));
+     }},
+    {"clip_norm, t 0", CLIP_ARGS,
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_clip_norm(s, t[0], t[1], 0.0f, t[2], 8, 0.1f, t[3]));
+     },
+     true},
+    {"clip_norm, floor 0", CLIP_ARGS,
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_clip_norm(s, t[0], t[1], 2.0f, t[2], 0, 0.1f, t[3]));
+     },
+     true},
+    {"clip_norm, alpha < 0", CLIP_ARGS,
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_clip_norm(s, t[0], t[1], 2.0f, t[2], 8, -0.1f, t[3]));
+     },
+     true},
+    {"depth_mix", {{{3, 2, 32}, F32, 0, DIM0}, {{2, 32}, F32}, {{2, 2, 32}, F32}},
+     [](larch_stream* s, const larch_tensor* const* t) { return lacking(larch_depth_mix(s, t[0], t[1], t[2])); }},
+    {"loop_gate", {{{2, 32}, F32}, {{2, 32}, F32}, {{2, 32}, F16 | F32}, {{2, 32}, F16 | F32}, {{2, 32}, F32}},
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_loop_gate(s, t[0], t[1], t[2], t[3], t[4]));
+     }},
+    {"loop_gate, out == x", {{{2, 32}, F32}, {{2, 32}, F32}, {{2, 32}, F16 | F32}, {{2, 32}, F16 | F32}},
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_loop_gate(s, t[0], t[1], t[2], t[3], t[0]));
+     }},
+    {"situ_mul", {{{2, 2, 64}, F16 | F32}, {{2, 2}, I32}, {{8}, F32 | OPT, 0, DIM0}, {{2, 2, 32}, F16}},
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_situ_mul(s, t[0], t[1], t[2], 4.0f, 25.0f, t[3]));
+     }},
+    {"situ_mul, beta 0", {{{2, 2, 64}, F16}, {{2, 2}, I32}, {{8}, F32 | OPT}, {{2, 2, 32}, F16}},
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_situ_mul(s, t[0], t[1], t[2], 0.0f, 25.0f, t[3]));
+     },
+     true},
+    {"moe_route_sigmoid", {{{2, 8}, F32}, {{8}, F32 | OPT}, {{8}, F32 | OPT}, {{2, 2}, I32, 9}, {{2, 2}, F32}},
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_moe_route_sigmoid(s, t[0], t[1], 1e-20f, 8.0f, t[2], t[3], t[4]));
+     }},
+    {"moe_route_sigmoid, eps < 0", {{{2, 8}, F32}, {{8}, F32 | OPT}, {{8}, F32 | OPT}, {{2, 2}, I32, 9}, {{2, 2}, F32}},
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_moe_route_sigmoid(s, t[0], t[1], -1.0f, 8.0f, t[2], t[3], t[4]));
+     },
+     true},
+    {"moe_route_sigmoid, k > experts", {{{2, 2}, F32}, {{2}, F32 | OPT}, {{2}, F32 | OPT}, {{2, 3}, I32, 9}, {{2, 3}, F32}},
+     [](larch_stream* s, const larch_tensor* const* t) {
+       return lacking(larch_moe_route_sigmoid(s, t[0], t[1], 0.0f, 0.0f, t[2], t[3], t[4]));
+     },
+     true},
+    {"attn_rel",
+     {{{1, 2, 32}, F16}, {{1}, KV, 0, POOL}, {{1, 1}, I32, 0, DIM1}, {{1}, I32}, {{1}, I32, 1}, {{1}, I32 | OPT, 1},
+      {{1, 2, 16}, F16 | F32}, {{8, 16}, F32, 0, DIM0}, {{1, 2}, F16 | F32}, {{1, 2, 32}, F16}},
+     attn_rel},
+    // Decode's form: q_lens NULL, q_start_pos the seq_lens (0: a padding row).
+    {"attn_rel, decode",
+     {{{1, 2, 32}, F16}, {{1}, KV, 0, POOL}, {{1, 1}, I32, 0, DIM1}, {{1}, I32}, {{1, 2, 16}, F16 | F32},
+      {{8, 16}, F32, 0, DIM0}, {{1, 2}, F16 | F32}, {{1, 2, 32}, F16}},
+     [](larch_stream* s, const larch_tensor* const* t) {
+       const larch_status got =
+           larch_attn_rel(s, t[0], pool(t[1]), t[2], t[3], nullptr, nullptr, t[4], t[5], t[6], 2, 0, 0.35f, t[7]);
+       return pool_now.dtype == LARCH_F16 ? lacking(got) : got;
+     }},
+    {"softcap", {{{2, 32}, F32}, {{2, 32}, F32}},
+     [](larch_stream* s, const larch_tensor* const* t) { return lacking(larch_softcap(s, t[0], 30.0f, t[1])); }},
+    {"softcap, cap 0", {{{2, 32}, F32}, {{2, 32}, F32}},
+     [](larch_stream* s, const larch_tensor* const* t) { return lacking(larch_softcap(s, t[0], 0.0f, t[1])); }, true},
 });
 
 static const std::vector<op> GDN_OPS = with_bad_states({
@@ -543,7 +683,8 @@ static const std::vector<op> GDN_OPS = with_bad_states({
 
 // A dense tensor over b; the last dim counts blocks for quant.
 static larch_tensor tensor(larch_buffer* b, int dtype, const std::vector<int64_t>& shape) {
-  const int64_t block = (dtype >= LARCH_Q4_K && dtype <= LARCH_Q6_K) || dtype >= LARCH_Q3_K ? 256
+  const int64_t block = dtype == LARCH_NVFP4                                                ? 64
+                        : (dtype >= LARCH_Q4_K && dtype <= LARCH_Q6_K) || dtype >= LARCH_Q3_K ? 256
                         : dtype >= LARCH_Q8_0 && dtype <= LARCH_FP8_E4M3              ? 32
                                                                                         : 1;
   larch_tensor t = {b, 0, larch_dtype(dtype), uint32_t(shape.size()), {}, {}};
@@ -589,6 +730,7 @@ static int check(larch_device* dev, larch_stream* s, const op& o, bool dtypes) {
   pool_now = {pool_k, pool_v, 1, 16, 1, 1, 32, LARCH_F16, 0};
   if (o.pool_rule) o.pool_rule(pool_now);
   gdn_now = {gdn_conv_buf, gdn_ssm_buf, 2, 1, 0, 4, 1, 2, 8};
+  conv_now = {gdn_conv_buf, 2, 1, 0, 4, 64};
   if (o.state_rule) o.state_rule(gdn_now);
   for (size_t i = 0; i < n; ++i) {
     int64_t elems = 1;
@@ -630,7 +772,7 @@ static int check(larch_device* dev, larch_stream* s, const op& o, bool dtypes) {
       eight_bit = eight_bit || (o.args[i].free == POOL && pick[i] != LARCH_F16);
       const bool q2_kernel = on_cuda && (o.name.starts_with("embed") || o.name.starts_with("dequant") ||
                                          o.name.starts_with("mmvq_id"));
-      may_lack = may_lack || pick[i] == LARCH_Q3_K || (pick[i] == LARCH_Q2_K && !q2_kernel);
+      may_lack = may_lack || pick[i] == LARCH_Q3_K || pick[i] == LARCH_NVFP4 || (pick[i] == LARCH_Q2_K && !q2_kernel);
       if (pick[i] != NUL) t[i] = tensor(bufs[i].first, pick[i], o.args[i].shape);
       p[i] = pick[i] == NUL ? nullptr : &t[i];
       combo += (i ? ", " : "") + std::string(NAMES[pick[i]]);

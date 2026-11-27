@@ -93,6 +93,17 @@ fn weights(rng: &mut Rng, t: DType, rows: u64, cols: u64, a: f32) -> Vec<u8> {
     let mut out: Vec<u8> = (0..t.bytes(rows * cols))
         .map(|_| rng.next() as u8)
         .collect();
+    if t == DType::Nvfp4 {
+        // Four E4M3 scale bytes a block: the exponent for a/12 (codes reach 12, at half a scale's value),
+        // a random mantissa.
+        let e = (((a / 6.0).log2().floor() as i32) + 7).clamp(1, 14) as u8;
+        for block in out.chunks_mut(36) {
+            for s in &mut block[..4] {
+                *s = (e << 3) | (rng.next() as u8 & 7);
+            }
+        }
+        return out;
+    }
     // Scale fields: the largest |weight| is about a.
     let (fields, scale): (&[usize], f32) = match t {
         DType::Q4K | DType::Q5K => (&[0, 2], a / (63.0 * 31.0)),
@@ -134,6 +145,7 @@ fn build(arch: Arch, seed: u64, mtp: bool) -> Vec<u8> {
         Arch::Qwen3Moe => "qwen3moe",
         Arch::Qwen35 => "qwen35",
         Arch::Qwen35Moe => "qwen35moe",
+        Arch::Inkling2Loop => panic!("inkling_gguf writes the Inkling 2 model"),
     };
     let k = |key: &str| format!("{name}.{key}");
     let mut kv = vec![
@@ -264,6 +276,231 @@ fn build(arch: Arch, seed: u64, mtp: bool) -> Vec<u8> {
         b.vector(n("nextn.shared_head_norm.weight"), D, 1.0);
     }
     write(&kv, &b.tensors)
+}
+
+/// The generated `inkling2_loop` model ([`inkling_gguf`]): llama.cpp's Inkling 2 Mini graph at a small
+/// size, with every tensor and key the released files carry, in their types.
+pub mod ink {
+    /// `d_model`.
+    pub const D: u64 = 128;
+    /// Attention heads, KV heads and head width.
+    pub const HEADS: u64 = 4;
+    pub const KV_HEADS: u64 = 2;
+    pub const HEAD_DIM: u64 = 32;
+    /// Physical layers: a prelude of 2, a core of 2 run [`PASSES`] times, a coda of 2.
+    pub const LAYERS: u32 = 6;
+    /// Depth-mix block size; the loop core is `[LOOP_START, LOOP_END)`.
+    pub const BLOCK: u32 = 2;
+    pub const LOOP_START: u32 = 2;
+    pub const LOOP_END: u32 = 4;
+    pub const PASSES: u32 = 3;
+    /// The controllers' rank.
+    pub const GATE_RANK: u64 = 8;
+    /// Full-attention layers; the rest attend a window of [`WINDOW`].
+    pub const FULL: [u32; 2] = [3, 5];
+    pub const WINDOW: u32 = 16;
+    /// Relative-bias width and the full layers' extent.
+    pub const REL: u64 = 16;
+    pub const EXTENT: u32 = 24;
+    /// Routed experts, experts per token and an expert's width.
+    pub const EXPERTS: u64 = 8;
+    pub const USED: u32 = 2;
+    pub const FFN: u64 = 64;
+    /// Layers whose experts carry a per-expert `.scale` (the released files' NVFP4 layers).
+    pub const SCALED: u32 = 4;
+    /// The short convolutions' taps.
+    pub const CONV: u64 = 4;
+    /// The byte vocabulary and the padded width of the embedding and output tensors.
+    pub const VOCAB: u32 = 256;
+    pub const VOCAB_PADDED: u32 = 288;
+    pub const CTX: u32 = 512;
+}
+
+/// A tiny `inkling2_loop` GGUF ([`ink`]'s shapes) with a 256-token byte vocabulary (GPT-4o
+/// pre-tokeniser, `inkling2`), so that llama.cpp loads the same bytes larch does. Matrices are Q8_0,
+/// the sink and dynamic-tap projections bf16, the controllers, router, norms, queries, biases and
+/// convolutions f32, as in the released files; layers below [`ink::SCALED`] scale each expert.
+pub fn inkling_gguf(seed: u64) -> Vec<u8> {
+    inkling(seed, false)
+}
+
+/// [`inkling_gguf`] with layer 0's experts in NVFP4, as the released files keep their scaled layers' (so
+/// layers 1 to 3 scale Q8_0 experts, as Q3_K_XL's mixed layers do). Only layer 0's: with every scaled
+/// layer's experts in four bits the random model is chaotic enough that llama.cpp's own runs of it agree
+/// on top-1 at 74 % of positions, too few decisive ones for a gate.
+pub fn inkling_gguf_nvfp4(seed: u64) -> Vec<u8> {
+    inkling(seed, true)
+}
+
+fn inkling(seed: u64, nvfp4: bool) -> Vec<u8> {
+    use ink::*;
+    let name = "inkling2_loop";
+    let k = |key: &str| format!("{name}.{key}");
+    let u = |v: u64| Value::U32(v as u32);
+    let per_layer = |v: u64| Value::Arr(vec![Value::I32(v as i32); LAYERS as usize]);
+    let swa = |i: u32| !FULL.contains(&i);
+    let tokens = (0..=255u8).map(|b| Value::Str(byte_token(b))).collect();
+    let kv = vec![
+        ("general.architecture".to_string(), Value::Str(name.into())),
+        (k("block_count"), Value::U32(LAYERS)),
+        (k("context_length"), Value::U32(CTX)),
+        (k("embedding_length"), u(D)),
+        (k("feed_forward_length"), u(FFN)),
+        (k("expert_feed_forward_length"), u(FFN)),
+        (k("attention.head_count"), per_layer(HEADS)),
+        (k("attention.head_count_kv"), per_layer(KV_HEADS)),
+        (k("attention.layer_norm_rms_epsilon"), Value::F32(1e-6)),
+        (k("attention.key_length"), u(HEAD_DIM)),
+        (k("attention.value_length"), u(HEAD_DIM)),
+        (k("attention.key_length_swa"), u(HEAD_DIM)),
+        (k("attention.value_length_swa"), u(HEAD_DIM)),
+        (k("rope.dimension_count"), Value::U32(0)),
+        (k("expert_count"), u(EXPERTS)),
+        (k("expert_used_count"), Value::U32(USED)),
+        (k("expert_weights_scale"), Value::F32(2.5)),
+        (k("attention.sliding_window"), Value::U32(WINDOW)),
+        (
+            k("attention.sliding_window_pattern"),
+            Value::Arr((0..LAYERS).map(|i| Value::Bool(swa(i))).collect()),
+        ),
+        (k("loop.count"), Value::U32(PASSES)),
+        (k("loop.start"), Value::U32(LOOP_START)),
+        (k("loop.end"), Value::U32(LOOP_END)),
+        (k("loop.gate_rank"), u(GATE_RANK)),
+        (k("loop.varying"), Value::Bool(false)),
+        (k("vocab_size"), Value::U32(VOCAB_PADDED)),
+        (k("vocab_size_unpadded"), Value::U32(VOCAB)),
+        (k("shortconv.l_cache"), u(CONV)),
+        // Small, so that the tiny activations reach the saturating parts of SITU.
+        (k("activation.situ_beta"), Value::F32(0.75)),
+        (k("activation.situ_linear_beta"), Value::F32(1.5)),
+        (k("attn_res.block_size"), Value::U32(BLOCK)),
+        (k("final_logit_softcapping"), Value::F32(4.0)),
+        (k("attention.relative_length"), u(REL)),
+        (k("attention.relative_extent"), Value::U32(EXTENT)),
+        (k("attention.relative_clip"), Value::F32(1.5)),
+        (k("attention.qk_clip"), Value::F32(2.0)),
+        // A floor of 8 positions, so that the log scale grows within a test prompt.
+        (k("attention.log_scale_floor"), Value::U32(8)),
+        (k("attention.log_scale_alpha"), Value::F32(0.25)),
+        ("tokenizer.ggml.model".into(), Value::Str("gpt2".into())),
+        ("tokenizer.ggml.pre".into(), Value::Str("inkling2".into())),
+        ("tokenizer.ggml.tokens".into(), Value::Arr(tokens)),
+        (
+            "tokenizer.ggml.token_type".into(),
+            Value::Arr(vec![Value::I32(1); 256]),
+        ),
+        // One merge of two control bytes no prompt holds: llama.cpp refuses an empty list.
+        (
+            "tokenizer.ggml.merges".into(),
+            Value::Arr(vec![Value::Str(format!(
+                "{} {}",
+                byte_token(1),
+                byte_token(2)
+            ))]),
+        ),
+        ("tokenizer.ggml.eos_token_id".into(), Value::U32(10)),
+        ("tokenizer.ggml.add_bos_token".into(), Value::Bool(false)),
+    ];
+
+    let mut b = Builder {
+        rng: Rng(seed),
+        ty: 0,
+        tensors: Vec::new(),
+    };
+    let (qd, kvd, e) = (HEADS * HEAD_DIM, KV_HEADS * HEAD_DIM, EXPERTS);
+    let vp = u64::from(VOCAB_PADDED);
+    b.q8(String::from("token_embd.weight"), &[D, vp], 0.5);
+    b.vector("token_embd_norm.weight".into(), D, 1.0);
+    b.q8("output.weight".into(), &[D, vp], 0.1);
+    b.vector("output_norm.weight".into(), D, 1.0);
+    // Queries of about unit score spread over normalised states.
+    b.f32("output_res_query.weight".into(), &[D], 3.0);
+    for i in 0..LAYERS {
+        let n = |s: &str| format!("blk.{i}.{s}");
+        b.q8(n("attn_q.weight"), &[D, qd], 0.1);
+        b.q8(n("attn_k.weight"), &[D, kvd], 0.1);
+        b.q8(n("attn_v.weight"), &[D, kvd], 0.1);
+        b.q8(n("attn_output.weight"), &[qd, D], 0.1);
+        b.q8(n("attn_gate.weight"), &[D, qd], 0.1);
+        b.vector(n("attn_q_clip.weight"), HEADS * HEAD_DIM, 1.0);
+        b.reshape(&n("attn_q_clip.weight"), &[HEAD_DIM, HEADS]);
+        b.f32(n("attn_sink_proj.weight"), &[D, HEADS], 0.2);
+        b.bf16(&n("attn_sink_proj.weight"));
+        b.q8(n("attn_rel.weight"), &[D, REL * HEADS], 0.2);
+        let extent = u64::from(if swa(i) { WINDOW } else { EXTENT });
+        b.f32(n("attn_rel_bias.weight"), &[REL, extent], 1.0);
+        b.vector(n("attn_rel_clip.weight"), REL * HEADS, 1.0);
+        b.reshape(&n("attn_rel_clip.weight"), &[REL, HEADS]);
+        b.f32(n("attn_k_conv.weight"), &[CONV, kvd], 0.5);
+        b.f32(n("attn_v_conv.weight"), &[CONV, kvd], 0.5);
+        b.f32(n("attn_post_conv.weight"), &[CONV, D], 0.5);
+        b.f32(n("ffn_post_conv.weight"), &[CONV, D], 0.5);
+        if swa(i) {
+            b.vector(n("attn_norm.weight"), D, 1.0);
+        } else {
+            b.vector(n("attn_q_inp_norm.weight"), D, 1.0);
+            b.vector(n("attn_k_inp_norm.weight"), D, 1.0);
+            b.vector(n("attn_v_inp_norm.weight"), D, 1.0);
+            b.f32(n("attn_k_conv_proj.weight"), &[D, CONV * KV_HEADS], 0.2);
+            b.bf16(&n("attn_k_conv_proj.weight"));
+            b.f32(n("attn_v_conv_proj.weight"), &[D, CONV * KV_HEADS], 0.2);
+            b.bf16(&n("attn_v_conv_proj.weight"));
+        }
+        if i > 0 {
+            let queries = if swa(i) { 1 } else { 3 };
+            b.f32(n("attn_res_query.weight"), &[D, queries], 3.0);
+            if queries == 1 {
+                b.reshape(&n("attn_res_query.weight"), &[D]);
+            }
+        }
+        b.f32(n("ffn_res_query.weight"), &[D], 3.0);
+        b.vector(n("ffn_norm.weight"), D, 1.0);
+        b.f32(n("ffn_gate_inp.weight"), &[D, e], 0.1);
+        b.f32(n("exp_probs_b.bias"), &[e], 0.5);
+        let experts = |b: &mut Builder, name: String, dims: &[u64]| match nvfp4 && i == 0 {
+            true => b.quant(DType::Nvfp4, name, dims, 0.1),
+            false => b.quant(DType::Q8_0, name, dims, 0.1),
+        };
+        experts(&mut b, n("ffn_gate_up_exps.weight"), &[D, 2 * FFN, e]);
+        experts(&mut b, n("ffn_down_exps.weight"), &[FFN, D, e]);
+        if i < SCALED {
+            b.vector(n("ffn_gate_up_exps.scale"), e, 1.0);
+            b.vector(n("ffn_down_exps.scale"), e, 1.0);
+        }
+        if (LOOP_START..LOOP_END).contains(&i) {
+            b.f32(n("loop_msg_query.weight"), &[D, 4], 3.0);
+            for c in ["q", "k", "v", "ffn"] {
+                b.f32(
+                    n(&format!("loop_{c}_ctrl_down.weight")),
+                    &[2 * D, GATE_RANK],
+                    0.1,
+                );
+                b.f32(
+                    n(&format!("loop_{c}_ctrl_gain.weight")),
+                    &[GATE_RANK, D],
+                    0.3,
+                );
+                b.f32(
+                    n(&format!("loop_{c}_ctrl_forget.weight")),
+                    &[GATE_RANK, D],
+                    0.3,
+                );
+            }
+        }
+    }
+    write(&kv, &b.tensors)
+}
+
+/// GPT-2's byte-level character for byte `b`.
+fn byte_token(b: u8) -> String {
+    let keep = |b: u8| (33..=126).contains(&b) || (161..=172).contains(&b) || b >= 174;
+    let c = if keep(b) {
+        u32::from(b)
+    } else {
+        256 + (0..b).filter(|&x| !keep(x)).count() as u32
+    };
+    char::from_u32(c).expect("below U+0144").to_string()
 }
 
 /// A DFlash drafter GGUF for the tiny model ([`crate::DflashDrafter`]): a sliding layer (a window
@@ -432,6 +669,38 @@ impl Builder {
             .flat_map(|_| self.rng.uniform(0.1).to_le_bytes())
             .collect();
         self.tensors.push((name, vec![cols, rows], 0, data)); // GGML F32
+    }
+
+    /// A Q8_0 tensor of GGML dims `dims` (the first a multiple of 32) with weights of about `a`.
+    fn q8(&mut self, name: String, dims: &[u64], a: f32) {
+        self.quant(DType::Q8_0, name, dims, a);
+    }
+
+    /// A tensor of quant type `t` and GGML dims `dims` (the first whole blocks) with weights of about `a`.
+    fn quant(&mut self, t: DType, name: String, dims: &[u64], a: f32) {
+        let rows = dims[1..].iter().product();
+        let data = weights(&mut self.rng, t, rows, dims[0], a);
+        let ty = ggml_type(t).expect("a GGML type");
+        self.tensors.push((name, dims.to_vec(), ty, data));
+    }
+
+    /// An f32 tensor of GGML dims `dims`, uniform in [-a, a).
+    fn f32(&mut self, name: String, dims: &[u64], a: f32) {
+        let data = (0..dims.iter().product::<u64>())
+            .flat_map(|_| self.rng.uniform(a).to_le_bytes())
+            .collect();
+        self.tensors.push((name, dims.to_vec(), 0, data)); // GGML F32
+    }
+
+    /// Gives tensor `name` the GGML dims `dims`, of the same element count.
+    fn reshape(&mut self, name: &str, dims: &[u64]) {
+        let t = self
+            .tensors
+            .iter_mut()
+            .find(|t| t.0 == name)
+            .expect("built");
+        assert_eq!(t.1.iter().product::<u64>(), dims.iter().product::<u64>());
+        t.1 = dims.to_vec();
     }
 
     /// Tensor `name`, built f32, rewritten as bf16 (GGML type 30, truncated).

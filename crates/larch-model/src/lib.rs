@@ -10,6 +10,7 @@ mod dflash;
 mod experts;
 mod fake;
 pub mod gguf;
+mod inkling;
 pub mod learn;
 pub mod oracle;
 pub mod projector;
@@ -26,6 +27,7 @@ pub use config::{Arch, ModelConfig, MoeCfg, RopeCfg};
 pub use dflash::{DflashDrafter, DraftCache, DraftShape};
 pub use experts::Histogram;
 pub use fake::FakeModel;
+pub use inkling::{Inkling, InklingCfg};
 pub use tokcheck::{TokcheckError, tokcheck};
 pub use tokenizer::{Detokenizer, Tokenizer};
 pub use transformer::{

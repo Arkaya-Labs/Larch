@@ -132,3 +132,15 @@ min_mem_gb = 23
 license_url = "https://huggingface.co/Qwen/Qwen3.5-35B-A3B/blob/2508b2437e382c605eb0fc52b83f5545960f6b4a/LICENSE"
 display = "Qwen3.5 35B A3B"
 note = "Needs about 18 GB of GPU memory (a 24 GB Mac has 19): the model the agent is tuned on, at 3-bit."
+
+# m15: Inkling 2 Mini (arch inkling2_loop, the loop model llama.cpp runs from b12723), the port's oracle file.
+# The root file is byte for byte Mainline_Support/Inkling-2-Mini-UD-Q4_K_XL.gguf_file at this revision (the
+# Unsloth-layout files, arch inkling2, moved to Old_Support). Experts NVFP4 on layers 0-19, Q8_0 on 20-23, with
+# per-expert scales; the rest Q8_0, bf16 and f32. Read from the header on 27 Nov 2026, not yet hashed whole.
+[m15]
+repo = "unsloth/Inkling-2-Mini-GGUF"
+file = "Inkling-2-Mini-UD-Q4_K_XL.gguf"
+sha256 = "e64276656f072e9b2197a61723667cbdb71da66a716ffd966e572c21088f3cd3"
+size = 17629760736
+use = ["tokenizer"]
+revision = "8078d149286eec7193795413b9e0643da6d11fa1"

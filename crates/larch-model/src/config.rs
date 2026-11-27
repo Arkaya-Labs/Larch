@@ -16,6 +16,8 @@ pub enum Arch {
     Qwen3Moe,
     Qwen35,
     Qwen35Moe,
+    /// Inkling 2 (`inkling2_loop`): [`crate::Inkling`], which `ModelConfig::from_gguf` does not read.
+    Inkling2Loop,
 }
 
 impl Arch {

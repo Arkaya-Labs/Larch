@@ -58,6 +58,8 @@ static NUMBER: LazyLock<Vec<(char, char)>> = LazyLock::new(|| class(r"[\p{N}&&\p
 /// Qwen 3.5's letter runs: letters and combining marks.
 static LETTER_MARK: LazyLock<Vec<(char, char)>> =
     LazyLock::new(|| class(r"[[\p{L}\p{M}]&&\p{Age=15.1}]"));
+/// Combining marks, which GPT-4o's pre-tokeniser counts as letters of either case.
+static MARK: LazyLock<Vec<(char, char)>> = LazyLock::new(|| class(r"[\p{M}&&\p{Age=15.1}]"));
 
 /// The ranges of a Unicode class, from the regex crate's tables.
 fn class(re: &str) -> Vec<(char, char)> {
@@ -82,6 +84,8 @@ pub struct Tokenizer {
     digits: usize,
     /// Qwen 3.5: letter runs also take combining marks (`\p{M}`), which punctuation runs leave out.
     marks: bool,
+    /// Inkling 2 (`inkling2`): GPT-4o's pre-tokeniser ([`gpt4o_split`]) in place of [`pre_split`].
+    gpt4o: bool,
     /// Llama 3: a pre-tokenised word that is a token is emitted whole, without merges.
     ignore_merges: bool,
     add_bos: bool,
@@ -128,8 +132,10 @@ impl Tokenizer {
                 }
                 ("gpt2", Some("qwen2")) => (false, 1, false, false, false, (11, 11)),
                 ("gpt2", Some("qwen35")) => (false, 1, true, false, false, (11, 11)),
+                ("gpt2", Some("inkling2")) => (false, 3, false, true, false, (11, 11)),
                 _ => return Err(LoadError::UnsupportedArch),
             };
+        let gpt4o = pre == Some("inkling2");
         let text = key("tokens")
             .and_then(Value::as_arr)
             .ok_or(bad)?
@@ -185,7 +191,8 @@ impl Tokenizer {
                 _ => default,
             }
         };
-        let bos = id("bos_token_id", Some(def_bos));
+        // llama.cpp's inkling2 has no BOS, whatever the file says.
+        let bos = id("bos_token_id", Some(def_bos)).filter(|_| !gpt4o);
         let eos = id("eos_token_id", Some(def_eos));
         if let Some(Value::Bool(b)) = key("add_bos_token") {
             add_bos = *b;
@@ -279,6 +286,7 @@ impl Tokenizer {
             spm,
             digits,
             marks,
+            gpt4o,
             ignore_merges,
             add_bos,
             add_eos,
@@ -323,7 +331,11 @@ impl Tokenizer {
                     prev_special = false;
                 }
                 Frag::Text(s) => {
-                    for w in pre_split(s, self.digits, self.marks) {
+                    let words = match self.gpt4o {
+                        true => gpt4o_split(s),
+                        false => pre_split(s, self.digits, self.marks),
+                    };
+                    for w in words {
                         self.bpe_word(w, &mut out);
                     }
                 }
@@ -664,6 +676,110 @@ fn pre_split(text: &str, digits: usize, marks: bool) -> Vec<&str> {
             None => pos + ws.max(1),
         };
         cut(pos);
+    }
+    words
+}
+
+/// GPT-4o's pre-tokeniser as llama.cpp b12723 runs it (`LLAMA_VOCAB_PRE_TYPE_GPT4O`): one regex,
+/// `[^\r\n\p{L}\p{N}]?U*L+C?|[^\r\n\p{L}\p{N}]?U+L*C?|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|
+/// \s*[\r\n]+|\s+(?!\S)|\s+`, with U a letter or mark other than a-z, L one other than A-Z (so every
+/// letter outside ASCII and every mark is both, llama.cpp's stand-in for `\p{Lu}` and `\p{Ll}`) and C
+/// `'s`, `'t`, `'re`, `'ve`, `'m`, `'ll` or `'d` in either case. std::regex matches it on text whose
+/// characters outside ASCII are collapsed to their category, the first alternative that matches
+/// winning, each quantifier greedy and given back one at a time; every character starts a match.
+fn gpt4o_split(text: &str) -> Vec<&str> {
+    let cs: Vec<(usize, char)> = text.char_indices().collect();
+    let n = cs.len();
+    let at = |i: usize| cs.get(i).map(|&(_, c)| c);
+    let letter = |c: char| c.is_ascii_alphabetic() || !c.is_ascii() && in_class(&LETTER, c);
+    let number = |c: char| c.is_ascii_digit() || !c.is_ascii() && in_class(&NUMBER, c);
+    let mark = |c: char| !c.is_ascii() && in_class(&MARK, c);
+    let is = |i: usize, f: &dyn Fn(char) -> bool| at(i).is_some_and(f);
+    let space = |i| is(i, &char::is_whitespace);
+    // [^\r\n\p{L}\p{N}], U and L.
+    let lead = |i| is(i, &|c| !(c == '\r' || c == '\n' || letter(c) || number(c)));
+    let upper = |i| is(i, &|c| (letter(c) || mark(c)) && !c.is_ascii_lowercase());
+    let lower = |i| is(i, &|c| (letter(c) || mark(c)) && !c.is_ascii_uppercase());
+    let run = |mut i: usize, f: &dyn Fn(usize) -> bool| {
+        let from = i;
+        while i < n && f(i) {
+            i += 1;
+        }
+        i - from
+    };
+    // C?: its length at i, the alternatives in order.
+    let suffix = |i: usize| {
+        let low = |k: usize| at(i + k).map(|c| c.to_ascii_lowercase());
+        if at(i) != Some('\'') {
+            return 0;
+        }
+        match (low(1), low(2)) {
+            (Some('s' | 't'), _) => 2,
+            (Some('r'), Some('e')) | (Some('v'), Some('e')) => 3,
+            (Some('m'), _) => 2,
+            (Some('l'), Some('l')) => 3,
+            (Some('d'), _) => 2,
+            _ => 0,
+        }
+    };
+    // The match starting at i, as its end.
+    let matched = |i: usize| -> usize {
+        let leads: &[usize] = if lead(i) { &[1, 0] } else { &[0] };
+        // [^\r\n\p{L}\p{N}]?U*L+C?: the longest U run that leaves an L after it.
+        for &p in leads {
+            let j = i + p;
+            for k in (0..=run(j, &upper)).rev() {
+                let l = run(j + k, &lower);
+                if l > 0 {
+                    return j + k + l + suffix(j + k + l);
+                }
+            }
+        }
+        // [^\r\n\p{L}\p{N}]?U+L*C?
+        for &p in leads {
+            let j = i + p;
+            let k = run(j, &upper);
+            if k > 0 {
+                let l = run(j + k, &lower);
+                return j + k + l + suffix(j + k + l);
+            }
+        }
+        // \p{N}{1,3}
+        let digits = run(i, &|i| is(i, &number)).min(3);
+        if digits > 0 {
+            return i + digits;
+        }
+        // ' '?[^\s\p{L}\p{N}]+[\r\n/]*
+        let other = |i| is(i, &|c| !(c.is_whitespace() || letter(c) || number(c)));
+        for p in if at(i) == Some(' ') { [1, 0] } else { [0, 0] } {
+            let o = run(i + p, &other);
+            if o > 0 {
+                let j = i + p + o;
+                return j + run(j, &|i| matches!(at(i), Some('\r' | '\n' | '/')));
+            }
+        }
+        let w = run(i, &space);
+        // \s*[\r\n]+: through the run's last line break.
+        if let Some(q) = (i..i + w)
+            .rev()
+            .find(|&q| matches!(at(q), Some('\r' | '\n')))
+        {
+            return q + 1;
+        }
+        // \s+(?!\S), else \s+.
+        if i + w < n && w > 1 {
+            i + w - 1
+        } else {
+            i + w.max(1)
+        }
+    };
+    let byte = |i: usize| cs.get(i).map_or(text.len(), |&(b, _)| b);
+    let mut words = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let end = matched(i);
+        words.push(&text[byte(i)..byte(end)]);
+        i = end;
     }
     words
 }

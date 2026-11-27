@@ -16,6 +16,7 @@ using rng = std::mt19937;
 // Elements per block of dtype t: 256 for the K quants, 32 for the other quants, 1 for plain dtypes.
 static inline int64_t block_of(int t) {
   return t == LARCH_Q2_K || t == LARCH_Q3_K || t == LARCH_Q4_K || t == LARCH_Q5_K || t == LARCH_Q6_K ? 256
+         : t == LARCH_NVFP4                                          ? 64
          : t == LARCH_Q8_0 || t == LARCH_Q4_0 || t == LARCH_Q5_0 ? 32
                                                                     : 1;
 }
@@ -41,6 +42,8 @@ static inline int64_t block_bytes(int t) {
       return 18;
     case LARCH_Q5_0:
       return 22;
+    case LARCH_NVFP4:
+      return 36;
     default:
       return 4;
   }
@@ -94,8 +97,8 @@ static inline bytes halves(size_t n, rng& g, int hi = 1) {
   }
   return b;
 }
-// Random blocks with f16 scales in [0, 1), and three edge blocks: the first all ones, the second all
-// zeros, the last with zero scales.
+// Random blocks with f16 scales in [0, 1) (NVFP4's E4M3 scales below 1), and three edge blocks: the first all
+// ones, the second all zeros, the last with zero scales.
 static inline bytes quant(larch_dtype t, int64_t rows, int64_t k, rng& g) {
   const int64_t nb = rows * k / block_of(t), size = block_bytes(t);
   bytes b(size_t(nb * size));
@@ -103,6 +106,7 @@ static inline bytes quant(larch_dtype t, int64_t rows, int64_t k, rng& g) {
   const std::vector<int> scales = t == LARCH_Q6_K     ? std::vector<int>{208}
                                   : t == LARCH_Q3_K   ? std::vector<int>{108}
                                   : t == LARCH_Q2_K   ? std::vector<int>{80, 82}
+                                  : t == LARCH_NVFP4  ? std::vector<int>{}
                                   : block_of(t) == 256 ? std::vector<int>{0, 2}
                                                        : std::vector<int>{0};
   uint8_t* blk = b.data();
@@ -110,8 +114,11 @@ static inline bytes quant(larch_dtype t, int64_t rows, int64_t k, rng& g) {
   if (nb > 1) std::fill(blk + size, blk + 2 * size, uint8_t(0));
   for (int64_t i = 0; i < nb; ++i)
     for (const int o : scales) blk[i * size + o + 1] &= 0x3b;
+  for (int64_t i = 0; t == LARCH_NVFP4 && i < nb; ++i)  // exponents up to 7: scales up to 0.94
+    for (int o = 0; o < 4; ++o) blk[i * size + o] &= 0x3F;
   if (nb > 2)
     for (const int o : scales) blk[(nb - 1) * size + o] = blk[(nb - 1) * size + o + 1] = 0;
+  if (nb > 2 && t == LARCH_NVFP4) std::fill(blk + (nb - 1) * size, blk + (nb - 1) * size + 4, uint8_t(0));
   return b;
 }
 

@@ -17,7 +17,7 @@
  * stream returns, or larch_event_sync on an event recorded on it after the download, and holds the
  * data once that returns LARCH_OK (a backend may finish earlier, never later).
  *
- * ABI 3 to 5 add entries a backend may lack: it then answers a call LARCH_ERR_UNSUPPORTED, after the
+ * ABI 3 to 6 add entries a backend may lack: it then answers a call LARCH_ERR_UNSUPPORTED, after the
  * same argument checks as every backend (so a malformed call is still INVALID_ARG). The CPU devices
  * have them all. */
 #ifndef LARCH_H
@@ -29,7 +29,7 @@
 extern "C" {
 #endif
 
-#define LARCH_ABI_VERSION 5
+#define LARCH_ABI_VERSION 6
 
 typedef enum {
   LARCH_OK = 0,
@@ -58,8 +58,14 @@ typedef enum {
   LARCH_Q5_0,
   LARCH_FP8_E4M3, /* KV pages only: OCP E4M3FN, one byte (bias 7, no infinity, S.1111.111 is NaN) */
   LARCH_Q3_K,     /* weights only: a GPU backend without its kernels answers UNSUPPORTED */
-  LARCH_Q2_K      /* ABI 5, weights only: a GPU backend answers UNSUPPORTED where it has no kernel for it (CUDA has
+  LARCH_Q2_K,     /* ABI 5, weights only: a GPU backend answers UNSUPPORTED where it has no kernel for it (CUDA has
                       embed, dequant and the mmvq_id calls) */
+  LARCH_NVFP4     /* ABI 6, weights only (GGML type 40): 64 weights a block in 36 bytes, four scales then 32 bytes of
+                      E2M1 codes. Sub-block s (16 weights) has scale d_s = ggml_ue4m3_to_fp32(byte s): an unsigned
+                      E4M3 (bias 7, the sign bit ignored) at half its value, 0x00 and 0x7F decoding to 0; its weight
+                      j < 8 is the low nibble of byte 4 + 8 s + j and weight j + 8 its high nibble, each the value
+                      kvalues_mxfp4[code] d_s (codes 0-15: 0 1 2 3 4 6 8 12 0 -1 -2 -3 -4 -6 -8 -12). A GPU backend
+                      answers UNSUPPORTED where it has no kernel for it (every one, for now). */
 } larch_dtype;
 
 /* larch_device_props.flags */
@@ -282,7 +288,7 @@ larch_status larch_rope_multi(larch_stream*, const larch_tensor* qk, const larch
                                 const larch_rope_multi_params* p);
 /* The decode GEMV, its own op and not gemm with alpha 1 and beta 0: out[r, n] = sum_k w[n, k] x[r, k]
  * + bias[n], reading w once for all rows; out is written, never read.
- * w_quant: [n, k] in Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, Q8_0, Q4_0 or Q5_0. x_f16: f16 [rows, k] with rows <= 16 (more
+ * w_quant: [n, k] in Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, Q8_0, Q4_0, Q5_0 or NVFP4. x_f16: f16 [rows, k] with rows <= 16 (more
  * rows go through dequant + gemm). bias_or_null: f32 [n] or NULL. out: f16 [rows, n]; f32 only for
  * the lm_head. On CUDA sm_86 and sm_89, one row, the rows routed to larch_mmvq_verify's kernel (2 to 8
  * rows on sm_89, 2 to 4 on sm_86, where the route takes the format) and larch_mmvq_verify may sum up
@@ -328,7 +334,7 @@ larch_status larch_mmvq_id_mixed(larch_stream*, const larch_tensor* w_hot, const
 larch_status larch_quant_gemm(larch_stream*, const larch_tensor* w_quant, const larch_tensor* x_f16,
                                 const larch_tensor* bias_or_null, const larch_tensor* out);
 /* Explicit approximate quantized GEMM, separate from the f16-rounding contract above.
- * Shapes/output dtypes match quant_gemm, except Q2_K and Q3_K. Q4_K, Q5_K, Q6_K, Q8_0, Q4_0 and Q5_0 weights retain their
+ * Shapes/output dtypes match quant_gemm, except Q2_K, Q3_K and NVFP4. Q4_K, Q5_K, Q6_K, Q8_0, Q4_0 and Q5_0 weights retain their
  * original scales and minima (Q6_K: a scale per 16 weights).
  * Each contiguous group of 32 f16 activations is quantized to signed i8 with scale max(abs(x))/127
  * and nearest-even rounding. Weight-minimum correction uses the sum of the original activations;
@@ -609,6 +615,86 @@ larch_status larch_fused_attn_in(larch_stream*, const larch_tensor* q_in_f16, co
  * groups dividing d. base: f32 [4, d]. out: f16 or f32 [rows, d]. A GPU backend may answer UNSUPPORTED. */
 larch_status larch_draft_conv(larch_stream*, const larch_tensor* x_f16, const larch_tensor* dyn_f32,
                                 const larch_tensor* base_f32, uint32_t stage, const larch_tensor* out);
+
+/* ABI 6: Inkling 2 (inkling2_loop, llama.cpp's src/models/inkling2.cpp and inkling2-loop.cpp). The CPU devices have
+ * them all; a GPU backend may lack any and answer a valid call UNSUPPORTED. Each states its f32 steps in ggml's order,
+ * which the CPU reference keeps (its sums in double). */
+
+/* The short convolutions' state of one layer group, in n_slots slots per layer (a slot as larch_gdn_state's): conv is
+ * f16 [n_layers][n_slots][kernel - 1][channels], the last kernel - 1 inputs of each channel, oldest first. Several
+ * convolutions share a layer's slot, each at its own channel offset. conv is not NULL, every count is > 0,
+ * kernel >= 2 and layer < n_layers. */
+typedef struct {
+  larch_buffer* conv;
+  uint32_t n_slots, n_layers, layer;
+  uint32_t kernel, channels;
+} larch_conv_state;
+
+/* llama.cpp's causal short convolution with a residual (inkling2's convolve), over channels [offset, offset + C) of
+ * the state, sequences as larch_gdn_conv's (q_lens_i32, slots_i32, snap_slots_or_null: the state as of a row, these
+ * channels only). x: f16 [rows, C], the convolution's input. Per channel c the inputs in[c] are the slot's kernel - 1
+ * then the sequence's rows; for its row t (row r of x), with k = kernel:
+ *   y = sum over i < k ascending of w[c, i] in[c][t + i]   (w: f32 [C, k], the GGUF's {k, C} weight; ggml_ssm_conv)
+ *   with dyn_or_null (f16 or f32 [rows, heads, k], heads dividing C): for lag = 0 .. k - 1,
+ *     y = y + in[c][t + k - 1 - lag] dyn[r, c / (C / heads), lag]
+ *   y = (x[r, c] + y) * (1 / sqrt(m k + 1)), m = 2 with dyn, else 1
+ *   out[r, c] = residual[r, c] + y with residual_or_null (f32 [rows, C]), else y.
+ * out: f16 or f32 [rows, C]; out may be the residual itself (same buffer, offset and strides). */
+larch_status larch_short_conv(larch_stream*, const larch_tensor* x_f16, const larch_tensor* w_f32,
+                                const larch_tensor* dyn_or_null, const larch_tensor* residual_or_null,
+                                const larch_conv_state* state, uint32_t offset, const larch_tensor* slots_i32,
+                                const larch_tensor* q_lens_i32, const larch_tensor* snap_slots_or_null,
+                                const larch_tensor* out);
+/* inkling2's clip of q, k and the relative query, per row r and head h of x (f16 or f32 [rows, heads, dim]):
+ *   y = x[r, h] * scale[h] with scale_or_null (f32 [heads, dim]), else x[r, h]
+ *   y = y * (1 / max(sqrt(sum of y^2), t)), then y * t   (ggml_l2_norm with eps t, then ggml_scale: |y| <= t)
+ *   with pos_or_null (i32 [rows]): y * tau, tau = log(max((pos[r] + 1) * (1 / floor), 1)) * alpha + 1, the steps in
+ *   f32 in that order (the full-attention layers' log-scaled positions).
+ * t > 0 and finite; floor > 0 and alpha >= 0 with pos, ignored without. out: f16 or f32, x's shape; out may be x
+ * itself when they share a dtype. */
+larch_status larch_clip_norm(larch_stream*, const larch_tensor* x, const larch_tensor* scale_or_null, float t,
+                               const larch_tensor* pos_or_null, uint32_t floor, float alpha, const larch_tensor* out);
+/* inkling2's attention over the depth: per row r, s_j = states[j, r] / sqrt(mean(states[j, r]^2) + 1e-6) for each of
+ * the n states (f32 [n, rows, d], in any order: the result depends on it only by rounding), then for each query i
+ * (query: f32 [q, d]) p = softmax over j of (s_j . query[i]) / sqrt(d), and out[r, i] = sum over j of p_j s_j.
+ * out: f32 [rows, q, d]. */
+larch_status larch_depth_mix(larch_stream*, const larch_tensor* states_f32, const larch_tensor* query_f32,
+                               const larch_tensor* out_f32);
+/* inkling2_loop's controller: out = (x - tanh(forget) x) + tanh(gain) msg, the products and sums in f32 in that
+ * order. x, msg: f32 [rows, d]. gain, forget: f16 or f32 [rows, d] each, the rank projections' outputs.
+ * out: f32 [rows, d]; out may be x itself. */
+larch_status larch_loop_gate(larch_stream*, const larch_tensor* x_f32, const larch_tensor* msg_f32,
+                               const larch_tensor* gain, const larch_tensor* forget, const larch_tensor* out);
+/* inkling2's expert activation on the fused gate-up output gu (f16 or f32 [rows, slots, 2 ff]: gate then up), in f32:
+ * with scale_or_null (f32 [experts], an expert's weight scale) g and u are first multiplied by scale[ids[r, j]]
+ * (ids_i32: i32 [rows, slots], each slot's expert, as larch_mmvq_id's); then
+ *   a = (beta tanh(g (1 / beta))) sigmoid(g), b = lin_beta tanh(u (1 / lin_beta)) when lin_beta > 0, else u,
+ *   out = a b, sigmoid(g) = 1 / (1 + e^-g). beta > 0. out: f16 [rows, slots, ff]. */
+larch_status larch_situ_mul(larch_stream*, const larch_tensor* gate_up, const larch_tensor* ids_i32,
+                              const larch_tensor* scale_or_null, float beta, float lin_beta, const larch_tensor* out);
+/* MoE routing, llama.cpp's sigmoid gating: per row of logits_f32 (f32 [rows, experts]), p = sigmoid(logits); the k
+ * largest p + bias (bias_or_null: f32 [experts], the selection bias; ties to the lower id) go to out_ids_i32 (i32
+ * [rows, k], 0 < k <= experts) largest first; out_weights_f32 (f32 [rows, k]) gets each one's p divided by (the k's
+ * sum + eps) (eps >= 0), times scale (0 means 1), then, with down_scale_or_null (f32 [experts]), times its expert's
+ * down_scale: the expert's weight scale on its down projection, which a down mmvq_id with these weights applies. */
+larch_status larch_moe_route_sigmoid(larch_stream*, const larch_tensor* logits_f32, const larch_tensor* bias_or_null,
+                                       float eps, float scale, const larch_tensor* down_scale_or_null,
+                                       const larch_tensor* out_ids_i32, const larch_tensor* out_weights_f32);
+/* larch_attn with inkling2's relative-position bias and per-query sinks (window, mask_or_null, splits and the span
+ * layout as larch_attn's, which has no sinks argument here): row r (head h, at position p) gives position p' the
+ * logit scale (q . k) + (b - sink[r, h]), b = rel_q[r, h] . rel_w[p - p'] when p - p' < extent, else 0, and one more
+ * logit 0 with no value: llama.cpp adds b - sink through the mask, after the scale. rel_q: f16 or f32 [rows, heads, n_rel]. rel_w: f32 [extent, n_rel], the GGUF's {n_rel,
+ * extent} table. sink: f16 or f32 [rows, heads]. The CPU reference forms each dot product in double.
+ * q_lens_or_null NULL is larch_attn_decode's form, without a mask: one row per sequence (block_table_i32 [rows,
+ * max_blocks]), q_start_pos_i32 holding each row's seq_len, so row r sits at seq_len - 1 and attends as a span of
+ * one row there; seq_len 0 is a padding row, whose output is zero. A row is the same bytes in either form. */
+larch_status larch_attn_rel(larch_stream*, const larch_tensor* q, const larch_kv_pool* pool,
+                              const larch_tensor* block_table_i32, const larch_tensor* q_start_pos_i32,
+                              const larch_tensor* q_lens_or_null, const larch_tensor* mask_or_null,
+                              const larch_tensor* rel_q, const larch_tensor* rel_w_f32, const larch_tensor* sink,
+                              uint32_t window, uint32_t splits, float scale, const larch_tensor* out);
+/* out = cap tanh(x (1 / cap)) per element (the logits' soft cap), cap > 0. x, out: f32 [rows, n]; out may be x. */
+larch_status larch_softcap(larch_stream*, const larch_tensor* x_f32, float cap, const larch_tensor* out);
 
 #ifdef __cplusplus
 }

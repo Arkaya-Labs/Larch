@@ -26,19 +26,24 @@ static int64_t check_geometry(const larch_gdn_state* st) {
   return mul(2 * int64_t(st->k_heads) + st->v_heads, st->head_dim);
 }
 
-// The sequence tensors both ops share, for `rows` input rows.
-static void check_sequences(const sizer& bytes, gdn_checked& a, const larch_tensor* slots, const larch_tensor* q_lens,
-                            const larch_tensor* snaps) {
-  a.slots = check_tensor(bytes, slots, "slots");
-  a.lens = check_tensor(bytes, q_lens, "q_lens");
-  need(is(a.slots, LARCH_I32, 1) && is(a.lens, LARCH_I32, 1) && a.lens.rows == a.slots.rows,
+void check_sequences(const sizer& bytes, int64_t rows, const larch_tensor* slots, const larch_tensor* q_lens,
+                     const larch_tensor* snaps, meta& slots_m, meta& lens_m, meta& snaps_m) {
+  slots_m = check_tensor(bytes, slots, "slots");
+  lens_m = check_tensor(bytes, q_lens, "q_lens");
+  need(is(slots_m, LARCH_I32, 1) && is(lens_m, LARCH_I32, 1) && lens_m.rows == slots_m.rows,
        "slots and q_lens must be i32 [seqs]");
   // The sum itself is in device memory; no sequences sum to 0 whatever it holds.
-  need(a.slots.rows || !a.in.rows, "rows must equal the sum of q_lens");
+  need(slots_m.rows || !rows, "rows must equal the sum of q_lens");
   if (snaps) {
-    a.snaps = check_tensor(bytes, snaps, "snap_slots");
-    need(is(a.snaps, LARCH_I32, 1) && a.snaps.rows == a.in.rows, "snap_slots must be i32 [rows]");
+    snaps_m = check_tensor(bytes, snaps, "snap_slots");
+    need(is(snaps_m, LARCH_I32, 1) && snaps_m.rows == rows, "snap_slots must be i32 [rows]");
   }
+}
+
+// The sequence tensors both ops share, for their input's rows.
+static void check_sequences(const sizer& bytes, gdn_checked& a, const larch_tensor* slots, const larch_tensor* q_lens,
+                            const larch_tensor* snaps) {
+  check_sequences(bytes, a.in.rows, slots, q_lens, snaps, a.slots, a.lens, a.snaps);
 }
 
 gdn_checked check_gdn_conv(const sizer& bytes, const larch_tensor* x, const larch_tensor* w,
@@ -82,10 +87,9 @@ gdn_checked check_gdn(const sizer& bytes, const larch_tensor* qkv, const larch_t
   return a;
 }
 
-// Each sequence's first row, after the debug checks on the device values: lengths >= 0 summing to the
-// rows, slots in range and no slot named twice.
-static std::vector<int64_t> sequences(const gdn_checked& c, int64_t n_slots) {
-  const view slots = c.slots, lens = c.lens, snaps = c.snaps;
+std::vector<int64_t> sequences(const meta& slots_m, const meta& lens_m, const meta& snaps_m, int64_t rows,
+                               int64_t n_slots) {
+  const view slots = slots_m, lens = lens_m, snaps = snaps_m;
   std::vector<bool> named(static_cast<size_t>(n_slots));
   const auto name = [&](int32_t s) {
     need(s >= 0 && s < n_slots, "slot out of range");
@@ -98,7 +102,7 @@ static std::vector<int64_t> sequences(const gdn_checked& c, int64_t n_slots) {
     name(slots.i32(s));
     first.push_back(first.back() + lens.i32(s));
   }
-  need(first.back() == c.in.rows, "rows must equal the sum of q_lens");
+  need(first.back() == rows, "rows must equal the sum of q_lens");
   for (int64_t r = 0; snaps.buf && r < snaps.rows; ++r)
     if (snaps.i32(r) >= 0) name(snaps.i32(r));
   return first;
@@ -112,7 +116,7 @@ larch_status gdn_conv(larch_stream*, const larch_tensor* x, const larch_tensor* 
     const gdn_checked c = check_gdn_conv(buffer_bytes, x, w, state, slots_i32, q_lens_i32, snap_slots_or_null, out);
     const view xv = c.in, wv = c.w, o = c.out, st = c.state, slots = c.slots, snaps = c.snaps;
     const int64_t ch = xv.cols, kern = wv.cols, hist = kern - 1;
-    const std::vector<int64_t> first = sequences(c, st.rows);
+    const std::vector<int64_t> first = sequences(c.slots, c.lens, c.snaps, c.in.rows, st.rows);
     std::vector<float> in;  // [hist + len][ch], oldest first
     for (int64_t s = 0; s < slots.rows; ++s) {
       const int64_t r0 = first[size_t(s)], len = first[size_t(s) + 1] - r0;
@@ -148,7 +152,7 @@ larch_status gdn(larch_stream*, const larch_tensor* qkv, const larch_tensor* alp
     const view in = c.in, al = c.alpha, be = c.beta, dt = c.dt_bias, av = c.a, o = c.out, st = c.state,
                slots = c.slots, snaps = c.snaps;
     const int64_t kh = state->k_heads, vh = state->v_heads, hd = state->head_dim, mm = hd * hd;
-    const std::vector<int64_t> first = sequences(c, st.rows);
+    const std::vector<int64_t> first = sequences(c.slots, c.lens, c.snaps, c.in.rows, st.rows);
     const float scale = 1.0f / sqrtf(float(hd));
     std::vector<float> m(static_cast<size_t>(vh * mm)), row(static_cast<size_t>(in.cols)), q(static_cast<size_t>(hd)),
         k(static_cast<size_t>(hd));

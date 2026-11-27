@@ -24,6 +24,7 @@ type_info info(larch_dtype t) {
     case LARCH_FP8_E4M3: return {1, 1};
     case LARCH_Q3_K: return {256, 110};
     case LARCH_Q2_K: return {256, 84};
+    case LARCH_NVFP4: return {64, 36};
   }
   throw bad_arg("unknown dtype " + std::to_string(int(t)));
 }
@@ -208,6 +209,26 @@ static void q6_k(const uint8_t* b, float* y) {
   }
 }
 
+// ggml_ue4m3_to_fp32: an unsigned E4M3 scale at half its value (kvalues_mxfp4 hold twice the E2M1 values).
+static float ue4m3(uint8_t x) {
+  if (x == 0 || x == 0x7F) return 0.0f;
+  const int e = (x >> 3) & 0xF, m = x & 7;
+  const float raw = e == 0 ? std::ldexp(float(m), -9) : std::ldexp(1.0f + float(m) / 8.0f, e - 7);
+  return raw * 0.5f;
+}
+
+static void nvfp4(const uint8_t* b, float* y) {
+  static constexpr int8_t values[16] = {0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12};
+  for (int s = 0; s < 4; ++s) {
+    const float d = ue4m3(b[s]);
+    const uint8_t* q = b + 4 + 8 * s;
+    for (int j = 0; j < 8; ++j) {
+      y[16 * s + j] = float(values[q[j] & 0xF]) * d;
+      y[16 * s + j + 8] = float(values[q[j] >> 4]) * d;
+    }
+  }
+}
+
 void to_f32(larch_dtype t, const uint8_t* src, int64_t n, float* dst) {
   void (*block)(const uint8_t*, float*) = nullptr;
   switch (t) {
@@ -230,6 +251,7 @@ void to_f32(larch_dtype t, const uint8_t* src, int64_t n, float* dst) {
     case LARCH_Q6_K: block = q6_k; break;
     case LARCH_Q3_K: block = q3_k; break;
     case LARCH_Q2_K: block = q2_k; break;
+    case LARCH_NVFP4: block = nvfp4; break;
   }
   const type_info ti = info(t);
   for (int64_t i = 0; i < n / ti.block; ++i) block(src + i * ti.bytes, dst + i * ti.block);

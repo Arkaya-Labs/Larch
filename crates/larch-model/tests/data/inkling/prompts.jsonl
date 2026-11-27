@@ -1,0 +1,6 @@
+{"prompt": "A"}
+{"prompt": "Hello, world!"}
+{"prompt": "The quick brown fox jumps over the lazy dog, twice: 12345 67890."}
+{"prompt": "def add(a, b):\n    return a + b\n\nprint(add(2, 3))  # 5\n"}
+{"prompt": "Ünïcödé — naïve café, 東京, Ελληνικά and emoji 🙂 mixed with ASCII text to cross the window."}
+{"prompt": "In the beginning the loop ran three times over the same layers, and every pass kept its own keys, values and convolution history, so that a long prompt like this one reaches past the window of sixteen positions and past the relative extent of twenty-four, where the bias table's last column takes over."}
