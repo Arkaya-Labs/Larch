@@ -818,6 +818,11 @@ pub(crate) struct Scheduler {
     /// model that refuses its first one never guesses again; one that took a check before may
     /// refuse one for want of room (its spare state slots) and guesses on.
     pub(crate) checkable: Option<bool>,
+    /// A recurrent model's spare state slots free before this step's checks
+    /// ([`larch_model::Model::check_spares_free`], which the engine sets before each schedule):
+    /// each guess a check tries snapshots its row into one. None: no count, and the model
+    /// refuses a check it cannot hold.
+    pub(crate) check_spares: Option<usize>,
     /// Step time by decode and guessed rows, which sizes each check.
     pub(crate) costs: Costs,
     /// Steps planned that could check, which set the exploring ones.
@@ -825,6 +830,9 @@ pub(crate) struct Scheduler {
     /// Each state slot's fed tokens, as the engine's copies and resets leave them (tests' `step`).
     #[cfg(test)]
     shadow: HashMap<u32, Vec<u32>>,
+    /// The most sequences one planned step checked.
+    #[cfg(test)]
+    pub(crate) most_checks: usize,
     /// When the last step that ran a prompt chunk beside decode rows was planned, and the share
     /// of its time those rows then run alone.
     chunk_at: Option<(u64, f64)>,
@@ -929,10 +937,13 @@ impl Scheduler {
             draft_conf: Vec::new(),
             guess_max: 0,
             checkable: None,
+            check_spares: None,
             costs: Costs::default(),
             may_check: 0,
             #[cfg(test)]
             shadow: HashMap::new(),
+            #[cfg(test)]
+            most_checks: 0,
             version: 0,
             hold: false,
         }
@@ -1885,13 +1896,13 @@ impl Scheduler {
                 continue;
             }
             let n_kv = self.reqs[&id].seq.n_kv;
-            // A recurrent model rewinds one check a step.
-            let one = self.state_slots > 0 && plan.guessed > 0;
-            let left = if one {
-                0
-            } else {
-                plan.guess_room - plan.guessed
-            };
+            // A recurrent model's checks share its free spares: a guess snapshots its row in one.
+            let mut left = plan.guess_room - plan.guessed;
+            if self.state_slots > 0
+                && let Some(free) = self.check_spares
+            {
+                left = left.min(free.saturating_sub(plan.guessed));
+            }
             let k = self.guess(id, left, plan, d.as_deref_mut());
             loop {
                 if self.grow(id, n_kv + 1 + k, &mut plan.n_reclaimed) {
@@ -1899,6 +1910,11 @@ impl Scheduler {
                         // A check: the last token and its guesses, a logit for every row.
                         plan.prefill.push((id, n_kv, k + 1));
                         plan.guessed += k;
+                        // A step that checks feeds no prompt: its prefill rows are its checks.
+                        #[cfg(test)]
+                        {
+                            self.most_checks = self.most_checks.max(plan.prefill.len());
+                        }
                     } else {
                         plan.decode.push(id);
                     }

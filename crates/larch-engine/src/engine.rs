@@ -4161,6 +4161,7 @@ impl Engine {
             loaded.graphs.retain(|k, _| !k.taps);
             loaded.draft = None;
         }
+        self.sched.check_spares = loaded.model.check_spares_free().map(|n| n as usize);
         let mut plan = match &loaded.draft {
             Some(draft) => {
                 let mut d = DraftStep {
@@ -4190,8 +4191,8 @@ impl Engine {
             plan.cap_blocked = self.sched.cap_blocked(&lim);
         }
         let loaded = self.loaded.as_mut().expect("loaded engine");
-        // A rewound slot that sits this step out (parked, freed or waiting) goes home, so only the
-        // last checker can still hold a spare and guesses + 1 of them always suffice.
+        // A rewound slot that sits this step out (parked, freed or waiting) goes home, so a spare
+        // holds only a sequence that steps (and goes home unless it checks again) or a snapshot.
         if loaded.model.state_slots() > 0 && self.opts.guessing() {
             let seqs = plan.decode.iter().chain(plan.prefill.iter().map(|p| &p.0));
             let stepped: Vec<u32> = seqs
@@ -11431,9 +11432,9 @@ mod tests {
             assert!(guessed[3].usage.cached_tokens > 0);
         }
 
-        /// A recurrent model checks with its state rewound to the kept rows (one check a step),
-        /// and a backend that refuses check steps decodes plainly, recurrent or not: either way
-        /// the output is unchanged.
+        /// A recurrent model checks with its state rewound to the kept rows, and a backend that
+        /// refuses check steps decodes plainly, recurrent or not: either way the output is
+        /// unchanged.
         #[test]
         fn recurrent_models_rewind_and_refused_checks_decode() {
             for seed in 0..2 {
@@ -11456,6 +11457,24 @@ mod tests {
                 let (out, stats) = run(Arch::Llama, true, 8, Box::new(PromptLookup), &reqs);
                 same(&out, &plain);
                 assert!(unchecked(stats), "{stats:?}");
+            }
+        }
+
+        /// Several sequences of a recurrent model check in one step, within its spares, each
+        /// rewound to its own kept rows: the output is unchanged.
+        #[test]
+        fn recurrent_checks_share_a_step() {
+            for seed in 0..2 {
+                let reqs = prompts(seed);
+                let (plain, _) = run(Arch::Qwen35, false, 0, Box::new(PromptLookup), &reqs);
+                let refs = refs(&reqs, &plain);
+                let (mut e, h) = engine(Arch::Qwen35, 8, Box::new(Oracle(refs, seed)), 0, false);
+                let hs: Vec<_> = reqs.iter().map(|r| h.submit(r.clone()).unwrap()).collect();
+                let outs = drive(&mut e, &hs);
+                same(&outs, &plain);
+                let stats = h.guess_stats();
+                assert!(stats.kept > 0 && stats.kept < stats.tried, "{stats:?}");
+                assert!(e.sched.most_checks >= 2, "{}", e.sched.most_checks);
             }
         }
 

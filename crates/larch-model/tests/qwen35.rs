@@ -688,6 +688,79 @@ fn a_check_beside_another_sequence() {
     same(&alone_b[4..], &got_b, "the one beside it");
 }
 
+/// Two sequences check in one step and rewind apart: each to its own kept rows, every pair of kept
+/// counts. Each then answers as a run that only saw its kept rows, through decode steps of both
+/// that move them home, bit for bit; the spares all come back.
+#[test]
+fn two_checks_in_one_step_rewind_apart() {
+    let path = model_file(Arch::Qwen35Moe, "q35-two-checks");
+    let dev = Device::open(CPU).unwrap();
+    let mut run = Run::new(&path, &dev, 4);
+    std::fs::remove_file(&path).unwrap();
+    let (pa, pb) = (tokens(10, 13), tokens(7, 14));
+    let (ga, gb, next) = (tokens(4, 15), tokens(5, 16), tokens(3, 17));
+    let free = run.model.check_spares_free();
+    for ka in 1..=ga.len() {
+        for kb in 1..=gb.len() {
+            let what = format!("{ka} and {kb} kept");
+            // Slots 2 and 3 run only what slots 0 and 1 keep, as prefill chunks.
+            let (aa, ab) = (10 + ka as i32, 7 + kb as i32);
+            for slot in 0..4 {
+                run.model.reset_state(&run.s, slot).unwrap();
+            }
+            run.sequence(2, &pa, 10);
+            run.sequence(3, &pb, 7);
+            let mut want_a = run.step(&[Part::prefill(2, 10, &ga[..ka])]);
+            let mut want_b = run.step(&[Part::prefill(3, 7, &gb[..kb])]);
+            for (i, &t) in next.iter().enumerate() {
+                let i = i as i32;
+                let both = run.step(&[Part::decode(2, aa + i, t), Part::decode(3, ab + i, t)]);
+                want_a.push(both[0].clone());
+                want_b.push(both[1].clone());
+            }
+            run.sequence(0, &pa, 10);
+            run.sequence(1, &pb, 7);
+            run.model.begin_check(&run.s, 0, ga.len() as u32).unwrap();
+            run.model.begin_check(&run.s, 1, gb.len() as u32).unwrap();
+            run.check = true;
+            let two = run.step(&[Part::prefill(0, 10, &ga), Part::prefill(1, 7, &gb)]);
+            run.check = false;
+            run.model.end_check(&run.s, 0, ka as u32).unwrap();
+            run.model.end_check(&run.s, 1, kb as u32).unwrap();
+            let mut got_a = two[..ka].to_vec();
+            let mut got_b = two[ga.len()..ga.len() + kb].to_vec();
+            for (i, &t) in next.iter().enumerate() {
+                let i = i as i32;
+                let both = run.step(&[Part::decode(0, aa + i, t), Part::decode(1, ab + i, t)]);
+                got_a.push(both[0].clone());
+                got_b.push(both[1].clone());
+            }
+            same(&want_a, &got_a, &format!("{what}: the first"));
+            same(&want_b, &got_b, &format!("{what}: the second"));
+            assert_eq!(run.model.check_spares_free(), free, "{what}: spares back");
+        }
+    }
+}
+
+/// Checks share the spares: a second check that needs more than the first left is refused, and
+/// its spares stay free for one that fits.
+#[test]
+fn checks_share_the_spares() {
+    let path = model_file(Arch::Qwen35, "q35-spares");
+    let dev = Device::open(CPU).unwrap();
+    let mut run = Run::new(&path, &dev, 2);
+    std::fs::remove_file(&path).unwrap();
+    let (m, s) = (&mut run.model, &run.s);
+    let spares = Transformer::CHECK_SLOTS;
+    assert_eq!(m.check_spares_free(), Some(spares));
+    m.begin_check(s, 0, 6).unwrap();
+    assert_eq!(m.check_spares_free(), Some(spares - 5));
+    assert_eq!(m.begin_check(s, 1, spares - 3), Err(KError::Unsupported));
+    assert_eq!(m.check_spares_free(), Some(spares - 5));
+    m.begin_check(s, 1, spares - 4).unwrap();
+    assert_eq!(m.check_spares_free(), Some(0));
+}
+
 /// Check steps give each row, bit for bit, the logits of decoding it alone at the same attention
 /// splits: two chunks of 10 rows in one step (past every one-row kernel's row count), then a chunk
 /// beside another sequence's decode row. After the same prompt prefill in three slots.

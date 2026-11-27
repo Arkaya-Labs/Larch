@@ -3746,6 +3746,10 @@ impl Model for Transformer {
         self.alloc_check_slots(s, spares)
     }
 
+    fn check_spares_free(&self) -> Option<u32> {
+        self.states.as_ref().map(qwen35::States::spares_free)
+    }
+
     fn begin_check(&mut self, _s: &Stream, slot: u32, rows: u32) -> Result<(), KError> {
         self.check_begin(slot, rows)
     }

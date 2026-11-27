@@ -268,7 +268,8 @@ pub(super) struct States {
     map: Vec<u32>,
     /// Spares holding nothing.
     free: Vec<u32>,
-    check: Option<Check>,
+    /// The begun checks, one a sequence slot at most: several sequences check in one step.
+    checks: Vec<Check>,
     /// A routed step's i32 physical slots (`[seqs]` at 0) and snapshot slots (`[rows]` at
     /// `4 * max_rows`), which the Gated DeltaNet layers read in place of the batch's slots. A
     /// guessing load's capture always reads them, and [`Model::route_table`] writes them before
@@ -292,11 +293,16 @@ impl States {
         self.slots
     }
 
+    /// The spares no check, snapshot or rewound sequence holds.
+    pub fn spares_free(&self) -> u32 {
+        self.free.len() as u32
+    }
+
     /// Drops any check on `slot` and moves the slot home, freeing its spares: before the slot is
     /// overwritten.
     fn release(&mut self, slot: u32) {
-        if let Some(c) = self.check.take_if(|c| c.slot == slot) {
-            self.free.extend(c.snaps);
+        if let Some(i) = self.checks.iter().position(|c| c.slot == slot) {
+            self.free.extend(self.checks.swap_remove(i).snaps);
         }
         let p = std::mem::replace(&mut self.map[slot as usize], slot);
         if p != slot {
@@ -410,7 +416,7 @@ impl Transformer {
             phys,
             map: (0..slots).collect(),
             free: (slots..phys).collect(),
-            check: None,
+            checks: Vec::new(),
             route: alloc(DType::I32.bytes(2 * self.max_rows as u64))?,
             step: None,
         };
@@ -430,7 +436,7 @@ impl Transformer {
         let (Some(h), Some(st)) = (&self.hybrid, &mut self.states) else {
             return Err(KError::InvalidArg);
         };
-        if st.check.is_some() {
+        if !st.checks.is_empty() {
             return Err(KError::InvalidArg);
         }
         let (conv, ssm) = h.slot_bytes();
@@ -580,13 +586,14 @@ impl Transformer {
         Ok(())
     }
 
-    /// [`Model::begin_check`]: takes `rows - 1` spares for the step's row snapshots. `Unsupported`
-    /// without enough of them, `InvalidArg` for a slot out of range, no rows or a check not ended.
+    /// [`Model::begin_check`]: takes `rows - 1` spares for the step's row snapshots, beside the
+    /// other sequences' checks of the step. `Unsupported` without enough of them, `InvalidArg` for
+    /// a slot out of range, no rows or a check on the slot not ended.
     pub(super) fn check_begin(&mut self, slot: u32, rows: u32) -> Result<(), KError> {
         let Some(st) = &mut self.states else {
             return Err(KError::Unsupported);
         };
-        if slot >= st.slots || rows == 0 || st.check.is_some() {
+        if slot >= st.slots || rows == 0 || st.checks.iter().any(|c| c.slot == slot) {
             return Err(KError::InvalidArg);
         }
         let n = rows as usize - 1;
@@ -594,7 +601,7 @@ impl Transformer {
             return Err(KError::Unsupported);
         }
         let snaps = st.free.split_off(st.free.len() - n);
-        st.check = Some(Check {
+        st.checks.push(Check {
             slot,
             rows,
             snaps,
@@ -610,10 +617,11 @@ impl Transformer {
         let Some(st) = &mut self.states else {
             return Err(KError::Unsupported);
         };
-        let ends = |c: &mut Check| c.slot == slot && (1..=c.rows).contains(&kept);
-        let Some(c) = st.check.take_if(ends) else {
+        let ends = |c: &Check| c.slot == slot && (1..=c.rows).contains(&kept);
+        let Some(i) = st.checks.iter().position(ends) else {
             return Err(KError::InvalidArg);
         };
+        let c = st.checks.swap_remove(i);
         let mut snaps = c.snaps;
         if c.ran && kept < c.rows {
             let at = snaps.swap_remove(kept as usize - 1);
@@ -646,7 +654,7 @@ impl Transformer {
             return Ok(());
         }
         let moved = st.map.iter().enumerate().any(|(l, &p)| p as usize != l);
-        if st.check.is_none() && !moved {
+        if st.checks.is_empty() && !moved {
             return Ok(());
         }
         let n = b.slots.shape()[0];
@@ -685,7 +693,7 @@ impl Transformer {
         let valid = slots.iter().all(|&s| s >= 0 && (s as u32) < st.slots)
             && lens.iter().all(|&l| l >= 0)
             && rows <= cap
-            && st.check.as_ref().is_none_or(ours);
+            && st.checks.iter().all(ours);
         if !valid {
             return Err(KError::InvalidArg);
         }
@@ -694,8 +702,8 @@ impl Transformer {
         for (slot, &len) in slots.iter_mut().zip(lens) {
             let (l, len) = (*slot as u32, len as usize);
             let p = st.map[l as usize];
-            match &mut st.check {
-                Some(c) if c.slot == l => {
+            match st.checks.iter_mut().find(|c| c.slot == l) {
+                Some(c) => {
                     for (r, &at) in c.snaps.iter().enumerate() {
                         snaps[first + r] = at as i32;
                     }
@@ -1041,7 +1049,7 @@ mod tests {
         s.download(&st.route, 0, &mut table).unwrap();
         let at = DType::I32.bytes(ROWS as u64);
         s.download(&st.route, at, &mut snaps).unwrap();
-        let ran = st.check.as_ref().map(|c| c.ran);
+        let ran = st.checks.first().map(|c| c.ran);
         (st.map.clone(), st.free.clone(), ran, st.step, table, snaps)
     }
 
@@ -1141,7 +1149,7 @@ mod tests {
             "not the check's rows"
         );
         let st = m.states.as_ref().unwrap();
-        assert!(!st.check.as_ref().unwrap().ran);
+        assert!(!st.checks[0].ran);
         let path = std::env::temp_dir().join(format!("larch-route-d-{}.gguf", std::process::id()));
         std::fs::write(&path, tiny::gguf(Arch::Qwen3, 1)).unwrap();
         let mut dense = Transformer::load(&path, &m_dev, &s, ROWS).unwrap();

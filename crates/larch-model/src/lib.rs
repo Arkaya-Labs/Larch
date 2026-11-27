@@ -255,6 +255,13 @@ pub trait Model: Send {
         Ok(())
     }
 
+    /// The spare state slots [`Model::begin_check`] could take now: a check of `rows` rows takes
+    /// `rows - 1`. None where the model keeps no count (no recurrent state, or a wrapper that does
+    /// not say): a check it cannot hold is then refused (`Unsupported`).
+    fn check_spares_free(&self) -> Option<u32> {
+        None
+    }
+
     /// Before a check step of `rows` rows on recurrent-state `slot`: the next forward on it may be rewound.
     fn begin_check(&mut self, _s: &Stream, _slot: u32, _rows: u32) -> Result<(), KError> {
         Err(KError::Unsupported)
