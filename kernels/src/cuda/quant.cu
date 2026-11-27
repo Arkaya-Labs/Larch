@@ -1163,16 +1163,18 @@ static void mmvq_id_issue(const stream& s, const view& w, const view& wc, const 
          weighted);
 }
 
-// The checked mmvq_id or mmvq_id_mixed call on s: a quant w, and for the second only Q2_K cold experts.
+// The checked mmvq_id or mmvq_id_mixed call on s: a quant w, and for the second cold experts at w's dtype (a split
+// layer's host experts, read in place) or Q2_K (a repacked layer's).
 static void mmvq_id_run(const stream& s, const view& w, const view& wc, const view& table, const view& x,
                         const view& ids, const view& b, const view& wt, const view& o) {
   aligned({w, wc, table, x, ids, b, wt, o});
-  if (table.p && wc.dtype != LARCH_Q2_K) throw failure{LARCH_ERR_UNSUPPORTED, "cold experts other than Q2_K"};
+  if (table.p && wc.dtype != LARCH_Q2_K && wc.dtype != w.dtype)
+    throw failure{LARCH_ERR_UNSUPPORTED, "cold experts other than Q2_K or the hot experts' dtype"};
   if (!x.rows) return;
   with_dtype<true>(w.dtype, [&](auto t) {
     constexpr int T = decltype(t)::value;
     if constexpr (T != LARCH_F16 && T != LARCH_F32) {  // check_mmvq_id has refused f16 and f32 w
-      if (table.p)
+      if (table.p && wc.dtype == LARCH_Q2_K)
         mmvq_id_issue<T, LARCH_Q2_K>(s, w, wc, table, x, ids, b, wt, o);
       else
         mmvq_id_issue<T, T>(s, w, wc, table, x, ids, b, wt, o);

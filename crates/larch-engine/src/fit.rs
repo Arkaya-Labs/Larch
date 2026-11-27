@@ -476,20 +476,21 @@ pub(crate) fn most_state_slots(cap: u32, n: u32, layers: impl Fn(u32) -> u32) ->
 }
 
 /// [`larch_model::ExpertPlan::resident`] for a load onto `before`, under the room
-/// [`host_expert_layers`] plans with: `None` when the weights fit whole or when not even the
-/// weights without their routed experts fit (whole layers then decide, and refuse); else the
-/// (layer, expert) pairs `counts` routed most (`[layers * experts]`, layer-major) whose bytes
-/// (`experts[i] / experts_per_layer` each) fit. Ties go to the later layer, then the lower
-/// expert, so a uniform histogram keeps the leading layers' experts on the host as whole layers do.
-/// `charge` is what a split costs past `reserve` ([`expert_cache_bytes`]): a model that fits whole
-/// under `reserve` alone stays whole, as [`host_expert_layers`] keeps it.
+/// [`host_expert_layers`] plans with: `None` when the weights fit whole, when not even the weights
+/// without their routed experts fit, or when no split's host experts are colder, route for byte,
+/// than whole layers' (an even histogram); whole layers then decide. Else [`cheapest_split`] at the plan's
+/// `seats` rows, by [`SPLIT_LAYER_US`] and [`COLD_PAIR_US`]: a few layers keep their hot experts on
+/// the device and their cold ones on the host, `counts` (`[layers * m.experts]`, layer-major)
+/// telling which, and every other layer stays whole on the device. `charge` is what a split costs
+/// past `reserve` ([`expert_cache_bytes`]): a model that fits whole under `reserve` alone stays
+/// whole, as [`host_expert_layers`] keeps it.
 #[allow(clippy::too_many_arguments)] // host_expert_layers' inputs and the histogram
 pub(crate) fn expert_residency(
     before: &DeviceProps,
     weights: u64,
     experts: &[u64],
     counts: &[u64],
-    per_layer: u32,
+    m: MoeCfg,
     c: &ModelConfig,
     max_context: u32,
     kv_pool_fraction: f32,
@@ -501,33 +502,154 @@ pub(crate) fn expert_residency(
     if before.backend == Backend::Cpu || max_context == 0 {
         return None;
     }
-    let room =
-        |mapped, r| weights_room(before, c, (max_context, kv_pool_fraction, seats), r, mapped);
-    if weights <= room(true, reserve) {
+    let budget = (max_context, kv_pool_fraction, seats);
+    if weights <= weights_room(before, c, budget, reserve, true) {
         return None;
     }
-    // The load aligns each layer's three slot tables to 256 bytes.
-    let fixed = weights.saturating_sub(experts.iter().sum()) + 3 * 256 * experts.len() as u64;
-    let mut left = room(false, reserve + charge).checked_sub(fixed)?;
-    let e = per_layer as usize;
-    let mut order: Vec<(usize, usize)> = (0..experts.len())
-        .flat_map(|l| (0..e).map(move |x| (l, x)))
-        .collect();
-    order.sort_unstable_by_key(|&(l, x)| (std::cmp::Reverse((counts[l * e + x], l)), x));
-    let mut resident = vec![Vec::new(); experts.len()];
-    // ponytail: greedy by count; a knapsack over the layers' mixed quant sizes if it ever leaves
-    // more than one expert's bytes unused.
-    // ponytail: the plan does not charge a split layer's device round trip, so a skewed histogram can
-    // cost a sync per layer (48 on a 48-layer fixture, against one per whole host layer); prefer whole
-    // layers or cap the splits if the hit rate rises while tok/s falls.
-    for (l, x) in order {
-        let bytes = experts[l] / u64::from(per_layer);
-        if bytes <= left {
-            left -= bytes;
-            resident[l].push(x as u32);
-        }
+    let (ctx, f) = (max_context, kv_pool_fraction);
+    let left = resident_budget(before, weights, experts, c, ctx, f, reserve + charge, seats)?;
+    if experts.iter().sum::<u64>() <= left {
+        return Some(vec![(0..m.experts).collect(); experts.len()]);
     }
-    Some(resident)
+    let col = match seats {
+        0..=1 => 0,
+        2..=4 => 1,
+        _ => 2,
+    };
+    let cost = [SPLIT_LAYER_US[col], COLD_PAIR_US[col]];
+    cheapest_split(experts, counts, m, left, seats, cost)
+}
+
+/// What a split layer costs a decode step over the same layer whole on the device, in µs at 1, 4
+/// and 8 rows: its experts run unfused (gate, up, silu_mul and down through `mmvq_id_mixed`) where
+/// a whole layer's run fused (`fused_moe_gate_up`, `fused_moe_down`). Measured on the RTX 5070 Ti,
+/// 27 Nov 2026, at the hybrid MoE target's shapes: fused_bench's unfused less fused gate_up and down
+/// (Q3_K, Q4_K) plus `mmvq_id_mixed` with no cold pair less `mmvq_id` (bench/results'
+/// 35b-expert-spill g1.cu). Re-measure on another card.
+pub(crate) const SPLIT_LAYER_US: [f64; 3] = [11.3, 18.1, 23.1];
+/// What one cold (row, expert) pair costs a decode step, in µs at 1, 4 and 8 rows: its gate, up and
+/// down read in place from page-locked host memory over the bus, inside `mmvq_id_mixed`. Measured
+/// with g1.cu on the RTX 5070 Ti over PCIe 5.0, 27 Nov 2026: one cold pair in the step against
+/// none (pairs add about linearly, 350 µs each at 4 and 8 rows). Re-measure on another card or bus.
+pub(crate) const COLD_PAIR_US: [f64; 3] = [359.9, 369.4, 307.1];
+
+/// The routed experts' bytes a per-expert load can keep on the device under `reserve`: the room
+/// less the weights without their experts and each layer's three 256-byte-aligned slot tables.
+#[allow(clippy::too_many_arguments)] // host_expert_layers' inputs
+pub(crate) fn resident_budget(
+    before: &DeviceProps,
+    weights: u64,
+    experts: &[u64],
+    c: &ModelConfig,
+    max_context: u32,
+    kv_pool_fraction: f32,
+    reserve: u64,
+    seats: u32,
+) -> Option<u64> {
+    let budget = (max_context.min(c.ctx_train), kv_pool_fraction, seats);
+    let fixed = weights.saturating_sub(experts.iter().sum()) + 3 * 256 * experts.len() as u64;
+    weights_room(before, c, budget, reserve, false).checked_sub(fixed)
+}
+
+/// [`capped_split`] at the cap whose decode step of `rows` rows costs least: `split_us` a split layer
+/// and `pair_us` an expected cold pair ([`cold_pairs`]); the fewer split layers on a tie. `None`
+/// where no cap splits.
+pub(crate) fn cheapest_split(
+    experts: &[u64],
+    counts: &[u64],
+    m: MoeCfg,
+    left: u64,
+    rows: u32,
+    [split_us, pair_us]: [f64; 2],
+) -> Option<Vec<Vec<u32>>> {
+    let e = m.experts as usize;
+    let cost = |r: &Vec<Vec<u32>>| {
+        let split = r.iter().filter(|l| l.len() < e).count() as f64;
+        split * split_us + f64::from(rows) * cold_pairs(r, counts, m) * pair_us
+    };
+    (1..=experts.len())
+        .filter_map(|n| capped_split(experts, counts, e, left, n))
+        .min_by(|a, b| cost(a).total_cmp(&cost(b)))
+}
+
+/// The cold (row, expert) pairs a decode row is expected to make under `resident`: per layer, the
+/// share of its routes (`counts`) on experts it does not keep, times the experts a token runs.
+pub(crate) fn cold_pairs(resident: &[Vec<u32>], counts: &[u64], m: MoeCfg) -> f64 {
+    let e = m.experts as usize;
+    let share = resident.iter().enumerate().map(|(l, r)| {
+        let c = &counts[l * e..][..e];
+        let all: u64 = c.iter().sum();
+        let kept: u64 = r.iter().map(|&x| c[x as usize]).sum();
+        all.saturating_sub(kept) as f64 / all.max(1) as f64
+    });
+    share.sum::<f64>() * f64::from(m.used)
+}
+
+/// The routed experts (`experts[l]` bytes a layer, `e` each) split over at most `n` layers, the rest
+/// whole on the device, keeping `left` bytes of them there: the host takes the bytes past `left`,
+/// from the `n` layers whose coldest experts at that many bytes each (`host / n`) hold the fewest
+/// routes, coldest first (ties to the earlier layer and the higher expert, as whole layers host the
+/// leading ones). `None` where no `n` layers cover the host's bytes, or where their coldest experts
+/// hold as many routes a byte as the whole layers covering the host's bytes do (an even histogram).
+pub(crate) fn capped_split(
+    experts: &[u64],
+    counts: &[u64],
+    e: usize,
+    left: u64,
+    n: usize,
+) -> Option<Vec<Vec<u32>>> {
+    let host = experts.iter().sum::<u64>().saturating_sub(left);
+    if host == 0 || n == 0 || n > experts.len() {
+        return None;
+    }
+    let count = |l: usize, x: usize| counts[l * e + x];
+    let share = host.div_ceil(n as u64);
+    // Per layer that can give `share`: the routes of its `k` coldest experts, the layer, their bytes.
+    let mut layers: Vec<(u64, usize, u64)> = (0..experts.len())
+        .filter_map(|l| {
+            let each = experts[l] / e as u64;
+            let k = usize::try_from(share.div_ceil(each.max(1))).ok()?;
+            let mut cold: Vec<u64> = (0..e).map(|x| count(l, x)).collect();
+            cold.sort_unstable();
+            (each > 0 && k <= e).then(|| (cold[..k].iter().sum(), l, k as u64 * each))
+        })
+        .collect();
+    layers.sort_unstable();
+    layers.truncate(n);
+    let mut sum = 0;
+    let whole = experts.iter().take_while(|&&b| {
+        let short = sum < host;
+        sum += b;
+        short
+    });
+    let whole = whole.count();
+    let whole_routes = u128::from(counts[..whole * e].iter().sum::<u64>());
+    let whole_bytes = u128::from(experts[..whole].iter().sum::<u64>());
+    let covered: u64 = layers.iter().map(|&(_, l, _)| experts[l]).sum();
+    let routes = u128::from(layers.iter().map(|p| p.0).sum::<u64>());
+    let bytes = u128::from(layers.iter().map(|p| p.2).sum::<u64>());
+    if layers.len() < n || covered < host || routes * whole_bytes >= whole_routes * bytes {
+        return None;
+    }
+    let mut pool: Vec<(u64, usize, std::cmp::Reverse<usize>)> = (layers.iter())
+        .flat_map(|&(_, l, _)| (0..e).map(move |x| (count(l, x), l, std::cmp::Reverse(x))))
+        .collect();
+    pool.sort_unstable();
+    let mut on_host = vec![false; experts.len() * e];
+    let mut moved = 0;
+    for (_, l, std::cmp::Reverse(x)) in pool {
+        if moved >= host {
+            break;
+        }
+        on_host[l * e + x] = true;
+        moved += experts[l] / e as u64;
+    }
+    let kept = |l: usize| -> Vec<u32> {
+        (0..e as u32)
+            .filter(|&x| !on_host[l * e + x as usize])
+            .collect()
+    };
+    Some((0..experts.len()).map(kept).collect())
 }
 
 /// What a per-expert load allocates on the device past `reserve` and the `weights`' own bytes: the
@@ -760,8 +882,9 @@ mod tests {
     use crate::guess::{DRAFT_SEATS, draft_seats};
 
     use super::{
-        GRAPH_BYTES, draft_fits, expert_residency, fit, graph_arena_reserve, graph_reserve,
-        grouped_scratch, host_expert_layers, host_expert_layers_with_pool, mixed_reserve,
+        GRAPH_BYTES, capped_split, cheapest_split, draft_fits, expert_residency, fit,
+        graph_arena_reserve, graph_reserve, grouped_scratch, host_expert_layers,
+        host_expert_layers_with_pool, mixed_reserve, resident_budget,
     };
 
     /// The 3050's 8B row: 32 layers of 8 KV heads of 128, so 128 KiB of KV a token.
@@ -1127,10 +1250,15 @@ mod tests {
         let (e, each) = (256usize, 360_000_000u64);
         let experts = vec![each; 48];
         let (weights, reserve, free) = (18_600_000_000u64, 1 << 30, 15_500_000_000u64);
+        let m = MoeCfg {
+            experts: e as u32,
+            used: 8,
+            ffn: 512,
+        };
         let plan = |b: Backend, free: u64, counts: &[u64]| {
             let d = card(b, free, 0);
             expert_residency(
-                &d, weights, &experts, counts, e as u32, &c, 8192, 0.85, reserve, 0, 1,
+                &d, weights, &experts, counts, m, &c, 8192, 0.85, reserve, 0, 1,
             )
         };
         let room = free
@@ -1150,31 +1278,76 @@ mod tests {
             l.sort_unstable();
             assert_eq!(l, (0..l.len() as u32).collect::<Vec<_>>());
         }
-        // Uniform (no histogram yet): whole trailing layers, at most one split, never fewer
-        // experts on the device than whole-layer placement keeps.
-        let r = plan(Backend::Cuda, free, &vec![0; 48 * e]).unwrap();
-        let split = r.iter().filter(|l| !l.is_empty() && l.len() < e).count();
-        let first = r.iter().position(|l| l.len() == e).unwrap();
-        assert!(
-            split <= 1 && r[first..].iter().all(|l| l.len() == e),
-            "{split}"
-        );
-        let whole = host_expert_layers(
-            &card(Backend::Cuda, free, 0),
-            weights,
-            &experts,
-            &c,
-            8192,
-            0.85,
-            reserve,
-            1,
-        );
-        assert!(held(&r) >= (48 - u64::from(whole)) * each);
+        // Uniform (no histogram yet) or even: no split hosts fewer routes than whole layers do,
+        // so whole layers decide.
+        assert_eq!(plan(Backend::Cuda, free, &vec![0; 48 * e]), None);
+        assert_eq!(plan(Backend::Cuda, free, &vec![7; 48 * e]), None);
         // A model that fits whole, one whose non-expert weights do not, and the CPU reference
         // place nothing per expert.
         assert_eq!(plan(Backend::Cuda, 40_000_000_000, &skew), None);
         assert_eq!(plan(Backend::Cuda, 1 << 30, &skew), None);
         assert_eq!(plan(Backend::Cpu, free, &skew), None);
+    }
+
+    /// The hybrid MoE target's split on its shipped histogram (bench/routes/m13.experts) and the 5070
+    /// Ti's figures from a split load's plan line (27 Nov): 15,631,122,432 B free before the load,
+    /// 15,890,541,056 B of weights, 381,681,664 B of experts a layer, 577,490,095 B of reserve and
+    /// charge at 4 state slots and 2560 tokens. A cap of 8 splits exactly 8 layers within the budget
+    /// and leaves under 0.5 % of routed pairs on the host; a uniform histogram keeps whole layers; the
+    /// cost picks a cap between 6 and 20 for this test's figures; a thin tail (3 experts' bytes past
+    /// the room) splits one layer and keeps every other whole. Prints the table the cost reads.
+    #[test]
+    fn a_capped_split_hosts_the_coldest_experts_of_few_layers() {
+        let c = m35b();
+        let (before, _, experts, _) = target(4);
+        let (weights, reserve) = (15_890_541_056u64, 577_490_095);
+        let m = MoeCfg {
+            experts: 256,
+            used: 8,
+            ffn: 512,
+        };
+        let routes = include_bytes!("../../../bench/routes/m13.experts");
+        let h = larch_model::Histogram::parse(routes, 17_117_951_808, 40, 256).unwrap();
+        let left = resident_budget(&before, weights, &experts, &c, 2560, 0.85, reserve, 4).unwrap();
+        let split = |r: &[Vec<u32>]| r.iter().filter(|l| l.len() < 256).count();
+        let on_host = |r: &[Vec<u32>]| r.iter().map(|l| 256 - l.len()).sum::<usize>();
+        let share = |r: &[Vec<u32>]| super::cold_pairs(r, &h.counts, m) / 320.0;
+        let each = experts[0] / 256;
+        eprintln!("cap,split,experts on host,host share %,cold pairs a step at 1,4,8 rows");
+        for n in [6, 8, 10, 12, 16, 20, 40] {
+            let r = capped_split(&experts, &h.counts, 256, left, n).unwrap();
+            let cp = super::cold_pairs(&r, &h.counts, m);
+            eprintln!(
+                "{n},{},{},{:.3},{:.2},{:.2},{:.2}",
+                split(&r),
+                on_host(&r),
+                100.0 * share(&r),
+                cp,
+                4.0 * cp,
+                8.0 * cp
+            );
+        }
+        let r = capped_split(&experts, &h.counts, 256, left, 8).unwrap();
+        assert_eq!(split(&r), 8);
+        let held: u64 = r.iter().map(|l| l.len() as u64 * each).sum();
+        assert!(held <= left, "{held} > {left}");
+        assert!(share(&r) < 0.005, "{}", share(&r));
+        // No histogram, or an even one, keeps whole layers.
+        assert_eq!(
+            capped_split(&experts, &vec![5; 40 * 256], 256, left, 8),
+            None
+        );
+        assert_eq!(
+            cheapest_split(&experts, &vec![0; 40 * 256], m, left, 4, [60.0, 150.0]),
+            None
+        );
+        // 60 us a split layer and 150 us a cold pair at 4 rows.
+        let r = cheapest_split(&experts, &h.counts, m, left, 4, [60.0, 150.0]).unwrap();
+        assert!((6..=20).contains(&split(&r)), "{}", split(&r));
+        // A thin tail: one layer's 3 coldest experts on the host, the rest whole on the device.
+        let thin = experts.iter().sum::<u64>() - 3 * each;
+        let r = cheapest_split(&experts, &h.counts, m, thin, 4, [60.0, 150.0]).unwrap();
+        assert_eq!((split(&r), on_host(&r)), (1, 3));
     }
 
     /// What a per-expert load allocates past the plan's reserve is charged, so the check after the
@@ -1195,8 +1368,13 @@ mod tests {
                 let mut d = card(Backend::Cuda, 15_500_000_000 + step * (each / e) / 8, 0);
                 d.arch_code = 120;
                 let charge = super::expert_cache_bytes(&d, log, tensors, dynamic);
+                let m = MoeCfg {
+                    experts: e as u32,
+                    used: 8,
+                    ffn: 512,
+                };
                 let r = expert_residency(
-                    &d, weights, &experts, &skew, e as u32, &c, 8192, 0.85, reserve, charge, 1,
+                    &d, weights, &experts, &skew, m, &c, 8192, 0.85, reserve, charge, 1,
                 )
                 .unwrap();
                 let held = r.iter().map(|l| l.len() as u64).sum::<u64>() * (each / e);
@@ -1231,8 +1409,13 @@ mod tests {
             host_expert_layers(&d, weights, &experts, &c, 8192, 0.85, reserve, 1),
             0
         );
+        let m = MoeCfg {
+            experts: 256,
+            used: 8,
+            ffn: 512,
+        };
         let plan = expert_residency(
-            &d, weights, &experts, &counts, 256, &c, 8192, 0.85, reserve, charge, 1,
+            &d, weights, &experts, &counts, m, &c, 8192, 0.85, reserve, charge, 1,
         );
         assert_eq!(plan, None);
     }

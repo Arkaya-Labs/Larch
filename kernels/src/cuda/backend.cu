@@ -260,10 +260,6 @@ static larch_status buffer_alloc(larch_device* vd, uint64_t bytes, larch_buffer*
   return LARCH_OK;
 }
 
-static larch_status buffer_wrap_host(larch_device*, void*, uint64_t, larch_buffer**) {
-  return vv_fail(LARCH_ERR_UNSUPPORTED, "buffer_wrap_host: Metal only");
-}
-
 // Host buffers (larch.h): page-locked host memory at larch_buffer::host, which every CPU device's ops take as
 // their own. Their ordinal is -1, so this backend's ops and copies refuse one as their buffer; upload finds a
 // source inside one (pinned_holds) and copies straight from it, asynchronously, where other host memory goes
@@ -277,6 +273,29 @@ static bool pinned_holds(const void* p, uint64_t bytes) {
   return std::any_of(pinned.begin(), pinned.end(), [&](const std::pair<const uint8_t*, uint64_t>& r) {
     return a >= r.first && bytes <= r.second && uint64_t(a - r.first) <= r.second - bytes;
   });
+}
+
+// A range inside a host buffer (pinned_holds) as this device's buffer: under UVA the device reads page-locked
+// memory in place at its device pointer, over the bus (53 GB/s against 57 for a copy on a 5070 Ti, PCIe 5.0, 27 Nov).
+// Any other memory, a file map included, stays UNSUPPORTED, so a caller falls back to uploading it.
+static larch_status buffer_wrap_host(larch_device* vd, void* host, uint64_t bytes, larch_buffer** out) {
+  const auto* d = static_cast<const device*>(vd);
+  if (!host || !bytes) return vv_fail(LARCH_ERR_INVALID_ARG, "buffer_wrap_host: empty range");
+#if defined(__HIP_PLATFORM_AMD__)
+  // ponytail: larch.h promises the wrap on CUDA only; take it on HIP once a HIP run checks in-place reads (wrap_host,
+  // ops' mixed wrapped cases) against the CPU reference.
+  return vv_fail(LARCH_ERR_UNSUPPORTED, "buffer_wrap_host: not on HIP");
+#endif
+  if (!pinned_holds(host, bytes))
+    return vv_fail(LARCH_ERR_UNSUPPORTED, "buffer_wrap_host: not inside a page-locked host buffer");
+  if (cudaError_t e = cudaSetDevice(d->ordinal)) return fail(e, "cudaSetDevice");
+  void* p = nullptr;
+  if (cudaError_t e = cudaHostGetDevicePointer(&p, host, 0)) return fail(e, "buffer_wrap_host: cudaHostGetDevicePointer");
+  auto* b = new (std::nothrow) buffer{{vv_cuda_ops()}, d->ordinal, static_cast<uint8_t*>(p), bytes};
+  if (!b) return vv_fail(LARCH_ERR_OOM, "buffer_wrap_host: host memory");
+  b->wrapped = true;
+  *out = b;
+  return LARCH_OK;
 }
 
 [[maybe_unused]] static larch_status buffer_alloc_host(larch_device* vd, uint64_t bytes, larch_buffer** out, void** host) {
@@ -309,6 +328,10 @@ static bool pinned_holds(const void* p, uint64_t bytes) {
 // Buffer relies on it); so does cudaFreeHost for a host buffer's copies.
 static void buffer_free(larch_buffer* vb) {
   auto* b = static_cast<buffer*>(vb);
+  if (b->wrapped) {
+    delete b;
+    return;
+  }
   if (b->host) {
     {
       std::lock_guard<std::mutex> lock(pinned_m);

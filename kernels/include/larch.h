@@ -195,7 +195,9 @@ larch_status larch_device_set_threads(larch_device*, uint32_t threads);
 const char* larch_last_error(const larch_device*);
 
 larch_status larch_buffer_alloc(larch_device*, uint64_t bytes, larch_buffer** out);
-/* Metal: zero-copy mmap; others: UNSUPPORTED */
+/* Metal: zero-copy mmap. CUDA: a range inside page-locked host memory (larch_buffer_alloc_host), which
+ * the device's ops read in place over the bus, until larch_buffer_free of the wrap, which must come
+ * before that host buffer's; any other memory is UNSUPPORTED there. Others: UNSUPPORTED */
 larch_status larch_buffer_wrap_host(larch_device*, void* host, uint64_t bytes, larch_buffer** out);
 /* Host memory at *host, until larch_buffer_free, that the device copies to and from at full speed
  * and asynchronously (page-locked on a GPU, plain memory on a CPU device). Every CPU device's ops take
@@ -316,7 +318,7 @@ larch_status larch_mmvq_id(larch_stream*, const larch_tensor* w_quant, const lar
  * as ids, are not checked. A (row, slot) pair reads only its expert's rows. On CUDA and the CPU reference its result
  * is larch_mmvq_id's on one tensor holding every expert's rows at its dtype, bit for bit, so a layer's hot experts
  * give the bytes they gave in the whole tensor. A GPU backend may lack it and answer a valid call UNSUPPORTED; CUDA
- * takes Q2_K cold experts only. */
+ * takes cold experts at w_hot's dtype or Q2_K. */
 larch_status larch_mmvq_id_mixed(larch_stream*, const larch_tensor* w_hot, const larch_tensor* w_cold,
                                    const larch_tensor* table_i32, const larch_tensor* x_f16,
                                    const larch_tensor* ids_i32, const larch_tensor* weights_or_null,
