@@ -12,6 +12,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "common/backend.hpp"
 
@@ -210,7 +211,7 @@ kv_write_checked check_kv_write(const sizer&, const larch_tensor* k, const larch
 // attn_decode (lens = seq_lens, no start), attn_prefill and attn (mask and sinks optional); k and v as
 // kv_write's pool_k and pool_v.
 struct attn_checked {
-  meta q, out, table, k, v, start, lens, mask, sinks;
+  meta q, out, table, k, v, start, lens, mask, sinks, rel_q, rel_w;
 };
 attn_checked check_attn_decode(const sizer&, const larch_tensor* q, const larch_kv_pool* pool,
                                const larch_tensor* block_table, const larch_tensor* seq_lens,
@@ -268,6 +269,55 @@ gdn_checked check_gdn(const sizer&, const larch_tensor* qkv, const larch_tensor*
                       const larch_tensor* dt_bias, const larch_tensor* a, float eps, const larch_gdn_state* state,
                       const larch_tensor* slots, const larch_tensor* q_lens, const larch_tensor* snaps,
                       const larch_tensor* out);
+
+// The sequence tensors of gdn_conv, gdn and short_conv, for `rows` input rows: slots and q_lens i32 [seqs], snaps
+// optional i32 [rows].
+void check_sequences(const sizer&, int64_t rows, const larch_tensor* slots, const larch_tensor* q_lens,
+                     const larch_tensor* snaps, meta& slots_m, meta& lens_m, meta& snaps_m);
+// Each sequence's first row (and the end, rows), after the debug checks on the device values: lengths >= 0
+// summing to the rows, slots (and snapshot slots) in [0, n_slots) and none named twice.
+std::vector<int64_t> sequences(const meta& slots, const meta& lens, const meta& snaps, int64_t rows, int64_t n_slots);
+
+// Inkling 2's entries (inkling.cpp; attn_rel in ops.cpp beside attn): `state` is the layer's part of the
+// larch_conv_state as [n_slots, (kernel - 1) * channels]; dyn, residual, snaps, scale, pos, bias and down_scale are
+// optional.
+struct short_conv_checked {
+  meta in, w, dyn, residual, slots, lens, snaps, out, state;
+};
+short_conv_checked check_short_conv(const sizer&, const larch_tensor* x, const larch_tensor* w,
+                                    const larch_tensor* dyn, const larch_tensor* residual,
+                                    const larch_conv_state* state, uint32_t offset, const larch_tensor* slots,
+                                    const larch_tensor* q_lens, const larch_tensor* snaps, const larch_tensor* out);
+struct clip_norm_checked {
+  meta x, scale, pos, out;
+};
+clip_norm_checked check_clip_norm(const sizer&, const larch_tensor* x, const larch_tensor* scale, float t,
+                                  const larch_tensor* pos, uint32_t floor, float alpha, const larch_tensor* out);
+// depth_mix (a = states, b = query) and softcap (a = x, no b).
+elementwise_checked check_depth_mix(const sizer&, const larch_tensor* states, const larch_tensor* query,
+                                    const larch_tensor* out);
+elementwise_checked check_softcap(const sizer&, const larch_tensor* x, float cap, const larch_tensor* out);
+struct loop_gate_checked {
+  meta x, msg, gain, forget, out;
+};
+loop_gate_checked check_loop_gate(const sizer&, const larch_tensor* x, const larch_tensor* msg,
+                                  const larch_tensor* gain, const larch_tensor* forget, const larch_tensor* out);
+struct situ_checked {
+  meta gate_up, ids, scale, out;
+};
+situ_checked check_situ_mul(const sizer&, const larch_tensor* gate_up, const larch_tensor* ids,
+                            const larch_tensor* scale, float beta, float lin_beta, const larch_tensor* out);
+struct route_sigmoid_checked {
+  meta logits, bias, down_scale, ids, weights;
+};
+route_sigmoid_checked check_moe_route_sigmoid(const sizer&, const larch_tensor* logits, const larch_tensor* bias,
+                                              float eps, float scale, const larch_tensor* down_scale,
+                                              const larch_tensor* ids, const larch_tensor* weights);
+// attn_rel: attn's checks with no sinks (attn_checked's sinks hold the per-row sink), plus rel_q and rel_w.
+attn_checked check_attn_rel(const sizer&, const larch_tensor* q, const larch_kv_pool* pool,
+                            const larch_tensor* block_table, const larch_tensor* q_start_pos,
+                            const larch_tensor* q_lens, const larch_tensor* mask, const larch_tensor* rel_q,
+                            const larch_tensor* rel_w, const larch_tensor* sink, const larch_tensor* out);
 
 // The fused entries (fused.cpp): each runs its sequence's own checks, in sequence order, plus the ones
 // that tie the steps together. x is a residual stream updated in place.

@@ -199,6 +199,28 @@ struct vv_ops {
                                  const larch_tensor* gate) = nullptr;
   larch_status (*draft_conv)(larch_stream*, const larch_tensor* x, const larch_tensor* dyn,
                               const larch_tensor* base, uint32_t stage, const larch_tensor* out) = nullptr;
+  // ABI 6, Inkling 2: null answers UNSUPPORTED after the shared checks, as above.
+  larch_status (*short_conv)(larch_stream*, const larch_tensor* x, const larch_tensor* w, const larch_tensor* dyn,
+                              const larch_tensor* residual, const larch_conv_state* state, uint32_t offset,
+                              const larch_tensor* slots_i32, const larch_tensor* q_lens_i32,
+                              const larch_tensor* snap_slots, const larch_tensor* out) = nullptr;
+  larch_status (*clip_norm)(larch_stream*, const larch_tensor* x, const larch_tensor* scale, float t,
+                             const larch_tensor* pos_i32, uint32_t floor, float alpha, const larch_tensor* out) = nullptr;
+  larch_status (*depth_mix)(larch_stream*, const larch_tensor* states, const larch_tensor* query,
+                             const larch_tensor* out) = nullptr;
+  larch_status (*loop_gate)(larch_stream*, const larch_tensor* x, const larch_tensor* msg, const larch_tensor* gain,
+                             const larch_tensor* forget, const larch_tensor* out) = nullptr;
+  larch_status (*situ_mul)(larch_stream*, const larch_tensor* gate_up, const larch_tensor* ids,
+                            const larch_tensor* scale, float beta, float lin_beta, const larch_tensor* out) = nullptr;
+  larch_status (*moe_route_sigmoid)(larch_stream*, const larch_tensor* logits, const larch_tensor* bias, float eps,
+                                     float scale, const larch_tensor* down_scale, const larch_tensor* out_ids,
+                                     const larch_tensor* out_weights) = nullptr;
+  larch_status (*attn_rel)(larch_stream*, const larch_tensor* q, const larch_kv_pool* pool,
+                            const larch_tensor* block_table_i32, const larch_tensor* q_start_pos_i32,
+                            const larch_tensor* q_lens_i32, const larch_tensor* mask, const larch_tensor* rel_q,
+                            const larch_tensor* rel_w, const larch_tensor* sink, uint32_t window, uint32_t splits,
+                            float scale, const larch_tensor* out) = nullptr;
+  larch_status (*softcap)(larch_stream*, const larch_tensor* x, float cap, const larch_tensor* out) = nullptr;
 };
 
 // The debug op's entry (dispatch.cpp): INVALID_ARG for a null handle or while the stream captures,

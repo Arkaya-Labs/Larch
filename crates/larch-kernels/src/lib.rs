@@ -1474,6 +1474,47 @@ impl GdnState<'_> {
     }
 }
 
+/// The short convolutions' state of one layer group (Inkling 2), in `n_slots` slots per layer: `conv` f16
+/// `[n_layers][n_slots][kernel - 1][channels]`, several convolutions of a layer at their own channel offsets
+/// (larch.h's `larch_conv_state`).
+#[derive(Clone, Copy)]
+pub struct ConvState<'a> {
+    pub conv: &'a Buffer,
+    pub n_slots: u32,
+    pub n_layers: u32,
+    pub kernel: u32,
+    pub channels: u32,
+}
+
+impl ConvState<'_> {
+    /// Bytes `conv` needs.
+    pub fn bytes(&self) -> Option<u64> {
+        [self.n_slots, self.kernel.checked_sub(1)?, self.channels, 2]
+            .iter()
+            .try_fold(u64::from(self.n_layers), |a, &d| {
+                a.checked_mul(u64::from(d))
+            })
+    }
+
+    /// The state at `layer`, checked as [`GdnState::raw`] checks its buffers: writable, large enough and on
+    /// `s`'s device. The backend checks the geometry.
+    fn raw(&self, s: &Stream, layer: u32) -> Result<sys::larch_conv_state, KError> {
+        let need = self.bytes().ok_or(KError::InvalidArg)?;
+        if layer >= self.n_layers || self.conv.inner.readonly || self.conv.inner.bytes < need {
+            return Err(KError::InvalidArg);
+        }
+        s.uses(self.conv)?;
+        Ok(sys::larch_conv_state {
+            conv: self.conv.inner.raw,
+            n_slots: self.n_slots,
+            n_layers: self.n_layers,
+            layer,
+            kernel: self.kernel,
+            channels: self.channels,
+        })
+    }
+}
+
 /// The Rust half of graph replay and of read-only buffers on the CPU reference, which has neither:
 /// tests open the capture window (between larch_graph_begin and _end) and set the read-only flag
 /// (wrap_host's) themselves.

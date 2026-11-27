@@ -851,9 +851,32 @@ attn_checked check_attn(const sizer& bytes, const larch_tensor* q, const larch_k
   return a;
 }
 
-// The attention state: the checked tensors and the GQA mapping.
+attn_checked check_attn_rel(const sizer& bytes, const larch_tensor* q, const larch_kv_pool* pool,
+                            const larch_tensor* block_table_i32, const larch_tensor* q_start_pos_i32,
+                            const larch_tensor* q_lens_i32, const larch_tensor* mask_or_null,
+                            const larch_tensor* rel_q, const larch_tensor* rel_w, const larch_tensor* sink,
+                            const larch_tensor* out) {
+  attn_checked a =
+      check_attn(bytes, q, pool, block_table_i32, q_start_pos_i32, q_lens_i32, mask_or_null, nullptr, out);
+  a.rel_q = check_tensor(bytes, rel_q, "rel_q");
+  a.rel_w = check_tensor(bytes, rel_w, "rel_w");
+  a.sinks = check_tensor(bytes, sink, "sink");
+  const int64_t heads = a.q.shape[1];
+  const auto f16_or_f32 = [](const meta& m) { return m.dtype == LARCH_F16 || m.dtype == LARCH_F32; };
+  need(f16_or_f32(a.rel_q) && a.rel_q.ndim == 3 && a.rel_q.rows == a.q.rows && a.rel_q.shape[1] == heads &&
+           a.rel_q.shape[2] > 0,
+       "rel_q must be f16 or f32 [rows, heads, n_rel]");
+  need(is(a.rel_w, LARCH_F32, 2) && a.rel_w.rows > 0 && a.rel_w.cols == a.rel_q.shape[2],
+       "rel_w must be f32 [extent, n_rel]");
+  need(f16_or_f32(a.sinks) && a.sinks.ndim == 2 && a.sinks.rows == a.q.rows && a.sinks.cols == heads,
+       "sink must be f16 or f32 [rows, heads]");
+  return a;
+}
+
+// The attention state: the checked tensors and the GQA mapping. With rel_q (attn_rel), sinks holds each row's sink
+// logits and every logit takes the relative bias.
 struct attn {
-  view q, out, k, v, table, sinks;
+  view q, out, k, v, table, sinks, rel_q, rel_w;
   int64_t heads, kv_heads, hd, block_tokens, n_blocks;
   float scale;
 
@@ -864,6 +887,8 @@ struct attn {
         v(a.v),
         table(a.table),
         sinks(a.sinks),
+        rel_q(a.rel_q),
+        rel_w(a.rel_w),
         heads(a.q.shape[1]),
         kv_heads(pool->n_kv_heads),
         hd(pool->head_dim),
@@ -879,9 +904,20 @@ struct attn {
     return int64_t(b) * block_tokens + p % block_tokens;
   }
 
+  // The relative bias of row `row`, head h, at distance `dist` (attn_rel): rel_q . rel_w[dist] within the extent.
+  double bias(int64_t row, int64_t h, int64_t dist) const {
+    const int64_t n_rel = rel_w.cols;
+    if (dist >= rel_w.rows) return 0;
+    double dot = 0;
+    for (int64_t i = 0; i < n_rel; ++i) dot += double(rel_q.get(row, h * n_rel + i)) * rel_w.get(dist, i);
+    return dot;
+  }
+
   // Query row `row` attends to `slots` in order, all heads; softmax in double, with head h's sink as one
-  // more logit when there are sinks. The pages are decoded once per row, so every dtype reads alike.
-  void attend(int64_t row, const std::vector<int64_t>& slots) const {
+  // more logit when there are sinks. The pages are decoded once per row, so every dtype reads alike. With
+  // rel_q, `dists` holds each slot's distance from the row, every logit takes its bias less the row's sink, and
+  // the one more logit is 0.
+  void attend(int64_t row, const std::vector<int64_t>& slots, const std::vector<int64_t>* dists = nullptr) const {
     const size_t n = slots.size(), kc = size_t(k.cols);
     std::vector<float> ks(n * kc), vs(n * kc);
     for (size_t p = 0; p < n; ++p) {
@@ -889,17 +925,22 @@ struct attn {
       v.row_f32(slots[p], vs.data() + p * kc);
     }
     std::vector<double> w(n);
+    const bool rel = rel_q.buf != nullptr;
     for (int64_t h = 0; h < heads; ++h) {
       const int64_t qo = h * hd, ko = h / (heads / kv_heads) * hd;
-      const double sink = sinks.buf ? sinks.get(h, 0) : -std::numeric_limits<double>::infinity();
+      const double sink = rel        ? 0
+                          : sinks.buf ? sinks.get(h, 0)
+                                      : -std::numeric_limits<double>::infinity();
+      const double row_sink = rel ? double(sinks.get(row, h)) : 0;
       double mx = sink;
       for (size_t p = 0; p < n; ++p) {
         double dot = 0;
         for (int64_t d = 0; d < hd; ++d) dot += double(q.get(row, qo + d)) * ks[p * kc + size_t(ko + d)];
+        if (rel) dot += bias(row, h, (*dists)[p]) - row_sink;
         w[p] = dot * scale;
         mx = std::max(mx, w[p]);
       }
-      double sum = sinks.buf ? std::exp(sink - mx) : 0;
+      double sum = rel || sinks.buf ? std::exp(sink - mx) : 0;
       for (double& x : w) sum += x = std::exp(x - mx);
       for (int64_t d = 0; d < hd; ++d) {
         double acc = 0;
@@ -943,7 +984,7 @@ static void attend_spans(const attn_checked& c, const larch_kv_pool* pool, float
     total += lens.i32(s);
   }
   need(total == a.q.rows, "q rows must equal the sum of q_lens");
-  std::vector<int64_t> slots;
+  std::vector<int64_t> slots, dists;
   for (int64_t s = 0, row = 0; s < seqs; ++s) {
     const int64_t p0 = start.i32(s), len = lens.i32(s);
     for (int64_t j = 0; j < len; ++j, ++row) {
@@ -951,10 +992,17 @@ static void attend_spans(const attn_checked& c, const larch_kv_pool* pool, float
       const uint64_t bits = mask.buf ? uint32_t(mask.i32(row)) : 0;
       need(!mask.buf || bits >> len == 0, "mask bit past the span");
       slots.clear();
-      for (int64_t p = lo; p < p0; ++p) slots.push_back(a.slot(s, p));
+      dists.clear();
+      for (int64_t p = lo; p < p0; ++p) {
+        slots.push_back(a.slot(s, p));
+        dists.push_back(p0 + j - p);
+      }
       for (int64_t i = 0; i < len; ++i)
-        if ((mask.buf ? (bits >> i & 1) != 0 : i <= j) && p0 + i >= lo) slots.push_back(a.slot(s, p0 + i));
-      a.attend(row, slots);
+        if ((mask.buf ? (bits >> i & 1) != 0 : i <= j) && p0 + i >= lo) {
+          slots.push_back(a.slot(s, p0 + i));
+          dists.push_back(j - i);
+        }
+      a.attend(row, slots, &dists);
     }
   }
 }
@@ -979,6 +1027,19 @@ larch_status attn(larch_stream*, const larch_tensor* q, const larch_kv_pool* poo
   return run("attn", [&] {
     attend_spans(check_attn(buffer_bytes, q, pool, block_table_i32, q_start_pos_i32, q_lens_i32, mask_or_null,
                             sinks_or_null, out),
+                 pool, scale, window);
+  });
+}
+
+// larch.h's attn with inkling2's relative bias and per-row sinks; splits has no effect here.
+larch_status attn_rel(larch_stream*, const larch_tensor* q, const larch_kv_pool* pool,
+                       const larch_tensor* block_table_i32, const larch_tensor* q_start_pos_i32,
+                       const larch_tensor* q_lens_i32, const larch_tensor* mask_or_null, const larch_tensor* rel_q,
+                       const larch_tensor* rel_w, const larch_tensor* sink, uint32_t window, uint32_t, float scale,
+                       const larch_tensor* out) {
+  return run("attn_rel", [&] {
+    attend_spans(check_attn_rel(buffer_bytes, q, pool, block_table_i32, q_start_pos_i32, q_lens_i32, mask_or_null,
+                                rel_q, rel_w, sink, out),
                  pool, scale, window);
   });
 }
