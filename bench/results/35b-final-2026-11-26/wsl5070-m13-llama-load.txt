@@ -1,0 +1,56 @@
+== n_cpu_moe=4 ctx=2560 (W4@1) exit 0 nvidia-smi free 15242 MiB
+0.00.530.892 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.01.934.000 I load_tensors:        CUDA0 model buffer size = 13793.71 MiB
+0.05.920.438 I llama_kv_cache:      CUDA0 KV buffer size =    50.00 MiB
+0.05.921.761 I llama_memory_recurrent:      CUDA0 RS buffer size =    62.81 MiB
+0.05.963.526 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+   CUDA0 buffers total 14916 MiB
+== n_cpu_moe=4 ctx=10240 (W4@4) exit 0 nvidia-smi free 15376 MiB
+0.00.274.297 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.01.298.086 I load_tensors:        CUDA0 model buffer size = 13793.71 MiB
+0.03.621.185 I llama_kv_cache:      CUDA0 KV buffer size =   200.00 MiB
+0.03.622.490 I llama_memory_recurrent:      CUDA0 RS buffer size =    62.81 MiB
+0.03.683.501 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+   CUDA0 buffers total 15066 MiB
+== n_cpu_moe=4 ctx=20480 (W4@8) exit 0 nvidia-smi free 15610 MiB
+0.00.265.724 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.01.253.019 I load_tensors:        CUDA0 model buffer size = 13793.71 MiB
+0.02.809.655 I llama_kv_cache:      CUDA0 KV buffer size =   400.00 MiB
+0.02.810.972 I llama_memory_recurrent:      CUDA0 RS buffer size =    62.81 MiB
+0.02.870.173 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+   CUDA0 buffers total 15266 MiB
+== n_cpu_moe=4 ctx=40960 (W4@16) exit 0 nvidia-smi free 15486 MiB
+0.00.270.381 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.01.259.077 I load_tensors:        CUDA0 model buffer size = 13793.71 MiB
+0.02.895.286 I llama_kv_cache:      CUDA0 KV buffer size =   800.00 MiB
+0.02.897.007 I llama_memory_recurrent:      CUDA0 RS buffer size =    62.81 MiB
+0.03.441.062 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+   CUDA0 buffers total 15666 MiB
+== n_cpu_moe=3 ctx=2560 (W4@1) exit 0 nvidia-smi free 15521 MiB
+0.00.258.832 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.01.247.034 I load_tensors:        CUDA0 model buffer size = 14157.71 MiB
+0.02.998.612 I llama_kv_cache:      CUDA0 KV buffer size =    50.00 MiB
+0.02.999.823 I llama_memory_recurrent:      CUDA0 RS buffer size =    62.81 MiB
+0.03.035.361 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+   CUDA0 buffers total 15280 MiB
+== n_cpu_moe=3 ctx=10240 (W4@4) exit 0 nvidia-smi free 15553 MiB
+0.00.249.121 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.01.236.389 I load_tensors:        CUDA0 model buffer size = 14157.71 MiB
+0.02.779.314 I llama_kv_cache:      CUDA0 KV buffer size =   200.00 MiB
+0.02.780.655 I llama_memory_recurrent:      CUDA0 RS buffer size =    62.81 MiB
+0.02.833.440 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+   CUDA0 buffers total 15430 MiB
+== n_cpu_moe=3 ctx=20480 (W4@8) exit 0 nvidia-smi free 15538 MiB
+0.00.260.968 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.01.250.105 I load_tensors:        CUDA0 model buffer size = 14157.71 MiB
+0.03.041.589 I llama_kv_cache:      CUDA0 KV buffer size =   400.00 MiB
+0.03.042.867 I llama_memory_recurrent:      CUDA0 RS buffer size =    62.81 MiB
+0.03.136.548 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+   CUDA0 buffers total 15630 MiB
+== n_cpu_moe=3 ctx=40960 (W4@16) exit 0 nvidia-smi free 15538 MiB
+0.00.267.213 I llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5070 Ti) (0000:01:00.0) - 15009 MiB free
+0.01.269.249 I load_tensors:        CUDA0 model buffer size = 14157.71 MiB
+0.02.849.363 I llama_kv_cache:      CUDA0 KV buffer size =   800.00 MiB
+0.02.850.724 I llama_memory_recurrent:      CUDA0 RS buffer size =    62.81 MiB
+0.03.047.925 I sched_reserve:      CUDA0 compute buffer size =  1010.01 MiB
+   CUDA0 buffers total 16030 MiB
