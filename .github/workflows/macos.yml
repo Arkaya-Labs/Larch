@@ -4,12 +4,27 @@ name: macos
 # the tests, and the GPU contract and Metal parity run by hand on an Apple-silicon Mac before a
 # release (RELEASING.md). On a PR, ci.yml's macOS job runs the Rust tests (CPU backend), so this
 # job builds and lints the Metal backend and runs the kernel tests only when kernels/ changes; a
-# push to dev runs everything here.
+# push to dev runs everything here. A PR or push that changes only docs (the list ci.yml's scope
+# step uses) runs nothing here: this is not a required check.
 on:
   pull_request:
     branches: [dev]
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - LICENSE
+      - NOTICE
+      - ".github/ISSUE_TEMPLATE/**"
+      - .github/PULL_REQUEST_TEMPLATE.md
   push:
     branches: [dev]
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - LICENSE
+      - NOTICE
+      - ".github/ISSUE_TEMPLATE/**"
+      - .github/PULL_REQUEST_TEMPLATE.md
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -63,8 +78,8 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-
       # On a PR: tests=false, as ci.yml's macOS job runs the same Rust tests. rust=false when the PR
       # changes only CUDA/HIP kernels, the kernel tests or the kernel CMake (no Rust or Metal code
-      # the Mac runs), or only docs that no build reads (as in ci.yml). kernels=false when it changes
-      # neither kernels/ nor this workflow. A push to dev, a manual run or a release runs every step.
+      # the Mac runs). kernels=false when it changes neither kernels/ nor this workflow. A push to
+      # dev, a manual run or a release runs every step. --no-renames lists both paths of a moved file.
       - name: scope
         id: scope
         shell: bash
@@ -72,11 +87,8 @@ jobs:
           rust=true tests=true kernels=true
           if [ "${{ github.event_name }}" = pull_request ]; then
             tests=false
-            changed=$(git diff --name-only HEAD^1 HEAD)
+            changed=$(git diff --no-renames --name-only HEAD^1 HEAD)
             if [ -n "$changed" ] && ! grep -qvE '^kernels/(src/(cuda|hip)/|tests/|CMakeLists\.txt$)' <<<"$changed"; then
-              rust=false
-            fi
-            if [ -n "$changed" ] && ! grep -qvE '^([^/]+\.md|docs/.*|LICENSE|NOTICE|\.github/(ISSUE_TEMPLATE/.*|PULL_REQUEST_TEMPLATE\.md))$' <<<"$changed"; then
               rust=false
             fi
             grep -qE '^(kernels/|\.github/workflows/macos\.yml$)' <<<"$changed" || kernels=false

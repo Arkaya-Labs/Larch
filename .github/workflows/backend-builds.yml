@@ -6,15 +6,24 @@ name: backend-builds
 # A separate file from ci.yml, so a mistake here can never break the required CPU `check` jobs.
 #
 # On a PR the builds run only when the PR changes the kernels or what builds and links them (the
-# `scope` job's list), or when it has the `ci:kernels` label; adding that label starts them. A PR
-# build skips the Rust tests, which ci.yml runs on the CPU reference. Every push to dev, every
-# manual run and every release runs everything, the tests included.
+# `scope` job's list), or when it has the `ci:kernels` label. Adding that label starts them through
+# backend-builds-label.yml, so adding any other label never starts a run here whose skipped jobs
+# would hide this commit's results. A PR build skips the Rust tests, which ci.yml runs on the CPU
+# reference. Every push to dev that changes more than docs, every manual run and every release runs
+# everything, the tests included.
 on:
   pull_request:
     branches: [dev]
-    types: [opened, synchronize, reopened, labeled]
   push:
     branches: [dev]
+    # The docs no build reads, as in ci.yml's scope step.
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - LICENSE
+      - NOTICE
+      - ".github/ISSUE_TEMPLATE/**"
+      - .github/PULL_REQUEST_TEMPLATE.md
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -50,24 +59,20 @@ jobs:
           persist-credentials: false
           # The PR's merge commit and its base.
           fetch-depth: 2
-      # Adding any other label runs nothing, so it never cancels a build already running.
+      # Cargo.lock pins larch-sys's build dependencies (cmake, bindgen) and the root Cargo.toml holds
+      # the release profile, so a change to either builds here too. --no-renames lists both paths of
+      # a moved file.
       - name: scope
         id: scope
         shell: bash
         env:
           EVENT: ${{ github.event_name }}
-          ACTION: ${{ github.event.action }}
-          ADDED: ${{ github.event.label.name }}
           LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'ci:kernels') }}
         run: |
           run=true
-          if [ "$EVENT" = pull_request ]; then
-            if [ "$ACTION" = labeled ]; then
-              [ "$ADDED" = ci:kernels ] || run=false
-            elif [ "$LABELLED" != true ]; then
-              changed=$(git diff --name-only HEAD^1 HEAD)
-              grep -qE '^(kernels/|crates/larch-(sys|kernels)/|\.cargo/|rust-toolchain\.toml$|\.github/workflows/backend-builds\.yml$)' <<<"$changed" || run=false
-            fi
+          if [ "$EVENT" = pull_request ] && [ "$LABELLED" != true ]; then
+            changed=$(git diff --no-renames --name-only HEAD^1 HEAD)
+            grep -qE '^(kernels/|crates/larch-(sys|kernels)/|\.cargo/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/workflows/backend-builds(-label)?\.yml$)' <<<"$changed" || run=false
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "CUDA and HIP builds: $run"

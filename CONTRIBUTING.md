@@ -110,9 +110,11 @@ HIP with the tests on the CPU reference. GPU tests and parity run by hand before
 A pull request gets the fast checks: the build, lints and Rust tests on all three systems, with the
 kernel tests (ctest) only when it changes `kernels/`, and no build or tests when it changes only docs.
 The CUDA and HIP builds run when it changes `kernels/`, `crates/larch-sys/`, `crates/larch-kernels/`,
-`.cargo/` or `rust-toolchain.toml`. For any other change that can affect a GPU build or how the
-kernels are called, a maintainer adds the `ci:kernels` label, which starts those builds. Every
-merge to `dev` runs everything.
+`.cargo/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or the backend workflows. For any other
+change that can affect a GPU build or how the kernels are called, a maintainer adds the `ci:kernels`
+label, which starts those builds. On a PR they build and link the shipped binaries but skip the
+workspace tests, which `ci.yml` runs on the CPU reference. Every merge to `dev` that changes more
+than docs runs everything.
 [scripts/ci-local](scripts/ci-local) runs a local subset of the workflows and stops at the first failure;
 it needs dependency access and is not a substitute for all CI or GPU checks.
 

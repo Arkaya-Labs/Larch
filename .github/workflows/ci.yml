@@ -44,14 +44,15 @@ jobs:
           fetch-depth: 2
       # code=false: the PR changes only docs that no build or test reads (top-level *.md, docs/,
       # LICENSE, NOTICE, the issue and PR templates). kernels=false: it changes neither kernels/ nor
-      # this workflow. A push to dev or a manual run runs every step.
+      # this workflow. A push to dev or a manual run runs every step. --no-renames lists both paths
+      # of a moved file, so moving a source into docs/ still builds.
       - name: scope
         id: scope
         shell: bash
         run: |
           code=true kernels=true
           if [ "${{ github.event_name }}" = pull_request ]; then
-            changed=$(git diff --name-only HEAD^1 HEAD)
+            changed=$(git diff --no-renames --name-only HEAD^1 HEAD)
             if [ -n "$changed" ] && ! grep -qvE '^([^/]+\.md|docs/.*|LICENSE|NOTICE|\.github/(ISSUE_TEMPLATE/.*|PULL_REQUEST_TEMPLATE\.md))$' <<<"$changed"; then
               code=false
             fi
@@ -60,14 +61,15 @@ jobs:
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "kernels=$kernels" >> "$GITHUB_OUTPUT"
           echo "Build and tests: $code; kernel tests: $kernels"
-      # The crate downloads and the target directory's dependencies, keyed on the lock and the toolchain.
+      - run: rustup toolchain install  # the channel in rust-toolchain.toml
+        if: steps.scope.outputs.code == 'true'
+      # The crate downloads and the target directory's dependencies, keyed on the lock and the
+      # toolchain (after its install: the key reads `rustc -vV`).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: steps.scope.outputs.code == 'true'
         with:
           key: ci
           save-if: ${{ github.event_name == 'push' }}
-      - run: rustup toolchain install  # the channel in rust-toolchain.toml
-        if: steps.scope.outputs.code == 'true'
       # nextest runs the test binaries side by side, each test in its own process; cargo test ran
       # the binaries one after another.
       - uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
