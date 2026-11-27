@@ -1,0 +1,10 @@
+{
+ "t": 4,
+ "b": 2048,
+ "ub": 1024,
+ "pp2048_ts": 5281.506963,
+ "tg128_ts": 145.398975,
+ "rule": "max sqrt(pp2048 * tg128)",
+ "n_cpu_moe": 3,
+ "n_cpu_moe_rule": "fewest MoE layers on the CPU at which the driver runs 4 x 2560 (-ngl 99 -fa on)"
+}
