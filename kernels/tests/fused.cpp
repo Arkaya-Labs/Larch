@@ -444,6 +444,22 @@ static bool pick(int32_t gpus, int32_t* ordinal) {
   return *ordinal = int32_t(v), true;
 }
 
+// Entry 1 where up holds fewer experts than gate and an id is gate's only: the sequence refuses it (mmvq_id checks
+// each weight's ids), so the fused call must too, never read past up. A GPU's ids live on the device, unchecked.
+static void moe_gate_up_fewer_up(larch_dtype t) {
+  const std::string name = std::string("moe_gate_up ") + DTYPE[t] + ", up with half gate's experts";
+  const larch_tensor gw = random(t, {EXPERTS * EF, D}), uw = random(t, {EXPERTS / 2 * EF, D});
+  const int32_t last = int32_t(EXPERTS - 1);
+  const larch_tensor x = random(LARCH_F16, {1, D}), id = tensor(LARCH_I32, {1, 1}, &last);
+  const larch_tensor us = tensor(LARCH_F16, {1, 1, EF}), got = tensor(LARCH_F16, {1, 1, EF});
+  const larch_status u = larch_mmvq_id(st, &uw, &x, &id, nullptr, nullptr, &us);
+  const larch_status f = larch_fused_moe_gate_up(st, &gw, &uw, &x, &id, &got);
+  CHECK(u == LARCH_ERR_INVALID_ARG, "%s: the sequence's up must be INVALID_ARG, got %d", name.c_str(), int(u));
+  CHECK(f == LARCH_ERR_INVALID_ARG, "%s: fused must be INVALID_ARG, got %d", name.c_str(), int(f));
+  passed += u == LARCH_ERR_INVALID_ARG && f == LARCH_ERR_INVALID_ARG;
+  release();
+}
+
 int main() {
   int32_t gpus = 0, ordinal = 0;
   if (larch_device_count(&gpus) != LARCH_OK || !pick(gpus, &ordinal)) return 1;
@@ -464,6 +480,8 @@ int main() {
     for (const int64_t r : ROWS) moe_gate_up(t, t, r);
   for (const int64_t r : {int64_t(1), int64_t(3)}) moe_gate_up(LARCH_Q3_K, LARCH_Q4_K, r);
   for (const int64_t r : {int64_t(1), int64_t(3)}) moe_gate_up_padded(r);
+  if (!gpu)
+    for (const larch_dtype t : QUANTS) moe_gate_up_fewer_up(t);
   for (const larch_dtype t : QUANTS)
     for (const int64_t r : ROWS) {
       moe_down(t, -1, r);

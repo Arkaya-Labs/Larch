@@ -348,7 +348,9 @@ larch_status fast_fused_moe_gate_up(larch_stream* s, const larch_tensor* gate_w,
     const fused_gate_up_checked c = check_fused_moe_gate_up(buffer_bytes, gate_w, up_w, x_f16, ids_i32, out);
     const view x = c.gate.x, ids = c.gate.ids, o = c.gate.out;
     const view w[2] = {c.gate.w, c.up.w};
-    const int64_t rows = x.rows, slots = ids.cols, k = w[0].cols, n = o.shape[o.ndim - 1], experts = w[0].rows / n;
+    // The sequence checks each weight's ids against its own experts: gate and up may hold different counts.
+    const int64_t rows = x.rows, slots = ids.cols, k = w[0].cols, n = o.shape[o.ndim - 1],
+                  experts = std::min(w[0].rows, w[1].rows) / n;
     thread_local id_scratch sc;
     std::vector<int32_t>& iv = sc.iv;
     iv.resize(size_t(rows * slots));

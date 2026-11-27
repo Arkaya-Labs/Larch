@@ -335,8 +335,9 @@ void bench_section(const dev& dut, bool warm, uint32_t threads) {
   larch_buffer* down3 = upload(quant(LARCH_Q3_K, experts * d, ef, g));
   larch_buffer* down4 = upload(quant(LARCH_Q4_K, experts * d, ef, g));
   larch_buffer *xb = upload(halves(size_t(8 * d), g)), *ab = upload(halves(size_t(8 * slots * ef), g));
-  larch_buffer *ib, *wb, *gb, *ob;
+  larch_buffer *ib, *fb, *wb, *gb, *ob;
   larch_buffer_alloc(dut.d, size_t(4 * 8 * slots), &ib);
+  larch_buffer_alloc(dut.d, size_t(4 * 8 * slots), &fb);
   larch_buffer_alloc(dut.d, size_t(4 * 8 * slots), &wb);
   larch_buffer_alloc(dut.d, size_t(2 * 8 * slots * ef), &gb);
   larch_buffer_alloc(dut.d, size_t(2 * 8 * d), &ob);
@@ -348,14 +349,14 @@ void bench_section(const dev& dut, bool warm, uint32_t threads) {
     if (warm && rows > 1) break;
     const larch_tensor xt = {xb, 0, LARCH_F16, 2, {rows, d}, {d, 1}};
     const larch_tensor it = {ib, 0, LARCH_I32, 2, {rows, slots}, {slots, 1}};
+    const larch_tensor ft = {fb, 0, LARCH_I32, 2, {rows, slots}, {slots, 1}};  // the fused call's own experts
     const larch_tensor wt = {wb, 0, LARCH_F32, 2, {rows, slots}, {slots, 1}};
     const larch_tensor gout = {gb, 0, LARCH_F16, 3, {rows, slots, ef}, {slots * ef, ef, 1}};
     const larch_tensor at = {ab, 0, LARCH_F16, 3, {rows, slots, ef}, {slots * ef, ef, 1}};
     const larch_tensor ot = {ob, 0, LARCH_F16, 2, {rows, d}, {d, 1}};
     std::vector<double> t[5];  // gate, up, down Q3_K, down Q4_K, gate and up fused (with their silu_mul)
-    for (int64_t rep = 0; rep < reps; ++rep) {
+    const auto draw = [&](larch_buffer* b) {
       std::vector<int32_t> ids(size_t(rows * slots));
-      if (warm) g.seed(13);
       for (int64_t r = 0; r < rows; ++r)  // distinct per row, as a top-k
         for (int64_t j = 0; j < slots; ++j) {
           const auto row = ids.begin() + r * slots;
@@ -364,8 +365,15 @@ void bench_section(const dev& dut, bool warm, uint32_t threads) {
           while (std::find(row, row + j, e) != row + j);
           ids[size_t(r * slots + j)] = e;
         }
-      const std::vector<float> w(ids.size(), 0.125f);
-      larch_upload(dut.s, ib, 0, ids.data(), 4 * ids.size());
+      larch_upload(dut.s, b, 0, ids.data(), 4 * ids.size());
+    };
+    for (int64_t rep = 0; rep < reps; ++rep) {
+      if (warm) g.seed(13);
+      draw(ib);
+      // A draw of its own, so the fused call never reads rows the sequence just pulled into the cache (cold) and
+      // warm repeats its own experts as the sequence does.
+      draw(fb);
+      const std::vector<float> w(size_t(rows * slots), 0.125f);
       larch_upload(dut.s, wb, 0, w.data(), 4 * w.size());
       const auto time = [&](std::vector<double>& v, const larch_tensor& wq, const larch_tensor& x, bool weighted,
                             const larch_tensor& o) {
@@ -378,7 +386,7 @@ void bench_section(const dev& dut, bool warm, uint32_t threads) {
       time(t[2], dt[0], at, true, ot);
       time(t[3], dt[1], at, true, ot);
       const auto t0 = std::chrono::steady_clock::now();
-      if (larch_fused_moe_gate_up(dut.s, &gt, &ut, &xt, &it, &gout) != LARCH_OK) ++wrong;  // not down's x
+      if (larch_fused_moe_gate_up(dut.s, &gt, &ut, &xt, &ft, &gout) != LARCH_OK) ++wrong;  // not down's x
       t[4].push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() * 1e6);
     }
     double med[5], best[5];
@@ -391,7 +399,7 @@ void bench_section(const dev& dut, bool warm, uint32_t threads) {
                 warm ? "warm" : "cold", threads, (long long)rows, med[0], best[0], med[1], best[1], med[2], best[2],
                 med[3], best[3], med[0] + med[1] + med[2], med[0] + med[1] + med[3], med[4], best[4]);
   }
-  for (larch_buffer* b : {gate, up, down3, down4, xb, ab, ib, wb, gb, ob}) larch_buffer_free(b);
+  for (larch_buffer* b : {gate, up, down3, down4, xb, ab, ib, fb, wb, gb, ob}) larch_buffer_free(b);
 }
 
 }  // namespace

@@ -895,11 +895,30 @@ fn streams_step(
 /// The CPU device's threads beside a GPU: every logical CPU but two, which the engine's thread (it
 /// waits on the GPU between host layers) and the GPU driver's keep. All of them measured a host-expert
 /// layer at one row 415 us against 334 us at 6 of 8 (the hybrid MoE target, 9800X3D, WSL2: 8 logical
-/// CPUs), +5 % at W4@1, the same at 4 rows.
-// ponytail: two, measured on one 8-CPU host; re-derive on a host with more cores, or where the
-// engine's own work per step grows.
+/// CPUs), +5 % at W4@1, the same at 4 rows. Under 8 CPUs every one: there two would halve a host
+/// layer's CPU prefill (a 64-row gate 9.2 ms at 4 threads against 18.4 at 2, on 4 vCPUs).
+// ponytail: two, measured on one 8-CPU host; re-derive on a host with more cores or a 4-CPU host
+// with a GPU, or where the engine's own work per step grows.
 fn beside_gpu_threads(logical: usize) -> u32 {
-    logical.saturating_sub(2).max(1) as u32
+    match logical {
+        0..8 => logical.max(1) as u32,
+        _ => (logical - 2) as u32,
+    }
+}
+
+/// Host experts page-locked at load at most this large; past it, plain memory.
+// ponytail: a fixed cap at 2.5x the measured 1.6 GB (4 host layers of the hybrid MoE target); cap
+// against physical memory when a load past it needs the full copy rate.
+const PIN_MAX: u64 = 4 << 30;
+
+/// Whether a whole-layer load page-locks its `held` host-expert bytes for the streaming pool: only
+/// where the engine's plan reserves a pool (a hybrid with layers left to move, as the engine's
+/// `pool_checked`), up to [`PIN_MAX`]. Elsewhere the pool, when the fit still admits one, streams
+/// from the file map, as before the page-locked copy.
+// ponytail: a pool the fit refuses after load leaves the bytes page-locked and unused; build the
+// copy in alloc_stream_pool when `larch_stream_pool` shows refusals on loads that pinned.
+fn pin_host_experts(arch: Arch, host_layers: u32, layers: u32, held: u64) -> bool {
+    arch.hybrid() && host_layers < layers && held <= PIN_MAX
 }
 
 /// The token embedding in host memory, as llama.cpp keeps it beside a GPU's MoE: the table `w`
@@ -2139,11 +2158,12 @@ impl Transformer {
                     true => None,
                     false => {
                         let cpu = Device::open(CPU_COMPUTE).map_err(backend)?;
-                        // Beside a GPU only: a CPU backend's host layers have no driver to spare.
-                        if s.device().props().map_err(backend)?.backend != Backend::Cpu {
-                            let logical =
-                                std::thread::available_parallelism().map_or(1, |n| n.get());
-                            cpu.set_threads(beside_gpu_threads(logical))
+                        // Beside a CUDA GPU only, the one backend measured: a CPU backend's
+                        // host layers have no driver to spare, and Metal's and HIP's prefill
+                        // stays on these threads. Without a CPU count the default stays.
+                        let cuda = s.device().props().map_err(backend)?.backend == Backend::Cuda;
+                        if let (true, Ok(logical)) = (cuda, std::thread::available_parallelism()) {
+                            cpu.set_threads(beside_gpu_threads(logical.get()))
                                 .map_err(backend)?;
                         }
                         Some(cpu)
@@ -2171,7 +2191,9 @@ impl Transformer {
                         // full speed (page-locked: 57 against 22 GB/s through the file map and
                         // the staging on a 5070 Ti); plain memory where the device has none.
                         // As the pool below asks: no expert-cache plan, no split layer.
-                        let pinned = match place.stream_rows > 0 && plan.is_none() && !split {
+                        let pin = pin_host_experts(cfg.arch, host_layers, cfg.n_layers, held);
+                        let pinned = match place.stream_rows > 0 && plan.is_none() && !split && pin
+                        {
                             false => None,
                             true => match Buffer::alloc_host(s.device(), held) {
                                 Ok(b) => Some(b),
@@ -4547,13 +4569,31 @@ mod tests {
     use crate::{Arch, tiny};
     use larch_kernels::CPU;
 
-    /// Two logical CPUs stay with the engine's thread and the GPU driver's; never fewer than one.
+    /// Pinned only where the engine plans a pool, and never past the cap.
+    #[test]
+    fn host_experts_are_page_locked_only_where_a_pool_is_planned() {
+        let gb = 1 << 30;
+        assert!(pin_host_experts(Arch::Qwen35Moe, 4, 40, 2 * gb));
+        assert!(
+            !pin_host_experts(Arch::Qwen3Moe, 4, 40, 2 * gb),
+            "not hybrid: no pool planned"
+        );
+        assert!(
+            !pin_host_experts(Arch::Qwen35Moe, 40, 40, 2 * gb),
+            "every layer on the host"
+        );
+        assert!(
+            !pin_host_experts(Arch::Qwen35Moe, 20, 40, PIN_MAX + 1),
+            "past the cap"
+        );
+    }
+
+    /// From 8 logical CPUs two stay with the engine's thread and the GPU driver's; under 8, none.
     #[test]
     fn host_experts_leave_two_cpus_to_the_engine_and_the_driver() {
         assert_eq!(beside_gpu_threads(8), 6);
         assert_eq!(beside_gpu_threads(16), 14);
-        assert_eq!(beside_gpu_threads(3), 1);
-        assert_eq!(beside_gpu_threads(2), 1);
+        assert_eq!(beside_gpu_threads(4), 4);
         assert_eq!(beside_gpu_threads(1), 1);
     }
 
