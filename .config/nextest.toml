@@ -1,0 +1,12 @@
+# cargo-nextest, as ci.yml runs it (`cargo nextest run --profile ci`). Each test runs in its own
+# process, and the test binaries run side by side.
+
+[profile.ci]
+# Every test runs, so one failure does not hide the rest (cargo test --no-fail-fast before).
+fail-fast = false
+# No retries: a test that passes only on a second try is a bug to fix, not a pass.
+retries = 0
+# Name the tests still running every minute, so a hung test shows up in the log. The job's
+# timeout-minutes stops a hung run.
+slow-timeout = { period = "60s" }
+failure-output = "immediate-final"

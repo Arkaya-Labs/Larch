@@ -2,12 +2,29 @@ name: macos
 
 # The Metal build on a GitHub-hosted Mac, which has no GPU a test can use: the CPU reference runs
 # the tests, and the GPU contract and Metal parity run by hand on an Apple-silicon Mac before a
-# release (RELEASING.md).
+# release (RELEASING.md). On a PR, ci.yml's macOS job runs the Rust tests (CPU backend), so this
+# job builds and lints the Metal backend and runs the kernel tests only when kernels/ changes; a
+# push to dev runs everything here. A PR or push that changes only docs (the list ci.yml's scope
+# step uses) runs nothing here: this is not a required check.
 on:
   pull_request:
     branches: [dev]
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - LICENSE
+      - NOTICE
+      - ".github/ISSUE_TEMPLATE/**"
+      - .github/PULL_REQUEST_TEMPLATE.md
   push:
     branches: [dev]
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - LICENSE
+      - NOTICE
+      - ".github/ISSUE_TEMPLATE/**"
+      - .github/PULL_REQUEST_TEMPLATE.md
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -59,28 +76,36 @@ jobs:
             ~/.cargo/git/db/
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'apps/desktop/Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
-      # A PR that changes only CUDA/HIP kernels, the kernel tests or the kernel CMake changes no
-      # Rust or Metal code the Mac runs: it gets the kernel build and ctest below, not the
-      # 25-40 min Rust steps. Any other path runs everything.
+      # On a PR: tests=false, as ci.yml's macOS job runs the same Rust tests. rust=false when the PR
+      # changes only CUDA/HIP kernels, the kernel tests or the kernel CMake (no Rust or Metal code
+      # the Mac runs). kernels=false when it changes neither kernels/ nor this workflow. A push to
+      # dev, a manual run or a release runs every step. --no-renames lists both paths of a moved file.
       - name: scope
         id: scope
         shell: bash
         run: |
-          rust=true
+          rust=true tests=true kernels=true
           if [ "${{ github.event_name }}" = pull_request ]; then
-            changed=$(git diff --name-only HEAD^1 HEAD)
+            tests=false
+            changed=$(git diff --no-renames --name-only HEAD^1 HEAD)
             if [ -n "$changed" ] && ! grep -qvE '^kernels/(src/(cuda|hip)/|tests/|CMakeLists\.txt$)' <<<"$changed"; then
               rust=false
             fi
+            grep -qE '^(kernels/|\.github/workflows/macos\.yml$)' <<<"$changed" || kernels=false
           fi
           echo "rust=$rust" >> "$GITHUB_OUTPUT"
-          echo "Rust steps: $rust"
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
+          echo "kernels=$kernels" >> "$GITHUB_OUTPUT"
+          echo "Rust lint and build: $rust; Rust tests: $tests; kernel tests: $kernels"
       - name: Metal toolchain (a separate download since Xcode 26)
+        if: steps.scope.outputs.rust == 'true' || steps.scope.outputs.kernels == 'true'
         run: xcrun -sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
       - run: rustup toolchain install  # the channel in rust-toolchain.toml
+        if: steps.scope.outputs.rust == 'true'
+      # larch-sys's build script compiles the Metal kernels here, so a PR still builds them.
       - if: steps.scope.outputs.rust == 'true'
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - if: steps.scope.outputs.rust == 'true'
+      - if: steps.scope.outputs.rust == 'true' && steps.scope.outputs.tests == 'true'
         run: cargo test --no-fail-fast
       # The desktop app is its own workspace with its own lock, which only a release built: a
       # stale pin there broke the app unseen (#357).
@@ -88,10 +113,11 @@ jobs:
         if: steps.scope.outputs.rust == 'true'
         run: cargo check --locked --manifest-path apps/desktop/Cargo.toml
       - name: kernel tests (ctest on the CPU reference; metal_smoke and metal_compare need a GPU)
+        if: steps.scope.outputs.kernels == 'true'
         run: |
           cmake -S kernels -B build/kernels -DLARCH_BACKEND=METAL -DLARCH_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
           cmake --build build/kernels --config RelWithDebInfo
-          ctest --test-dir build/kernels -C RelWithDebInfo --output-on-failure --no-tests=error -E '^metal_(smoke|compare)$'
+          ctest --test-dir build/kernels -C RelWithDebInfo --output-on-failure --no-tests=error --parallel 4 -E '^metal_(smoke|compare)$'
 
   package:
     runs-on: macos-26

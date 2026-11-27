@@ -1,0 +1,21 @@
+name: backend-builds (ci:kernels)
+
+# Adding the `ci:kernels` label to a PR starts the CUDA and HIP builds (backend-builds.yml), whatever
+# the PR changes. Any other label skips only this workflow's one job, so the PR's checks still show
+# backend-builds' own results for the commit.
+on:
+  pull_request:
+    branches: [dev]
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  backends:
+    if: github.event.label.name == 'ci:kernels'
+    # backend-builds.yml's jobs ask for contents: write (a release stages its archives); a PR build
+    # stages nothing.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/backend-builds.yml
