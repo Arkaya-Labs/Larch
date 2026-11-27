@@ -742,6 +742,84 @@ fn two_checks_in_one_step_rewind_apart() {
     }
 }
 
+/// Two sequences that check in one step give each row, bit for bit, the logits of checking alone,
+/// and after their rewinds (to each pair of `kept`) decode as if each had checked alone, on the
+/// check kernels as a guessing load decodes on Metal. Slots 2 and 3 check alone, 0 and 1 together.
+fn two_checks_match_alone(run: &mut Run, what: &str) {
+    let (pa, pb) = (tokens(10, 13), tokens(7, 14));
+    let (ga, gb, next) = (tokens(4, 15), tokens(5, 16), tokens(3, 17));
+    run.splits = 2;
+    for (ka, kb) in [(1, 5), (2, 3), (4, 1), (4, 5)] {
+        let what = format!("{what}: {ka} and {kb} kept");
+        let (aa, ab) = (10 + ka as i32, 7 + kb as i32);
+        for slot in 0..4 {
+            run.model.reset_state(&run.s, slot).unwrap();
+        }
+        for (a, b) in [(0, 1), (2, 3)] {
+            run.sequence(a, &pa, 10);
+            run.sequence(b, &pb, 7);
+        }
+        let alone = |run: &mut Run, slot: i32, at: i32, g: &[i32], kept: usize| {
+            run.model
+                .begin_check(&run.s, slot as u32, g.len() as u32)
+                .unwrap();
+            run.check = true;
+            let out = run.step(&[Part::prefill(slot, at, g)]);
+            run.model
+                .end_check(&run.s, slot as u32, kept as u32)
+                .unwrap();
+            out
+        };
+        let mut want_a = alone(run, 2, 10, &ga, ka);
+        let mut want_b = alone(run, 3, 7, &gb, kb);
+        // Rewound slots that sit the next step out go home, as the engine moves them, freeing
+        // their spares.
+        for slot in [2, 3] {
+            run.model.copy_state(&run.s, slot, slot).unwrap();
+        }
+        run.model.begin_check(&run.s, 0, ga.len() as u32).unwrap();
+        run.model.begin_check(&run.s, 1, gb.len() as u32).unwrap();
+        let two = run.step(&[Part::prefill(0, 10, &ga), Part::prefill(1, 7, &gb)]);
+        run.model.end_check(&run.s, 0, ka as u32).unwrap();
+        run.model.end_check(&run.s, 1, kb as u32).unwrap();
+        let (mut got_a, mut got_b) = (two[..ga.len()].to_vec(), two[ga.len()..].to_vec());
+        for (i, &t) in next.iter().enumerate() {
+            let i = i as i32;
+            let alone = run.step(&[Part::decode(2, aa + i, t), Part::decode(3, ab + i, t)]);
+            let both = run.step(&[Part::decode(0, aa + i, t), Part::decode(1, ab + i, t)]);
+            want_a.push(alone[0].clone());
+            want_b.push(alone[1].clone());
+            got_a.push(both[0].clone());
+            got_b.push(both[1].clone());
+        }
+        run.check = false;
+        same(&want_a, &got_a, &format!("{what}: the first"));
+        same(&want_b, &got_b, &format!("{what}: the second"));
+    }
+}
+
+#[test]
+fn two_checks_in_one_step_match_alone() {
+    for arch in [Arch::Qwen35, Arch::Qwen35Moe] {
+        let what = format!("{arch:?}");
+        let path = model_file(arch, &format!("q35-two-alone-{what}"));
+        let dev = Device::open(CPU).unwrap();
+        let mut run = Run::new(&path, &dev, 4);
+        std::fs::remove_file(&path).unwrap();
+        two_checks_match_alone(&mut run, &what);
+    }
+}
+
+/// [`two_checks_match_alone`] on a real hybrid GGUF and device (a Mac's Metal is device 0):
+///   LARCH_CHECK_GGUF=<model.gguf> cargo test --release -p larch-model --test qwen35 -- --ignored --nocapture two_checks_on
+#[test]
+#[ignore = "needs a hybrid GGUF: LARCH_CHECK_GGUF, LARCH_CHECK_DEVICE (default 0)"]
+fn two_checks_on_a_device() {
+    let path = PathBuf::from(std::env::var("LARCH_CHECK_GGUF").unwrap());
+    let mut run = Run::new(&path, &check_device(), 4);
+    two_checks_match_alone(&mut run, &path.display().to_string());
+}
+
 /// Checks share the spares: a second check that needs more than the first left is refused, and
 /// its spares stay free for one that fits.
 #[test]
