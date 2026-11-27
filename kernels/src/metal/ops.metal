@@ -2063,6 +2063,59 @@ kernel void vv_kv_write(bytes_in k [[buffer(0)]], bytes_in v [[buffer(1)]], byte
   vp[i] = ((device const half*)(v + g.y * a.rs1))[g.x];
 }
 
+// One 32-value block of an f16 row into a q8_0 page block, as the CPU reference's kv_from_f32 (ggml's
+// quantize_row_q8_0_ref): amax by its NaN-keeping compare, d = amax / 127 to f16, q = round(x / d) with id = 1 / d
+// unrounded, NaN to 0. precise:: keeps the two divides correctly rounded, so the page is the reference's bit for bit.
+static void q8_block(device const half* x, device uchar* b) {
+  float amax = 0.0f;
+  for (uint j = 0; j < 32; ++j) amax = amax > fabs(float(x[j])) ? amax : fabs(float(x[j]));
+  const float d = precise::divide(amax, 127.0f), id = d != 0.0f ? precise::divide(1.0f, d) : 0.0f;
+  *(device half*)b = half(d);
+  for (uint j = 0; j < 32; ++j) {
+    const float q = round(float(x[j]) * id);
+    b[2 + j] = uchar(char(isnan(q) ? 0.0f : q));
+  }
+}
+
+// vv_kv_write into q8_0 pages (larch.h): thread (c, r) quantizes block c of row r's k and v into slot slots[r]; a
+// negative slot skips the row. A slot row is cols / 32 blocks of 34 bytes. rs0 k, rs1 v, rs2 slots.
+kernel void vv_kv_write_q8(bytes_in k [[buffer(0)]], bytes_in v [[buffer(1)]], bytes_in slots [[buffer(2)]],
+                           device uchar* kp [[buffer(3)]], device uchar* vp [[buffer(4)]],
+                           constant ew_args& a [[buffer(5)]], uint2 g [[thread_position_in_grid]]) {
+  const int s = at<int>(slots, a.rs2, g.y);
+  if (s < 0) return;
+  const u64 b = (u64(s) * (a.cols / 32) + g.x) * 34;
+  q8_block((device const half*)(k + g.y * a.rs0) + 32 * g.x, kp + b);
+  q8_block((device const half*)(v + g.y * a.rs1) + 32 * g.x, vp + b);
+}
+
+// How attention reads a pool layer's pages (larch.h larch_kv_pool): kv_pages<false> f16, kv_pages<true> q8_0, whose
+// slot row is (kv_heads * hd) / 32 blocks of an f16 scale and 32 int8 (hd a multiple of 32, which the host checks).
+// load4 is 4 values from dim d (a multiple of 4) of kv head kvh at slot; q8_0's are q * d, exact in f32, as the
+// reference decodes them. Every reader takes the pages in place: nothing unpacks the history.
+template <bool Q8>
+struct kv_pages;
+template <>
+struct kv_pages<false> {
+  static float4 load4(bytes_in p, u64 slot, uint kvh, uint d, constant attn_args& a) {
+    device const half* r = (device const half*)p + (slot * a.kv_heads + kvh) * a.hd;
+    return float4(half4(*(device const packed_half4*)(r + d)));  // packed: larch.h promises 2-byte alignment only
+  }
+  static float load1(bytes_in p, u64 slot, uint kvh, uint d, constant attn_args& a) {
+    return float(((device const half*)p)[(slot * a.kv_heads + kvh) * a.hd + d]);
+  }
+};
+template <>
+struct kv_pages<true> {
+  static bytes_in block(bytes_in p, u64 slot, uint kvh, uint d, constant attn_args& a) {
+    return p + ((slot * a.kv_heads + kvh) * a.hd + d) / 32 * 34;
+  }
+  static float4 load4(bytes_in p, u64 slot, uint kvh, uint d, constant attn_args& a) {
+    const bytes_in b = block(p, slot, kvh, d, a);
+    return float4(char4(*(device const packed_char4*)(b + 2 + d % 32))) * h16(b);
+  }
+};
+
 // Lane l's accumulator slot i (0..7) holds dim acc_dim(i, l) of its head: 2 chunks of 128 dims, 4
 // contiguous dims per lane, so a position's v row is one 4-wide load per lane.
 inline uint acc_dim(uint i, uint lane) { return 128 * (i / 4) + 4 * lane + i % 4; }
@@ -2076,9 +2129,12 @@ inline uint acc_dim(uint i, uint lane) { return 128 * (i / 4) + 4 * lane + i % 4
 // ponytail: always ATTN_GROUP heads (unused ones have q = 0): multi-head attention scores 4x and 3 or 7 q
 // heads per kv head waste a quarter; give the group width a pipeline each when such a model's decode
 // profile shows attention.
-void attend_range(device const half* kp, device const half* vp, device const int* table, constant attn_args& a,
-                  uint kvh, uint lane, threadgroup const half* qs, uint first, uint last, thread float* mx,
-                  thread float* sum, thread float* acc) {
+// Q8 reads q8_0 pages (kv_pages): each key block's 32 products sum before its scale multiplies them, which moves the
+// score only by f32 rounding against the reference's decoded keys.
+template <bool Q8>
+void attend_range(bytes_in kp, bytes_in vp, device const int* table, constant attn_args& a, uint kvh, uint lane,
+                  threadgroup const half* qs, uint first, uint last, thread float* mx, thread float* sum,
+                  thread float* acc) {
   for (uint p0 = first; p0 < last; p0 += 32) {
     const uint p = p0 + lane, n = min(32u, last - p0);
     int block = 0;
@@ -2087,26 +2143,48 @@ void attend_range(device const half* kp, device const half* vp, device const int
     for (uint g = 0; g < ATTN_GROUP; ++g) s[g] = -INFINITY;
     if (lane < n) {
       block = table[p / a.block_tokens];
-      device const half* kr =
-          kp + ((u64(uint(block)) * a.block_tokens + p % a.block_tokens) * a.kv_heads + kvh) * a.hd;
+      const u64 slot = u64(uint(block)) * a.block_tokens + p % a.block_tokens;
       float dot[ATTN_GROUP] = {};
-      uint d = 0;
-#pragma unroll 4
-      for (; d + 4 <= a.hd; d += 4) {  // packed: larch.h promises the pool 2-byte alignment only
-        const float4 k = float4(half4(*(device const packed_half4*)(kr + d)));
+      if (Q8) {
+        for (uint d0 = 0; d0 < a.hd; d0 += 32) {
+          const bytes_in kb = kv_pages<true>::block(kp, slot, kvh, d0, a);
+          float part[ATTN_GROUP] = {};
 #pragma unroll
-        for (uint g = 0; g < ATTN_GROUP; ++g) {
-          const float4 q = float4(*(threadgroup const half4*)(qs + ATTN_MAX_HEAD_DIM * g + d));
-          dot[g] += q.x * k.x;
-          dot[g] += q.y * k.y;
-          dot[g] += q.z * k.z;
-          dot[g] += q.w * k.w;
+          for (uint d = 0; d < 32; d += 4) {
+            const float4 k = float4(char4(*(device const packed_char4*)(kb + 2 + d)));
+#pragma unroll
+            for (uint g = 0; g < ATTN_GROUP; ++g) {
+              const float4 q = float4(*(threadgroup const half4*)(qs + ATTN_MAX_HEAD_DIM * g + d0 + d));
+              part[g] += q.x * k.x;
+              part[g] += q.y * k.y;
+              part[g] += q.z * k.z;
+              part[g] += q.w * k.w;
+            }
+          }
+          const float scale = h16(kb);
+#pragma unroll
+          for (uint g = 0; g < ATTN_GROUP; ++g) dot[g] += part[g] * scale;
         }
-      }
-      for (; d < a.hd; ++d) {
-        const float k = float(kr[d]);
+      } else {
+        device const half* kr = (device const half*)kp + (slot * a.kv_heads + kvh) * a.hd;
+        uint d = 0;
+#pragma unroll 4
+        for (; d + 4 <= a.hd; d += 4) {  // packed: larch.h promises the pool 2-byte alignment only
+          const float4 k = float4(half4(*(device const packed_half4*)(kr + d)));
 #pragma unroll
-        for (uint g = 0; g < ATTN_GROUP; ++g) dot[g] += float(qs[ATTN_MAX_HEAD_DIM * g + d]) * k;
+          for (uint g = 0; g < ATTN_GROUP; ++g) {
+            const float4 q = float4(*(threadgroup const half4*)(qs + ATTN_MAX_HEAD_DIM * g + d));
+            dot[g] += q.x * k.x;
+            dot[g] += q.y * k.y;
+            dot[g] += q.z * k.z;
+            dot[g] += q.w * k.w;
+          }
+        }
+        for (; d < a.hd; ++d) {
+          const float k = float(kr[d]);
+#pragma unroll
+          for (uint g = 0; g < ATTN_GROUP; ++g) dot[g] += float(qs[ATTN_MAX_HEAD_DIM * g + d]) * k;
+        }
       }
 #pragma unroll
       for (uint g = 0; g < ATTN_GROUP; ++g) s[g] = dot[g] * a.scale;
@@ -2127,12 +2205,11 @@ void attend_range(device const half* kp, device const half* vp, device const int
 #pragma unroll
       for (uint g = 0; g < ATTN_GROUP; ++g) ej[g] = simd_shuffle(e[g], ushort(j));
       const u64 slot = u64(uint(simd_shuffle(block, ushort(j)))) * a.block_tokens + (p0 + j) % a.block_tokens;
-      device const half* vr = vp + (slot * a.kv_heads + kvh) * a.hd;
 #pragma unroll
       for (uint c = 0; c < 2; ++c) {
         const uint d = acc_dim(4 * c, lane);
         if (d + 4 <= a.hd) {
-          const float4 v = float4(half4(*(device const packed_half4*)(vr + d)));
+          const float4 v = kv_pages<Q8>::load4(vp, slot, kvh, d, a);
 #pragma unroll
           for (uint g = 0; g < ATTN_GROUP; ++g) {
             acc[8 * g + 4 * c] += ej[g] * v.x;
@@ -2140,11 +2217,11 @@ void attend_range(device const half* kp, device const half* vp, device const int
             acc[8 * g + 4 * c + 2] += ej[g] * v.z;
             acc[8 * g + 4 * c + 3] += ej[g] * v.w;
           }
-        } else {
+        } else if (!Q8) {  // q8_0's head_dim is a multiple of 32: no tail
 #pragma unroll
           for (uint t = 0; t < 4; ++t) {
             if (d + t >= a.hd) break;
-            const float v = float(vr[d + t]);
+            const float v = kv_pages<false>::load1(vp, slot, kvh, d + t, a);
 #pragma unroll
             for (uint g = 0; g < ATTN_GROUP; ++g) acc[8 * g + 4 * c + t] += ej[g] * v;
           }
@@ -2180,11 +2257,12 @@ device float* share(device float* partial, constant attn_args& a, uint r, uint h
 }
 
 // Attention, one-split decode and the prefill attn_flash does not take (backend.mm attend): one simdgroup per
-// (head group, row).
-kernel void vv_attn(bytes_in q [[buffer(0)]], device const half* kp [[buffer(1)]], device const half* vp [[buffer(2)]],
-                    bytes_in bt [[buffer(3)]], bytes_in lens [[buffer(4)]], bytes_in start [[buffer(5)]],
-                    device uchar* out [[buffer(6)]], constant attn_args& a [[buffer(7)]],
-                    uint2 tg [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+// (head group, row). vv_attn reads f16 pages, vv_attn_q8 q8_0 ones.
+template <bool Q8>
+kernel void attn_one(bytes_in q [[buffer(0)]], bytes_in kp [[buffer(1)]], bytes_in vp [[buffer(2)]],
+                     bytes_in bt [[buffer(3)]], bytes_in lens [[buffer(4)]], bytes_in start [[buffer(5)]],
+                     device uchar* out [[buffer(6)]], constant attn_args& a [[buffer(7)]],
+                     uint2 tg [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
   const head_group h(a, tg.x);
   const uint r = tg.y;
   uint s = r;
@@ -2200,8 +2278,8 @@ kernel void vv_attn(bytes_in q [[buffer(0)]], device const half* kp [[buffer(1)]
   float acc[8 * ATTN_GROUP] = {}, mx[ATTN_GROUP], sum[ATTN_GROUP] = {};
   for (uint g = 0; g < ATTN_GROUP; ++g) mx[g] = -INFINITY;
   load_q(q, a, r, h.h0, h.ng, lane, (threadgroup half*)qs);
-  attend_range(kp, vp, (device const int*)(bt + s * a.bt_rs), a, h.kvh, lane, (threadgroup const half*)qs, 0,
-               uint(max(n, 0)), mx, sum, acc);
+  attend_range<Q8>(kp, vp, (device const int*)(bt + s * a.bt_rs), a, h.kvh, lane, (threadgroup const half*)qs, 0,
+                   uint(max(n, 0)), mx, sum, acc);
 #pragma unroll
   for (uint g = 0; g < ATTN_GROUP; ++g) {
     if (g >= h.ng) break;
@@ -2211,6 +2289,9 @@ kernel void vv_attn(bytes_in q [[buffer(0)]], device const half* kp [[buffer(1)]
       if (const uint d = acc_dim(i, lane); d < a.hd) o[d] = half(n > 0 ? acc[8 * g + i] / sum[g] : 0.0f);
   }
 }
+
+template [[host_name("vv_attn")]] kernel decltype(attn_one<false>) attn_one<false>;
+template [[host_name("vv_attn_q8")]] kernel decltype(attn_one<true>) attn_one<true>;
 
 // Prefill attention, flash style (FA2), on the tensor API. Threadgroup (tile, q head) takes ATTN_FLASH_ROWS
 // consecutive q rows of one sequence (staged once as f16) and walks the positions they see one pool block
@@ -2347,8 +2428,9 @@ template [[host_name("vv_attn_flash256")]] kernel decltype(attn_flash<256>) attn
 // + P V. P is rounded to f16 for its multiply, as attn_flash does. Our CUDA attn_prefill_tc_k's shape. At DK 256
 // (Qwen 3.5's full attention) K and V take turns in one block's space and Q's tile loads in two halves, which
 // keeps the threadgroup memory near 16 KB.
-template <int DK>
-kernel void attn_flash_sg(bytes_in q [[buffer(0)]], device const half* kp [[buffer(1)]], device const half* vp [[buffer(2)]],
+// With Q8 it reads q8_0 pages, each value staged as half(q * d): one f16 rounding of the decoded value, as P's.
+template <int DK, bool Q8>
+kernel void attn_flash_sg(bytes_in q [[buffer(0)]], bytes_in kp [[buffer(1)]], bytes_in vp [[buffer(2)]],
                           bytes_in bt [[buffer(3)]], bytes_in lens [[buffer(4)]], bytes_in start [[buffer(5)]],
                           device uchar* out [[buffer(6)]], constant attn_args& a [[buffer(7)]],
                           uint2 tg [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
@@ -2403,14 +2485,19 @@ kernel void attn_flash_sg(bytes_in q [[buffer(0)]], device const half* kp [[buff
   float m = -INFINITY, l = 0;
   for (uint p0 = 0; p0 < end; p0 += BT) {
     const uint n = min(BT, end - p0);
-    const u64 block = (u64(uint(table[p0 / BT])) * BT * a.kv_heads + kvh) * a.hd;
+    const u64 slot0 = u64(uint(table[p0 / BT])) * BT, block = (slot0 * a.kv_heads + kvh) * a.hd;
     threadgroup_barrier(mem_flags::mem_threadgroup);  // Q loaded, or every simdgroup done with the last block
     for (uint i = tid; i < BT * DK / 4; i += NT) {
       const uint j = i / (DK / 4), d = i % (DK / 4) * 4;
       half4 k = half4(0), v = half4(0);
       if (j < n && d < a.hd) {
-        k = half4(*(device const packed_half4*)(kp + block + u64(j) * slot_rs + d));
-        if (!SPLIT) v = half4(*(device const packed_half4*)(vp + block + u64(j) * slot_rs + d));
+        if (Q8) {
+          k = half4(kv_pages<true>::load4(kp, slot0 + j, kvh, d, a));
+          if (!SPLIT) v = half4(kv_pages<true>::load4(vp, slot0 + j, kvh, d, a));
+        } else {
+          k = half4(*(device const packed_half4*)((device const half*)kp + block + u64(j) * slot_rs + d));
+          if (!SPLIT) v = half4(*(device const packed_half4*)((device const half*)vp + block + u64(j) * slot_rs + d));
+        }
       }
       kv4[(j * L + d) / 4] = k;
       if (!SPLIT) kv4[((BT + j) * L + d) / 4] = v;
@@ -2458,7 +2545,9 @@ kernel void attn_flash_sg(bytes_in q [[buffer(0)]], device const half* kp [[buff
       for (uint i = tid; i < BT * DK / 4; i += NT) {
         const uint j = i / (DK / 4), d = i % (DK / 4) * 4;
         half4 v = half4(0);
-        if (j < n && d < a.hd) v = half4(*(device const packed_half4*)(vp + block + u64(j) * slot_rs + d));
+        if (j < n && d < a.hd)
+          v = Q8 ? half4(kv_pages<true>::load4(vp, slot0 + j, kvh, d, a))
+                 : half4(*(device const packed_half4*)((device const half*)vp + block + u64(j) * slot_rs + d));
         kv4[(j * L + d) / 4] = v;
       }
       threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -2491,18 +2580,23 @@ kernel void attn_flash_sg(bytes_in q [[buffer(0)]], device const half* kp [[buff
     simdgroup_barrier(mem_flags::mem_threadgroup);
   }
 }
-template [[host_name("vv_attn_flash_sg64")]] kernel decltype(attn_flash_sg<64>) attn_flash_sg<64>;
-template [[host_name("vv_attn_flash_sg128")]] kernel decltype(attn_flash_sg<128>) attn_flash_sg<128>;
-template [[host_name("vv_attn_flash_sg256")]] kernel decltype(attn_flash_sg<256>) attn_flash_sg<256>;
+template [[host_name("vv_attn_flash_sg64")]] kernel decltype(attn_flash_sg<64, false>) attn_flash_sg<64, false>;
+template [[host_name("vv_attn_flash_sg128")]] kernel decltype(attn_flash_sg<128, false>) attn_flash_sg<128, false>;
+template [[host_name("vv_attn_flash_sg256")]] kernel decltype(attn_flash_sg<256, false>) attn_flash_sg<256, false>;
+template [[host_name("vv_attn_flash_sg64_q8")]] kernel decltype(attn_flash_sg<64, true>) attn_flash_sg<64, true>;
+template [[host_name("vv_attn_flash_sg128_q8")]] kernel decltype(attn_flash_sg<128, true>) attn_flash_sg<128, true>;
+template [[host_name("vv_attn_flash_sg256_q8")]] kernel decltype(attn_flash_sg<256, true>) attn_flash_sg<256, true>;
 
 // Split-K decode, 1 of 2: simdgroup (split, head group, row) writes each head's share. With a.prefill, a causal span of
 // larch_attn (a check step's rows): row r is row j of sequence s, attending to start[s] + j + 1 positions, as vv_attn's
 // prefill finds it, so it is decode's row with that seq_len, bit for bit (larch.h's verify contract).
-kernel void vv_attn_split(bytes_in q [[buffer(0)]], device const half* kp [[buffer(1)]], device const half* vp [[buffer(2)]],
-                          bytes_in bt [[buffer(3)]], bytes_in lens [[buffer(4)]], bytes_in start [[buffer(5)]],
-                          device float* partial [[buffer(6)]], constant attn_args& a [[buffer(7)]],
-                          uint2 tg [[threadgroup_position_in_grid]], uint2 tgs [[threadgroups_per_grid]],
-                          uint lane [[thread_index_in_simdgroup]]) {
+// vv_attn_split reads f16 pages, vv_attn_split_q8 q8_0 ones.
+template <bool Q8>
+kernel void attn_split(bytes_in q [[buffer(0)]], bytes_in kp [[buffer(1)]], bytes_in vp [[buffer(2)]],
+                       bytes_in bt [[buffer(3)]], bytes_in lens [[buffer(4)]], bytes_in start [[buffer(5)]],
+                       device float* partial [[buffer(6)]], constant attn_args& a [[buffer(7)]],
+                       uint2 tg [[threadgroup_position_in_grid]], uint2 tgs [[threadgroups_per_grid]],
+                       uint lane [[thread_index_in_simdgroup]]) {
   // Split-major order: the live splits' threadgroups come first and contiguous, as at 16 splits. Head-group-major
   // put 48 empty ones between each head group's 16 live ones at 2k positions (+23 %, M5, 1 Nov), which this
   // order is meant to remove.
@@ -2525,8 +2619,8 @@ kernel void vv_attn_split(bytes_in q [[buffer(0)]], device const half* kp [[buff
   float acc[8 * ATTN_GROUP] = {}, mx[ATTN_GROUP], sum[ATTN_GROUP] = {};
   for (uint g = 0; g < ATTN_GROUP; ++g) mx[g] = -INFINITY;
   load_q(q, a, r, h.h0, h.ng, lane, (threadgroup half*)qs);
-  attend_range(kp, vp, (device const int*)(bt + s * a.bt_rs), a, h.kvh, lane, (threadgroup const half*)qs, first,
-               last, mx, sum, acc);
+  attend_range<Q8>(kp, vp, (device const int*)(bt + s * a.bt_rs), a, h.kvh, lane, (threadgroup const half*)qs, first,
+                   last, mx, sum, acc);
 #pragma unroll
   for (uint g = 0; g < ATTN_GROUP; ++g) {
     if (g >= h.ng) break;
@@ -2540,6 +2634,9 @@ kernel void vv_attn_split(bytes_in q [[buffer(0)]], device const half* kp [[buff
       if (const uint d = acc_dim(i, lane); d < a.hd) dst[2 + d] = acc[8 * g + i];
   }
 }
+
+template [[host_name("vv_attn_split")]] kernel decltype(attn_split<false>) attn_split<false>;
+template [[host_name("vv_attn_split_q8")]] kernel decltype(attn_split<true>) attn_split<true>;
 
 // Split-K decode, 2 of 2: merges a (q head, row)'s splits, skipping empty ones (sum 0). Lane l weighs splits l and
 // l + 32 once (splits <= ATTN_MAX_SPLITS, which the host keeps); each output dim then sums the live splits'

@@ -632,6 +632,8 @@ struct Loaded {
     weights_read: Option<u64>,
     /// K and V bytes of one token, every layer.
     kv_token_bytes: u64,
+    /// The KV pool's pages ([`kv_dtype`]).
+    kv_dtype: DType,
     info: Published,
     /// The drafter, with `EngineOptions::drafter`.
     draft: Option<Draft>,
@@ -886,8 +888,43 @@ struct CarryKey {
     state: usize,
 }
 
-/// The KV pool's element type ([`KvPool::dtype`]).
-const KV_DTYPE: DType = DType::F16;
+/// The KV pool's page dtype for a load of `c` on `s`'s backend ([`crate::EngineOptions::kv_dtype`]):
+/// `want` where the backend has those pages and `c`'s head_dim is whole Q8_0 blocks, else F16. The
+/// backend answers a probe, a kv_write of one skipped row into a one-slot pool, which one without the
+/// pages refuses with `Unsupported` before it runs (larch.h).
+pub(crate) fn kv_dtype(s: &Stream, want: DType, c: &ModelConfig) -> Result<DType, KError> {
+    if want == DType::F16 || !c.head_dim.is_multiple_of(32) {
+        return Ok(DType::F16);
+    }
+    let dev = s.device();
+    let row = u64::from(c.n_kv_heads) * u64::from(c.head_dim);
+    let page = want.checked_bytes(row).ok_or(KError::InvalidArg)?;
+    let (k, v) = (Buffer::alloc(dev, page)?, Buffer::alloc(dev, page)?);
+    let (x, slot) = (Buffer::alloc(dev, row * 2)?, Buffer::alloc(dev, 4)?);
+    s.upload(&slot, 0, &[-1i32])?;
+    let pool = KvPool {
+        k: &k,
+        v: &v,
+        n_blocks: 1,
+        block_tokens: 1,
+        n_layers: 1,
+        n_kv_heads: c.n_kv_heads,
+        head_dim: c.head_dim,
+        dtype: want,
+    };
+    let shape = [1, i64::from(c.n_kv_heads), i64::from(c.head_dim)];
+    let (xt, st) = (
+        Tensor::new(&x, 0, DType::F16, &shape)?,
+        Tensor::new(&slot, 0, DType::I32, &[1])?,
+    );
+    let probe = ops::kv_write(s, &xt, &xt, &st, &pool, 0);
+    s.sync()?; // the buffers outlive what the probe queued
+    match probe {
+        Ok(()) => Ok(want),
+        Err(KError::Unsupported) => Ok(DType::F16),
+        Err(e) => Err(e),
+    }
+}
 
 /// `blocks` split into runs of consecutive ids, each with the index of its first block: a run's
 /// K (and its V) is one range of a layer, so it takes one copy, not one a block.
@@ -1043,11 +1080,11 @@ fn host_available(p: &larch_kernels::DeviceProps) -> Option<u64> {
     kib.checked_mul(1024)
 }
 
-/// The KV pool's layers and one block's bytes in one layer of K (or V), as [`KvPool`] lays it out:
-/// `[layer][block][token][head][dim]`.
-fn kv_layout(mc: &ModelConfig) -> (usize, usize) {
+/// The KV pool's layers and one block's bytes in one layer of K (or V) of `kv` pages, as [`KvPool`]
+/// lays it out: `[layer][block][token][head][dim]`.
+fn kv_layout(mc: &ModelConfig, kv: DType) -> (usize, usize) {
     let per_block = BLOCK_TOKENS as u64 * u64::from(mc.n_kv_heads) * u64::from(mc.head_dim);
-    (mc.kv_layers as usize, KV_DTYPE.bytes(per_block) as usize)
+    (mc.kv_layers as usize, kv.bytes(per_block) as usize)
 }
 
 /// Bytes [`file_id`] hashes at each of its spread offsets.
@@ -1105,7 +1142,7 @@ pub(crate) fn host_bytes(n: usize) -> Option<Vec<u8>> {
 fn carry_key(l: &Loaded) -> Option<CarryKey> {
     Some(CarryKey {
         file: l.file?,
-        kv: kv_layout(l.model.config()),
+        kv: kv_layout(l.model.config(), l.kv_dtype),
         state: l.model.state_size(),
     })
 }
@@ -1639,6 +1676,8 @@ impl Loaded {
             .expect("loaded model")
             .config()
             .clone();
+        // The pages the loader's plan priced, from the same probe.
+        let kv = kv_dtype(s, opts.kv_dtype, &mc).map_err(backend_err)?;
         // The drafter's weights count as the model's: in what the load took.
         let drafter = match &opts.drafter {
             Some(path) if !opts.mtp() => {
@@ -1728,6 +1767,7 @@ impl Loaded {
                     mapped,
                     stream_want,
                     checks,
+                    kv,
                 )
             };
             let planned = gated_plan(
@@ -1988,6 +2028,7 @@ impl Loaded {
             logit_rows: seqs_cap,
             weights_read: weights.as_ref().map(|w| w.read_per_step),
             kv_token_bytes: plan.kv_block_bytes / BLOCK_TOKENS as u64,
+            kv_dtype: kv,
             info: Published {
                 deployment,
                 caps,
@@ -2609,7 +2650,7 @@ impl Engine {
                 file: key.file,
                 layers: layers as u32,
                 block_bytes: block as u64,
-                dtype: KV_DTYPE as u32,
+                dtype: l.kv_dtype as u32,
                 state_bytes: key.state as u64,
                 block_tokens: BLOCK_TOKENS as u32,
                 segment: self.sched.pin_mark as u32,
@@ -2794,7 +2835,8 @@ impl Engine {
         before.vram_free = self.base_free;
         let terms = self.doc_terms.as_ref().expect("read above");
         let base = self.base_host_layers;
-        crate::document_plan(terms, &before, state, max_seats, base, tokens).map_err(refused)
+        crate::document_plan(terms, &before, state, max_seats, base, tokens, l.kv_dtype)
+            .map_err(refused)
     }
 
     /// Returns false on Shutdown. Knob changes apply here, between steps (9.8).
@@ -3354,7 +3396,7 @@ impl Engine {
             self.unspill_pin(c, same);
         }
         let l = self.loaded.as_mut().expect("rebuilt engine");
-        let (layers, block) = kv_layout(l.model.config());
+        let (layers, block) = kv_layout(l.model.config(), l.kv_dtype);
         let (n_blocks, state_n) = (self.sched.blocks.total() as u64, l.model.state_size());
         let mut carried = carried.into_iter();
         while let Some(c) = carried.next() {
@@ -4951,7 +4993,7 @@ impl Engine {
             n_layers: mc.kv_layers,
             n_kv_heads: mc.n_kv_heads,
             head_dim: mc.head_dim,
-            dtype: KV_DTYPE,
+            dtype: loaded.kv_dtype,
         };
         let m = (rows.len() + pad) as i64;
         let logits = Tensor::new(&loaded.logits, 0, DType::F32, &[m, i64::from(vocab)])?;
@@ -5968,7 +6010,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use crate::fit::fit;
-    use larch_kernels::{CPU, KError, KvPool, Stream, Tensor};
+    use larch_kernels::{CPU, DType, KError, KvPool, Stream, Tensor};
     use larch_model::{Arch, FakeModel, Model, ModelConfig, StepBatch, Transformer, tiny};
     use larch_records::{Backend, EngineError, HealthState, LoadError, RejectReason, knob_id};
 
@@ -7295,7 +7337,20 @@ mod tests {
         let plan = |free: u64| {
             move |graphs, seats, want| {
                 crate::fit::fit_seats(
-                    before, free, c, 2048, 0.85, 0, 16, seats, graphs, false, false, want, 0,
+                    before,
+                    free,
+                    c,
+                    2048,
+                    0.85,
+                    0,
+                    16,
+                    seats,
+                    graphs,
+                    false,
+                    false,
+                    want,
+                    0,
+                    DType::F16,
                 )
             }
         };
@@ -7560,7 +7615,19 @@ mod tests {
         let scratch = 72_719_104;
         let plan = |free, graphs| {
             crate::fit::fit(
-                &before, free, &c, 2304, 0.85, scratch, 3, graphs, false, false, 0, 0,
+                &before,
+                free,
+                &c,
+                2304,
+                0.85,
+                scratch,
+                3,
+                graphs,
+                false,
+                false,
+                0,
+                0,
+                DType::F16,
             )
         };
         let mut seen = 0;
@@ -7608,10 +7675,23 @@ mod tests {
             (8192, 996_724_736, 807_063_231),
             (2304, 996_724_736, 665_102_862),
         ] {
-            let scratch = need - crate::fit::serving_need(&before, &c, ctx, 0.85, 0, false, 16);
+            let scratch =
+                need - crate::fit::serving_need(&before, &c, ctx, 0.85, 0, false, 16, DType::F16);
             let plan = |graphs| {
                 fit(
-                    &before, free, &c, ctx, 0.85, scratch, 16, graphs, false, false, 0, 0,
+                    &before,
+                    free,
+                    &c,
+                    ctx,
+                    0.85,
+                    scratch,
+                    16,
+                    graphs,
+                    false,
+                    false,
+                    0,
+                    0,
+                    DType::F16,
                 )
                 .unwrap()
             };
@@ -7880,6 +7960,7 @@ mod tests {
                 false,
                 0,
                 0,
+                DType::F16,
             )
             .unwrap();
             assert_eq!(
@@ -7900,6 +7981,7 @@ mod tests {
                 false,
                 0,
                 0,
+                DType::F16,
             )
             .unwrap();
             assert!(p.kv_blocks >= 512 && p.max_seqs_fit == 1, "{p:?}");
@@ -7928,6 +8010,7 @@ mod tests {
                 false,
                 0,
                 0,
+                DType::F16,
             ) {
                 Err(LoadError::DoesNotFit { need, have }) => {
                     assert!(need > have && have == before.vram_free, "{need} {have}");
@@ -7984,6 +8067,7 @@ mod tests {
                     false,
                     0,
                     0,
+                    DType::F16,
                 )
                 .unwrap();
                 let left = free - u64::from(p.kv_blocks) * p.kv_block_bytes - dims.fit_bytes();
@@ -9117,7 +9201,16 @@ mod tests {
     fn the_loader_pays_a_layer_for_the_stream_pool() {
         let (props, c, bytes, l, slot) = fake_cuda_terms();
         let need = |beside, seats| {
-            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+            crate::fit::serving_need(
+                &props,
+                &c,
+                tiny::CTX,
+                0.85,
+                beside,
+                false,
+                seats,
+                DType::F16,
+            )
         };
         let one = need(reserve_at(&l, slot, 1), 1) + crate::FREE_SWING;
         let g = larch_model::gguf::Gguf::parse(&tiny::gguf(Arch::Qwen35Moe, 3)).unwrap();
@@ -9146,7 +9239,16 @@ mod tests {
     fn the_check_after_a_load_keeps_the_pools_room_its_layers_leave() {
         let (props, c, bytes, l, slot) = fake_cuda_terms();
         let need = |beside, seats| {
-            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+            crate::fit::serving_need(
+                &props,
+                &c,
+                tiny::CTX,
+                0.85,
+                beside,
+                false,
+                seats,
+                DType::F16,
+            )
         };
         let one = need(reserve_at(&l, slot, 1), 1) + crate::FREE_SWING;
         let g = larch_model::gguf::Gguf::parse(&tiny::gguf(Arch::Qwen35Moe, 3)).unwrap();
@@ -9176,7 +9278,16 @@ mod tests {
     fn an_automatic_drafter_loads_only_where_it_costs_no_chat() {
         let (props, c, bytes, l, slot) = fake_cuda_terms();
         let need = |beside, seats| {
-            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+            crate::fit::serving_need(
+                &props,
+                &c,
+                tiny::CTX,
+                0.85,
+                beside,
+                false,
+                seats,
+                DType::F16,
+            )
         };
         let short = bytes + need(reserve_at(&l, slot, 1), 1) + crate::FREE_SWING;
         let dflash = std::env::temp_dir().join(format!("larch-auto-{}.gguf", std::process::id()));
@@ -9281,7 +9392,16 @@ mod tests {
     fn asked_seats_take_host_layers() {
         let (props, c, bytes, l, slot) = fake_cuda_terms();
         let need = |beside, seats| {
-            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+            crate::fit::serving_need(
+                &props,
+                &c,
+                tiny::CTX,
+                0.85,
+                beside,
+                false,
+                seats,
+                DType::F16,
+            )
         };
         let before = bytes - 1 + need(reserve_at(&l, slot, 1), 1) + crate::FREE_SWING;
         let roomy = |_, _| 1 << 30;
@@ -9300,7 +9420,16 @@ mod tests {
         let (props, c, bytes, l, slot) = fake_cuda_terms();
         let one = graph_reserve(larch_kernels::Backend::Cuda, 1, 0);
         let need = |beside, seats| {
-            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+            crate::fit::serving_need(
+                &props,
+                &c,
+                tiny::CTX,
+                0.85,
+                beside,
+                false,
+                seats,
+                DType::F16,
+            )
         };
         let before = bytes - 1 + need(reserve_at(&l, slot, 1), 1) + crate::FREE_SWING;
         let after = need(l.scratch + one + l.graph_arena, 1) + crate::FREE_SWING;
@@ -9327,7 +9456,16 @@ mod tests {
     fn the_whole_layer_check_allows_the_free_swing() {
         let (props, c, bytes, l, slot) = fake_cuda_terms();
         let need = |beside, seats| {
-            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+            crate::fit::serving_need(
+                &props,
+                &c,
+                tiny::CTX,
+                0.85,
+                beside,
+                false,
+                seats,
+                DType::F16,
+            )
         };
         let before = bytes - 1 + need(reserve_at(&l, slot, 1), 1) + crate::FREE_SWING;
         let one = graph_reserve(larch_kernels::Backend::Cuda, 1, 0);
@@ -9347,7 +9485,16 @@ mod tests {
     fn a_hybrid_load_gives_the_state_slots_its_room_allows() {
         let (props, c, bytes, l, slot) = fake_cuda_terms();
         let need = |beside, seats| {
-            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+            crate::fit::serving_need(
+                &props,
+                &c,
+                tiny::CTX,
+                0.85,
+                beside,
+                false,
+                seats,
+                DType::F16,
+            )
         };
         let before = bytes + need(reserve_at(&l, slot, 4), 4) + crate::FREE_SWING;
         for (before, slots) in [(before, 4), (before - 1, 3)] {
@@ -9366,7 +9513,16 @@ mod tests {
     fn a_short_hybrid_load_gives_up_state_slots_before_a_layer() {
         let (props, c, _, l, slot) = fake_cuda_terms();
         let need = |beside, seats| {
-            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+            crate::fit::serving_need(
+                &props,
+                &c,
+                tiny::CTX,
+                0.85,
+                beside,
+                false,
+                seats,
+                DType::F16,
+            )
         };
         let room_for = |k: u32| {
             let g = graph_reserve(larch_kernels::Backend::Cuda, k, 0);

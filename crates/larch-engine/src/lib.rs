@@ -685,6 +685,12 @@ pub struct EngineOptions {
     pub device: i32,
     pub max_context: u32,
     pub kv_pool_fraction: f32,
+    /// The KV pool's pages: `DType::F16` (the default), or `DType::Q8_0`, 8 bits a value and an f16
+    /// scale a 32 (larch.h `larch_kv_pool`), 17 / 32 of the bytes, so the same pool holds about 1.9x
+    /// the tokens. A backend without Q8_0 pages (CUDA and HIP today), or a model whose head_dim is
+    /// not a multiple of 32, loads F16 (`engine::kv_dtype`). LARCH_KV_DTYPE (`f16` or `q8_0`)
+    /// initializes it.
+    pub kv_dtype: DType,
     /// A power of two.
     pub ring_capacity: usize,
     /// Startup knob values (`--set k=v`).
@@ -852,6 +858,10 @@ impl EngineOptions {
             device,
             max_context: 8192,
             kv_pool_fraction: 0.85,
+            kv_dtype: match std::env::var("LARCH_KV_DTYPE").as_deref() {
+                Ok("q8_0") => DType::Q8_0,
+                _ => DType::F16,
+            },
             ring_capacity: larch_records::DEFAULT_CAPACITY,
             knob_overrides: Vec::new(),
             telemetry: TelemetryTier::T1,
@@ -1419,8 +1429,11 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
     let forced_cache = std::env::var("LARCH_EXPERT_CACHE")
         .ok()
         .map(|v| expert_cache(&v));
+    let kv_want = opts.kv_dtype;
     let load = Box::new(move |dev: &Device, s: &Stream, rows| {
         let before = device_props(dev).map_err(|e| LoadError::Backend(e.code()))?;
+        // The pool's pages as `Loaded::load` picks them after this loader, so the plan prices them.
+        let kv = engine::kv_dtype(s, kv_want, &c).map_err(|e| LoadError::Backend(e.code()))?;
         // The effective max_context and fraction, as the fit after the load sees them.
         let (max_context, fraction) = *budget.lock().expect("load budget");
         // The most state slots a hybrid gets (`Loaded::load` sets it); the plan gives what fits.
@@ -1490,7 +1503,7 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
             let (reserve, bytes) = (reserve(slots) + swing, t.get().bytes);
             let (ctx, f) = (max_context, fraction);
             fit::host_expert_layers_with_pool(
-                &before, bytes, &host_plan, &c, ctx, f, reserve, slots, pool,
+                &before, bytes, &host_plan, &c, ctx, f, reserve, slots, pool, kv,
             )
         };
         // Whether `n` host layers at the floor's slots leave the pool its room, whether or not a
@@ -1503,7 +1516,7 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
             pool > 0
                 && n > 0
                 && fit::host_expert_layers_that_fit(
-                    &before, bytes, &host_plan, &c, ctx, f, with, floor,
+                    &before, bytes, &host_plan, &c, ctx, f, with, floor, kv,
                 )
                 .is_some_and(fits)
         };
@@ -1517,13 +1530,13 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                 true => {
                     let reserve = reserve(s) + swing + pool;
                     fit::host_expert_layers_that_fit(
-                        &before, bytes, &host_plan, &c, ctx, f, reserve, s,
+                        &before, bytes, &host_plan, &c, ctx, f, reserve, s, kv,
                     )
                     .unwrap_or(u32::MAX)
                 }
                 false => {
                     let reserve = reserve(s) + swing;
-                    fit::host_expert_layers(&before, bytes, &host_plan, &c, ctx, f, reserve, s)
+                    fit::host_expert_layers(&before, bytes, &host_plan, &c, ctx, f, reserve, s, kv)
                 }
             })
         };
@@ -1560,7 +1573,8 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
             let need = |slots: u32| {
                 let beside = kept_beside(&before, left, seats_of(slots), held, last, t.checks);
                 let (ctx, f) = (max_context, fraction);
-                let need = fit::serving_need(&before, &c, ctx, f, beside, mapped, slots) + stream;
+                let need =
+                    fit::serving_need(&before, &c, ctx, f, beside, mapped, slots, kv) + stream;
                 load_check_need(before.backend, hybrid_moe, tried, need)
             };
             loop {
@@ -1634,6 +1648,7 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                     mapped,
                     0,
                     0,
+                    kv,
                 );
                 fit::Chats {
                     host_layers: n,
@@ -1690,6 +1705,7 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                     reserve,
                     charge,
                     slots,
+                    kv,
                 );
                 let Some(resident) = resident else {
                     return Err((LoadError::DoesNotFit { need: 0, have: 0 }, 0));
@@ -2047,7 +2063,7 @@ impl DocTerms {
 /// load saw it: the header's terms at the documents plan's slots and no drafter (the plan's
 /// reload runs without one: its memory is not in the fit), from the same helpers the loader's plan
 /// uses. `rows`, `graphs` and `held` are the engine's own; `max_seats` is the load's
-/// `max_batch_seqs`. Where host experts prefill on the CPU (no streaming pool: unified memory,
+/// `max_batch_seqs`; `kv` the loaded pool's page dtype. Where host experts prefill on the CPU (no streaming pool: unified memory,
 /// HIP, an MoE that is not hybrid), the plan keeps no more host layers than `base_host_layers`,
 /// the load outside the plan's: each layer more reads the whole document's experts on the CPU (a
 /// 77-page paper took 40 minutes to read on an M5, 21 Nov), so a longer one is read by section.
@@ -2058,6 +2074,7 @@ fn document_plan(
     max_seats: u32,
     base_host_layers: u32,
     tokens: u32,
+    kv: DType,
 ) -> Result<DocFit, LoadError> {
     let DocTerms {
         header,
@@ -2115,7 +2132,7 @@ fn document_plan(
     // still lose its pool; cap the plan too if a CUDA documents reload logs that (`streams=0`).
     let most = (pool == 0).then_some(base_host_layers);
     Ok(fit::document_fit(
-        before, bytes, &host_plan, c, reserve, pool, max_seats, most, tokens,
+        before, bytes, &host_plan, c, reserve, pool, max_seats, most, tokens, kv,
     ))
 }
 
@@ -3056,6 +3073,7 @@ impl EngineHandle {
 
 #[cfg(test)]
 mod tests {
+    use larch_kernels::DType;
     use larch_model::gguf::{Gguf, TensorInfo};
 
     use super::{Histogram, Weights};
@@ -3199,7 +3217,18 @@ mod tests {
         let experts = vec![381_681_664; 40];
         super::plan_from(start).and_then(|h| {
             fit::expert_residency(
-                &before, weights, &experts, &h.counts, 128, &c, 1795, 0.85, reserve, 0, 1,
+                &before,
+                weights,
+                &experts,
+                &h.counts,
+                128,
+                &c,
+                1795,
+                0.85,
+                reserve,
+                0,
+                1,
+                DType::F16,
             )
         })
     }
@@ -3561,19 +3590,29 @@ mod tests {
             c.ctx_train,
         ) = (40, 10, 2, 256, 262_144);
         let (weights, ctx, e) = (16_209_005_056, 1795, 381_681_664);
-        let scratch = 653_144_244 - fit::serving_need(&before, &c, ctx, 0.85, 0, false, 4);
+        let scratch =
+            653_144_244 - fit::serving_need(&before, &c, ctx, 0.85, 0, false, 4, DType::F16);
         // The model's own allocations the plan counts beside the weights and the serving scratch.
         let own = 578_451_072 - scratch;
         let free = |n: u32| 696_832_000 + u64::from(n) * e - 5 * e;
         let load = |experts: &[u64], graphs: bool| {
             let seats = if graphs { 4 } else { 0 };
             let reserve = own + super::kept_beside(&before, scratch, seats, false, false, 0);
-            let planned =
-                fit::host_expert_layers(&before, weights, experts, &c, ctx, 0.85, reserve, 4);
+            let planned = fit::host_expert_layers(
+                &before,
+                weights,
+                experts,
+                &c,
+                ctx,
+                0.85,
+                reserve,
+                4,
+                DType::F16,
+            );
             let n = super::more_host_layers_on_refusal(planned, experts, true, |n| {
                 let last = n as usize == experts.len();
                 let beside = super::kept_beside(&before, scratch, seats, false, last, 0);
-                let need = fit::serving_need(&before, &c, ctx, 0.85, beside, n == 0, 4);
+                let need = fit::serving_need(&before, &c, ctx, 0.85, beside, n == 0, 4, DType::F16);
                 super::fits_after_load(n, true, before.vram_free, free(n), need)
             })
             .unwrap();
@@ -3590,6 +3629,7 @@ mod tests {
                 false,
                 0,
                 0,
+                DType::F16,
             );
             (planned, n, plan.unwrap())
         };
@@ -3627,20 +3667,30 @@ mod tests {
             c.ctx_train,
         ) = (40, 10, 2, 256, 262_144);
         let (weights, ctx, e, block) = (16_209_005_056u64, 1795, 381_681_664u64, 856u64 << 20);
-        let serving = 653_144_244 - fit::serving_need(&before, &c, ctx, 0.85, 0, false, 1);
+        let serving =
+            653_144_244 - fit::serving_need(&before, &c, ctx, 0.85, 0, false, 1, DType::F16);
         let own = 578_451_072 - serving;
         let scratch = serving + block;
         let experts = vec![e; 40];
         let reserve = own + super::kept_beside(&before, scratch, 0, false, false, 0);
-        let planned =
-            fit::host_expert_layers(&before, weights, &experts, &c, ctx, 0.85, reserve, 1);
+        let planned = fit::host_expert_layers(
+            &before,
+            weights,
+            &experts,
+            &c,
+            ctx,
+            0.85,
+            reserve,
+            1,
+            DType::F16,
+        );
         assert!(planned > 0 && planned < 40, "{planned}");
         // What the load leaves: the weights the plan keeps on the device, its own, and the block.
         let free = |n: u32| before.vram_free - (weights - u64::from(n) * e) - own - block;
         let n = super::more_host_layers_on_refusal(planned, &experts, true, |n| {
             let left = super::scratch_after_load(scratch, Some(block));
             let beside = super::kept_beside(&before, left, 0, false, false, 0);
-            let need = fit::serving_need(&before, &c, ctx, 0.85, beside, n == 0, 1);
+            let need = fit::serving_need(&before, &c, ctx, 0.85, beside, n == 0, 1, DType::F16);
             super::fits_after_load(n, true, before.vram_free, free(n), need)
         })
         .unwrap();
@@ -3658,6 +3708,7 @@ mod tests {
             false,
             0,
             0,
+            DType::F16,
         );
         assert!(plan.is_ok());
     }
@@ -3684,13 +3735,15 @@ mod tests {
         // The hybrid MoE target's blk.40: 897,955,840 B, 855,638,016 of them routed experts.
         let (weights, ctx, e) = (16_209_005_056u64, 1795, 381_681_664u64);
         let (block, bx) = (897_955_840u64, 855_638_016u64);
-        let serving = 653_144_244 - fit::serving_need(&before, &c, ctx, 0.85, 0, false, 1);
+        let serving =
+            653_144_244 - fit::serving_need(&before, &c, ctx, 0.85, 0, false, 1, DType::F16);
         let own = 578_451_072 - serving;
         let scratch = serving + block;
         let experts = vec![e; 40];
         let reserve = own + super::kept_beside(&before, scratch, 0, false, false, 0);
-        let plan =
-            |ex: &[u64]| fit::host_expert_layers(&before, weights, ex, &c, ctx, 0.85, reserve, 1);
+        let plan = |ex: &[u64]| {
+            fit::host_expert_layers(&before, weights, ex, &c, ctx, 0.85, reserve, 1, DType::F16)
+        };
         let ex = super::plan_experts(&experts, bx);
         let (device, host) = (plan(&experts), plan(&ex));
         assert_eq!(ex[1..], experts[1..]);
@@ -3702,7 +3755,7 @@ mod tests {
         let n = super::more_host_layers_on_refusal(host, &ex, true, |n| {
             let left = super::scratch_after_load(scratch, Some(block));
             let beside = super::kept_beside(&before, left, 0, false, false, 0);
-            let need = fit::serving_need(&before, &c, ctx, 0.85, beside, n == 0, 1);
+            let need = fit::serving_need(&before, &c, ctx, 0.85, beside, n == 0, 1, DType::F16);
             super::fits_after_load(n, true, before.vram_free, free(n), need)
         })
         .unwrap();

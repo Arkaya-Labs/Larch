@@ -1355,7 +1355,9 @@ impl<'a> Tensor<'a> {
 }
 
 /// The paged KV pool (architecture 9.4): `k` and `v` are two buffers, each holding
-/// `[n_layers][n_blocks * block_tokens][n_kv_heads][head_dim]` of f16 (`dtype` must be F16).
+/// `[n_layers][n_blocks * block_tokens][n_kv_heads][head_dim]` of `dtype`: F16, or Q8_0 pages (each
+/// slot's row whole 32-value blocks, so `head_dim` a multiple of 32), which only some backends have
+/// (larch.h `larch_kv_pool`; one without them answers `Unsupported`).
 #[derive(Clone, Copy)]
 pub struct KvPool<'a> {
     pub k: &'a Buffer,
@@ -1388,7 +1390,7 @@ impl KvPool<'_> {
     fn raw(&self, s: &Stream, layer: u32) -> Result<sys::larch_kv_pool, KError> {
         let need = self.bytes().ok_or(KError::InvalidArg)?;
         let ok = layer < self.n_layers
-            && self.dtype == DType::F16
+            && matches!(self.dtype, DType::F16 | DType::Q8_0)
             && !ptr::eq(self.k, self.v)
             && [self.k, self.v]
                 .iter()

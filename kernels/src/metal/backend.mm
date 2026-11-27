@@ -49,6 +49,11 @@ struct kernels {
   // The simdgroup-matrix kernels for GPUs without the tensor API; nil when LARCH_METAL_SIMD_KERNELS=0.
   id<MTLComputePipelineState> gemm_qs[LARCH_Q3_K + 1], mmvq_id_mm_sg[LARCH_Q3_K + 1];
   id<MTLComputePipelineState> attn_flash_sg[3];  // head_dim up to 64, 128 and 256
+  // The q8_0 pages' kernels (larch.h larch_kv_pool): kv_write and the attention readers, which take them in place.
+  // Flash prefill takes attn_flash_sg_q8 on every GPU, nil as attn_flash_sg is.
+  // ponytail: no tensor-API q8_0 flash kernel; stage dequantized blocks into attn_flash if q8_0 prefill on M5 shows
+  // attention in its profile against f16's.
+  id<MTLComputePipelineState> kv_write_q8, attn_q8, attn_split_q8, attn_flash_sg_q8[3];
   id<MTLComputePipelineState> gemm, gemv, gemm_tensor, gemm_tensor_deep, rmsnorm, qk_norm, rope, silu_mul, add, kv_write, attn, attn_split,
       attn_split_reduce, sp_copy, sp_penalty, sp_part, sp_merge, moe_route, moe_group, moe_gather, moe_reduce,
       sigmoid_mul, gdn_conv, gdn, gdn1, layernorm, gelu, rope_multi, draft_conv;
@@ -440,10 +445,13 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
     k.silu_mul = pipe("vv_silu_mul", 256);
     k.add = pipe("vv_add", 256);
     k.kv_write = pipe("vv_kv_write", 256);
+    k.kv_write_q8 = pipe("vv_kv_write_q8", 256);
     k.sp_copy = pipe("vv_sp_copy", 256);
     k.sp_penalty = pipe("vv_sp_penalty", 256);
     k.attn = pipe("vv_attn", 32);
     k.attn_split = pipe("vv_attn_split", 32);
+    k.attn_q8 = pipe("vv_attn_q8", 32);
+    k.attn_split_q8 = pipe("vv_attn_split_q8", 32);
     k.attn_split_reduce = pipe("vv_attn_split_reduce", 32);
     k.sp_part = pipe("vv_sp_part", SP_THREADS);
     k.sp_merge = pipe("vv_sp_merge", 32);  // sized from its pipeline, in whole simdgroups
@@ -481,10 +489,13 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
       k.gdn_chunk[wide] = opt("vv_gdn_chunk" + std::to_string(64 << wide), 32 * GDN_SG);
     for (int wide = 0; wide < 3 && tensor_capable && !tensor_off; ++wide)  // nil keeps vv_attn
       k.attn_flash[wide] = opt("vv_attn_flash" + std::to_string(64 << wide), ATTN_FLASH_SG * 32);
-    for (int wide = 0; wide < 3 && fed.simd_kernels; ++wide)  // nil keeps vv_attn
+    for (int wide = 0; wide < 3 && fed.simd_kernels; ++wide) {  // nil keeps vv_attn
       k.attn_flash_sg[wide] = opt("vv_attn_flash_sg" + std::to_string(64 << wide), ATTN_FLASH_SG * 32);
+      k.attn_flash_sg_q8[wide] = opt("vv_attn_flash_sg" + std::to_string(64 << wide) + "_q8", ATTN_FLASH_SG * 32);
+    }
     if (st) return st;
     if (k.attn.threadExecutionWidth != 32 || k.attn_split.threadExecutionWidth != 32 ||
+        k.attn_q8.threadExecutionWidth != 32 || k.attn_split_q8.threadExecutionWidth != 32 ||
         k.attn_split_reduce.threadExecutionWidth != 32)
       return vv_fail(LARCH_ERR_UNSUPPORTED, "Metal: attention SIMD width is not 32");
 
@@ -1549,9 +1560,10 @@ larch_status kv_write(larch_stream* vs, const larch_tensor* k, const larch_tenso
     const auto checked = cpu::check_kv_write(sizer(vs), k, v, slots_i32, pool);
     const view kv = checked.k, vv = checked.v, slots = checked.slots, pk = checked.pool_k, pv = checked.pool_v;
     need(!pk.b->readonly && !pv.b->readonly, "the pool is a read-only wrapped buffer");
-    each(static_cast<mtl_stream*>(vs), ks(vs).kv_write,
+    const bool q8 = pool->dtype == LARCH_Q8_0;  // the dispatch's kv_dtypes admit f16 and q8_0 only
+    each(static_cast<mtl_stream*>(vs), q8 ? ks(vs).kv_write_q8 : ks(vs).kv_write,
          {input(kv), input(vv), input(slots), at(pk), at(pv)}, ew_args{kv.rs, vv.rs, slots.rs, u32(kv.cols)},
-         kv.cols, kv.rows);
+         q8 ? kv.cols / 32 : kv.cols, kv.rows);
   });
 }
 
@@ -1587,18 +1599,21 @@ void attend(larch_stream* vs, const attn_view& a, const larch_kv_pool* pool, uin
   // ponytail: a batch of many 1-row sequences leaves 31 of 32 tile rows idle; send it to vv_attn if mixed
   // prefill batches show attention in the profile.
   // Without the tensor API, the simdgroup-matrix flash kernel takes the same calls.
+  // q8_0 pages take the simdgroup kernel, which stages each block and so needs no alignment past the pages' 2 bytes.
   const int wide = pool->head_dim <= 64 ? 0 : pool->head_dim <= 128 ? 1 : 2;
-  const id<MTLComputePipelineState> flash =
-      ks(vs).attn_flash[wide] ? ks(vs).attn_flash[wide] : ks(vs).attn_flash_sg[wide];
-  if (prefill && flash_ok && flash && pool->block_tokens == ATTN_FLASH_BLOCK && pool->head_dim % 8 == 0 && !(a.k.off % 16) &&
-      !(a.v.off % 16)) {
+  const bool q8 = pool->dtype == LARCH_Q8_0;
+  const id<MTLComputePipelineState> flash = q8                       ? ks(vs).attn_flash_sg_q8[wide]
+                                            : ks(vs).attn_flash[wide] ? ks(vs).attn_flash[wide]
+                                                                      : ks(vs).attn_flash_sg[wide];
+  if (prefill && flash_ok && flash && pool->block_tokens == ATTN_FLASH_BLOCK && pool->head_dim % 8 == 0 &&
+      (q8 || (!(a.k.off % 16) && !(a.v.off % 16)))) {
     // Each sequence's rows in tiles: at most one partial tile per sequence.
     const int64_t tile = wide == 2 && flash == ks(vs).attn_flash[wide] ? ATTN_FLASH_ROWS256 : ATTN_FLASH_ROWS;
     groups(stream, flash, bufs, args, (a.q.rows + tile - 1) / tile + a.table.rows, ATTN_FLASH_SG * 32,
            a.q.shape[1]);
     return;
   }
-  groups(stream, ks(vs).attn, bufs, args, head_groups(a, pool), 32, a.q.rows);
+  groups(stream, q8 ? ks(vs).attn_q8 : ks(vs).attn, bufs, args, head_groups(a, pool), 32, a.q.rows);
 }
 
 uint32_t automatic_attn_splits(const mtl_stream* stream, const attn_view& a, const larch_kv_pool* pool) {
@@ -1641,7 +1656,7 @@ void attend_split_k(larch_stream* vs, const attn_view& a, const larch_kv_pool* p
   const attn_args args{a.q.rs, a.out.rs, a.table.rs, a.lens.rs, a.start.rs, u32(a.q.shape[1]), pool->n_kv_heads,
                        pool->head_dim, pool->block_tokens, u32(a.table.rows), span, split_count, partial_stride, scale,
                        u32(a.q.rows)};
-  groups(mutable_stream, ks(vs).attn_split,
+  groups(mutable_stream, pool->dtype == LARCH_Q8_0 ? ks(vs).attn_split_q8 : ks(vs).attn_split,
          {query, key, value, table, lengths, starts, {mutable_stream->attn_scratch, 0}}, args,
          cpu::mul(head_groups(a, pool), int64_t(split_count)), 32, a.q.rows);
   groups(mutable_stream, ks(vs).attn_split_reduce, {input(arg{mutable_stream->attn_scratch, 0}), output}, args, a.q.shape[1], 32,
@@ -1798,6 +1813,9 @@ static const vv_ops table = {
     .attn_prefill = attn_prefill,
     .qk_norm = qk_norm,
     .sample_prep = sample_prep,
+    // ponytail: no fp8_e4m3 pages. q8_0 is 6 % larger, with an f16 scale per 32 values where fp8 keeps 3 mantissa
+    // bits; add fp8's kv_pages if a workload wants its byte.
+    .kv_dtypes = 1u << LARCH_F16 | 1u << LARCH_Q8_0,
     // ponytail: no Q2_K kernels; add them to the per-dtype kernels when a mixed-expert file must run on Metal.
     .no_weights = 1u << LARCH_Q2_K,
     .mmvq_verify = mmvq_verify,
