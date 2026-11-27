@@ -1107,7 +1107,7 @@ Reliability matrix → mechanism:
   - `llama-bench` for single-stream pp/tg;
   - `llama-batched-bench` for the aggregate at N;
   - `tools/llama-serve-bench` (D13) for TTFT and TPOT at N concurrent, the serve-mode aggregate, and the Mac's single-user TTFT. Neither tool above measures TTFT or TPOT. `llama-parallel` prints only each request's total time and picks prompts at random in its own format, so it can't replay `chat.jsonl` (checked 5 Oct).
-    - **Build:** C++ on llama.cpp's C API and its `common` library, against the same pinned llama.cpp tag as `tools/llama-logits`. CUDA on Windows and WSL; Metal on the Mac.
+    - **Build:** C++ on llama.cpp's C API and its `common` library, against a released llama.cpp tag: the latest release for a baseline, while `tools/llama-logits` and the oracle dumps keep their own pin. CUDA on Windows and WSL; Metal on the Mac.
     - **Inputs:** the GGUF; `chat.jsonl`; `--concurrency N`; the best flags from `llama-flags.csv` (`-fa`, `-ub`, `-b`, `-ngl 99`, `-ctk/-ctv`, threads); a context of N × (the longest prompt + its output).
     - **Loop:** llama-server's `update_slots` policy without the HTTP layer. Each iteration first adds one token per decoding client to the `llama_batch`, then prompt tokens of admitted clients up to `-b`; a prompt that doesn't fit continues next iteration. Then one `llama_decode`. This is the stronger of llama.cpp's two loops (`llama-parallel` adds whole prompts at once), so nobody can say we picked the weak one.
     - **Workload, identical to `larch bench --mode serve`:**

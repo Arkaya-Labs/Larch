@@ -23,6 +23,12 @@ if(FETCHCONTENT_SOURCE_DIR_LLAMA)
     execute_process(COMMAND git -C "${FETCHCONTENT_SOURCE_DIR_LLAMA}" rev-parse --absolute-git-dir
                     OUTPUT_VARIABLE LLAMA_GIT_DIR OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LLAMA_GIT_DIR}/HEAD")
+    # On a branch, a commit moves the branch but not HEAD, so nothing would reconfigure and the tag would go stale.
+    execute_process(COMMAND git -C "${FETCHCONTENT_SOURCE_DIR_LLAMA}" symbolic-ref -q HEAD
+                    RESULT_VARIABLE LLAMA_ON_BRANCH OUTPUT_QUIET ERROR_QUIET)
+    if(LLAMA_ON_BRANCH EQUAL 0)
+        message(FATAL_ERROR "${FETCHCONTENT_SOURCE_DIR_LLAMA} is on a branch: check out the tag itself (detached)")
+    endif()
 endif()
 
 add_executable(llama-serve-bench main.cpp)
