@@ -115,6 +115,50 @@ The lowest 4-row step whose 1-row step is at most 6.2 ms is cap 15: **10.11 ms, 
 row and +36 % at four, if nothing else moves. Constants in `fit.rs`: `SPLIT_LAYER_US` [11.3, 18.1, 23.1],
 `COLD_PAIR_US` [359.9, 369.4, 307.1].
 
+## K: the code, test first
+
+- **K1** (`eff11a0`). CUDA's `mmvq_id_mixed` takes cold experts at the hot experts' dtype as well as Q2_K (the approved
+  `larch.h` comment; the call was already valid and only refused). ctest `ops`, new case `mixed wrapped`: the cold
+  experts (Q3_K and Q4_K, a third of 16) in a wrapped range of page-locked host memory, `mmvq_id_mixed` against
+  `mmvq_id` over one device tensor holding every expert, bit for bit, at 1, 4 and 40 rows, weighted and not. **Red**
+  first (the 12 cases refused: "cold experts other than Q2_K"), then **green**: `ops` 1,347 cases, `wrap_host` passes.
+  The grouped path from 33 rows (40 rows here) matches; it does not refuse.
+- **K3** (`6ac556c`, constants `6f908df`). `expert_residency` splits at most N layers by Lane E's rule and picks N by the
+  decode cost above; a histogram whose coldest experts hold as many routes a byte as whole layers keeps whole layers.
+  Tests on `bench/routes/m13.experts`: a cap of 8 splits exactly 8 layers within the budget with 0.124 % of routed pairs
+  on the host; an even histogram keeps whole layers; the cost picks a cap between 6 and 20 for the test's figures (60 µs
+  a split layer, 150 µs a cold pair); a thin tail (3 experts' bytes past the room) splits one layer and keeps the other
+  39 whole. 38 fit and plan tests pass. **Red, seen after the fact** (builds were barred during L, so the test first ran
+  after its code): in a throwaway worktree, the test against `6ac556c^`'s planner does not compile (no `capped_split`,
+  `cheapest_split`, `resident_budget`, `cold_pairs`); its cap assertion through the old planner's own API fails with
+  "37 layers split". The branch's tree was not touched.
+- **K2** (`1b29835`). A static split's host experts are page-locked on CUDA; the load wraps them as one device view
+  (`Buffer::view_host`) with each layer's expert table. A split layer's decode and check rows, and the decode rows that
+  lead a prompt chunk, run `mmvq_id_mixed` over its device slots and that view inside the step's graph; prompt rows keep
+  `split_ffn` (now from a row offset), eagerly. Test `split_layers_decode_their_cold_experts_in_place` (`tiny.rs`, CUDA;
+  layer 0 keeps 2 of 4 experts, layer 1 one, so every row routes a cold expert in layer 1): decode equals the resident
+  load bit for bit at 1 and 4 rows; a check step's 3 rows equal their one-row decodes; a decode row beside a 7-row prompt
+  chunk equals the row alone, and only the chunk's rows count host pairs (28, a cold one a row at least); 1- and 4-row
+  decode steps capture in one graph piece and replay as they ran. **Red** first (1 row: `split_ffn`'s bits differ),
+  then **green**; all of larch-model's tests pass on the 5070 Ti (CUDA backend).
+
+## SMOKE (GO's check on the real model)
+
+B = `larch 0.0.0 (1b29835)`, sha256 `b202456c…`, clean tree. One run, W4@4 `--slice 1/10`, histogram in,
+`LARCH_EXPERT_CACHE=1`, `LARCH_PROFILE_STEPS=1 LARCH_GRAPH_DIAGNOSTICS=1` (`smoke-B-w4-4*`):
+
+- **Plan.** The cost first picked 15 layers (9,502 of 10,240 experts on the card); the check after the load found the
+  card short (279 against 452 MB) and the loader planned once more with the larger charge it already applies: **20
+  layers**, 9,320 experts on the card, `larch_split_decode,mapped=1,layers=20`, 4 state slots. G's 15 assumed the first
+  charge; every B run below loads the same 20.
+- **Graphs.** Every decode bucket captured in **one piece** (1, 2 and 4 rows; 3 rows replay the 4-row bucket), none
+  refused; all 1,975 decode steps replayed, none eager.
+- **Steps.** Replayed **4-row step 10.94 ms** (A: 13.8; the gate 12.0), **1-row 5.72 ms** (A: 6.81), 2-row 7.56. Prompt
+  chunks beside decode rows run eager: about 180 ms for 3 decode rows and a 512-row chunk (Lane E's 8-layer split: 127;
+  A's pooled stream: about 150). Prompt rows' host pairs: 1,895,441 on the card, 1,039 on the host.
+- **Result.** 275.9 tok/s, TTFT p50 171 ms and p99 708, TPOT p50 12.60 and p99 16.07 (A on this slice last night: 236.7
+  to 239.4 tok/s). Measured against A in M.
+
 ## Method
 
 - **Machine and order.** One session. Every GPU job (runs, ctest, benches, GPU tests, parity) is its own process in one
@@ -137,3 +181,4 @@ row and +36 % at four, if nothing else moves. Constants in `fit.rs`: `SPLIT_LAYE
 | Build | sha256 | Commit | What it is |
 |---|---|---|---|
 | `larch 0.0.0 (ef28629)` | `c1ad854a…` | `ef28629` (#20's branch head, before its review fix) | A: rebuilt today, as the night's `b3a53bf3…` binary was gone; the same commit, not the same bytes |
+| `larch 0.0.0 (1b29835)` | `b202456c…` | `1b29835`, this branch, clean tree | B: SMOKE |
