@@ -647,6 +647,58 @@ fn wrap_host_checks_before_ffi() {
     assert_eq!((detail.as_str(), cpu), ("", Some(KError::Unsupported)));
 }
 
+/// view_host's own checks run before the backend: an empty range, one past the buffer, a buffer that
+/// is not a host buffer and another device's host buffer are refused; a valid range reaches it, and the
+/// CPU reference answers Unsupported.
+#[test]
+fn view_host_checks_before_ffi() {
+    let (refused, detail, cpu) = std::thread::spawn(|| {
+        let dev = Device::open(CPU).unwrap();
+        let host = Buffer::alloc_host(&dev, 64).unwrap();
+        let plain = Buffer::alloc(&dev, 64).unwrap();
+        let other = Device::open(CPU).unwrap();
+        let theirs = Buffer::alloc_host(&other, 64).unwrap();
+        let refused = [
+            Buffer::view_host(&dev, &host, 8..8).err(),
+            Buffer::view_host(&dev, &host, 8..65).err(),
+            Buffer::view_host(&dev, &plain, 0..64).err(),
+            Buffer::view_host(&dev, &theirs, 0..64).err(),
+        ];
+        let detail = larch_kernels::last_error();
+        (refused, detail, Buffer::view_host(&dev, &host, 8..64).err())
+    })
+    .join()
+    .unwrap();
+    assert_eq!(refused, [Some(KError::InvalidArg); 4]);
+    assert_eq!((detail.as_str(), cpu), ("", Some(KError::Unsupported)));
+}
+
+/// On CUDA (GPU 0): a view of a page-locked host buffer reads back its bytes in place, keeps the host
+/// buffer alive past its own handle, and refuses uploads. Skips without a CUDA GPU.
+#[test]
+fn a_host_view_on_cuda_reads_the_host_bytes() {
+    let dev = match Device::open(0) {
+        Ok(d) if d.props().unwrap().backend == larch_kernels::Backend::Cuda => d,
+        _ => return,
+    };
+    let s = Stream::new(&dev).unwrap();
+    let host = Buffer::alloc_host(&dev, 4096).unwrap();
+    let cpu = Device::open(CPU).unwrap();
+    let cs = Stream::new(&cpu).unwrap();
+    let src: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+    cs.upload(&host, 0, &src).unwrap();
+    let view = Buffer::view_host(&dev, &host, 1024..4096).unwrap();
+    drop(host);
+    let mut got = vec![0u8; 3072];
+    s.download(&view, 0, &mut got).unwrap();
+    s.sync().unwrap();
+    assert_eq!(got, src[1024..]);
+    assert_eq!(
+        s.upload(&view, 0, &[0u8; 4]).err(),
+        Some(KError::InvalidArg)
+    );
+}
+
 /// On Metal (GPU 0): a wrapped range reads back as the file after the caller's map handle is gone, and
 /// is never written. Skips without a Metal GPU.
 #[cfg(unix)]

@@ -26,11 +26,12 @@ struct device : larch_device {
   int ordinal;
   larch_device_props props;
 };
-/// Device memory of one device.
+/// Device memory of one device, or (wrapped) a page-locked host range it reads in place.
 struct buffer : larch_buffer {
   int ordinal;
   uint8_t* ptr;
   uint64_t bytes;
+  bool wrapped = false;  // buffer_wrap_host's: the host buffer owns the memory, so free never cudaFrees it
 };
 /// A cudaStream_t with its own cuBLAS handle and workspace, and the upload staging (backend.cu).
 struct stream : larch_stream {

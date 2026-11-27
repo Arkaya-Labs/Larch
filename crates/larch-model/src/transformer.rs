@@ -988,6 +988,10 @@ pub struct Transformer {
     /// experts: `moe_ffn` adds them to the routed output; empty for the base model.
     adapters: Vec<Option<Adapters>>,
     host: Option<HostExperts>,
+    /// The host experts' page-locked weights as a device buffer the GPU reads in place over the bus
+    /// ([`Buffer::view_host`]): decode rows run their routed experts there, inside the step's graph.
+    /// `None` where the backend wraps no host memory or the weights are not page-locked.
+    host_view: Option<Buffer>,
     stream_plan: Option<StreamPlan>,
     stream: Option<RefCell<StreamPool>>,
     stream_rows: u32,
@@ -2424,6 +2428,22 @@ impl Transformer {
             .as_ref()
             .map(|h| qwen35::Scratch::alloc(h, &cfg, r, s, &alloc))
             .transpose()?;
+        // Decode rows read the page-locked host experts in place on the device (CUDA: 53 GB/s on the
+        // 5070 Ti, PCIe 5.0, against 29 to 35 GB/s for the CPU's own reads of them, 27 Nov), so a
+        // decode step's host layers neither leave its graph nor wait on the CPU. Made after
+        // share_host, whose copy source must hold the buffer's only handle; refused, decode rows stay
+        // on the CPU path.
+        let host_view = host_experts.as_ref().and_then(|h| {
+            let v = Buffer::view_host(dev, &h.weights, 0..h.weights.bytes()).ok()?;
+            if std::env::var("LARCH_FIT_DIAGNOSTICS").is_ok_and(|v| v == "1") {
+                let mtp = if nextn { "+mtp" } else { "" };
+                eprintln!(
+                    "larch_host_experts_mapped,layers=0..{host_layers}{mtp},bytes={}",
+                    v.bytes()
+                );
+            }
+            Some(v)
+        });
         let t = Transformer {
             cfg,
             weights,
@@ -2438,6 +2458,7 @@ impl Transformer {
             router_deltas: Vec::new(),
             adapters: Vec::new(),
             host: host_experts,
+            host_view,
             stream_plan,
             stream: None,
             stream_rows: place.stream_rows,
@@ -2899,6 +2920,26 @@ impl Transformer {
                 }
                 live = nd;
             }
+        }
+        // The decode rows (all of a decode step's, or those a streamed pass left) read the experts in
+        // place on the device: captured with the step, through the same kernels and bytes as the
+        // pool's. Check steps, adapters, router deltas, a recording or split load, a mixed layer (its
+        // expert table is the CPU's) and the MTP block keep the CPU path.
+        let mapped = (self.host_view.as_ref()).filter(|_| {
+            live == self.stream_decode
+                && layer < self.layers.len()
+                && cold.is_none()
+                && !self.check.get()
+                && ad.is_none()
+                && delta.is_none()
+                && self.cache.is_none()
+        });
+        if let Some(view) = mapped {
+            let sc = [&self.sc.gate, &self.sc.up, &self.sc.act];
+            let experts = Experts::of(experts, None, None, |w| w.t(view))?;
+            let (h, i) = (h.rows(0, live)?, ids.rows(0, live)?);
+            let (w, o) = (weights.rows(0, live)?, out.rows(0, live)?);
+            return routed(s, 0, experts, sc, m, &h, &i, &w, &o);
         }
         // Dynamic residency's uploads map in the next pass, which a replay never makes.
         if s.capturing()
