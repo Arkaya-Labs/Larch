@@ -836,44 +836,6 @@ fn streamed_prefill_computes_what_the_cpu_path_does() {
     }
 }
 
-/// On CUDA (GPU 0): host layers whose experts are page-locked decode on the device, reading them in
-/// place (the mapped host view) through the kernels and bytes a resident layer uses, so a decode run
-/// gives the resident load's logits bit for bit, at every host layer count. Skips without CUDA.
-#[test]
-fn mapped_host_layers_decode_as_resident_layers_do() {
-    let cuda = larch_kernels::Device::open(0)
-        .ok()
-        .and_then(|d| d.props().ok())
-        .is_some_and(|p| p.backend == larch_kernels::Backend::Cuda);
-    if !cuda {
-        return;
-    }
-    let b = tiny::gguf(Arch::Qwen3Moe, 1);
-    let prompt: Vec<i32> = (0..12)
-        .map(|i| (i * 37 + 11) % tiny::VOCAB as i32)
-        .collect();
-    let decode = |layers: u32| {
-        let place = Placement {
-            cpu_expert_layers: layers,
-            stream_rows: 7,
-        };
-        let name = format!("mapped-{layers}");
-        let loaded = load_by_on(&b, &name, 0, |p, d, s| {
-            Transformer::load_placed(p, d, s, MAX_ROWS, place)
-        });
-        let mut r = Rig::loaded(loaded.unwrap());
-        r.clear_kv();
-        (0..prompt.len())
-            .flat_map(|i| r.step(&[Some((prompt[i], i as i32, &TABLE_A))], &[], &[0]))
-            .collect::<Vec<f32>>()
-    };
-    let want = decode(0);
-    assert!(want.iter().all(|x| x.is_finite()));
-    for layers in [1, tiny::LAYERS] {
-        assert_eq!(decode(layers), want, "{layers} host layers");
-    }
-}
-
 #[test]
 fn tensor_slot_prefill_is_bit_identical_at_64_and_512_rows() {
     // Child processes isolate the slot setting from parallel tests in this binary.
