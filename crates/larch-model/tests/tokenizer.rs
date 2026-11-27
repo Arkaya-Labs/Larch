@@ -909,8 +909,7 @@ fn tojson_writes_like_llama() {
 
 /// `tojson` of what the tool data does not hold: an integer above 2^53, a float, none, empty
 /// containers with `indent`, an iterable, keys out of order, and floats in C++'s 6 significant
-/// digits, infinities and NaN. The expected text is tokdump's render at b11458, where
-/// `sort_keys=true` fails too. `separators` is not taken here, so it fails instead of being ignored.
+/// digits, infinities and NaN. The expected text is tokdump's render at b11458.
 #[test]
 fn tojson_writes_values_like_llama() {
     let (_, tok) = tokenizer(&bpe_vocab("qwen2"));
@@ -940,8 +939,6 @@ fn tojson_writes_values_like_llama() {
         .unwrap(),
         "inf|-inf|nan"
     );
-    assert!(render("{{ [] | tojson(sort_keys=true) }}").is_err());
-    assert!(render("{{ [] | tojson(separators=[',', ':']) }}").is_err());
 }
 
 /// `tojson`'s arguments as llama.cpp's Jinja takes them: `ensure_ascii` then `indent` by position
@@ -1063,4 +1060,83 @@ fn gguf_template_reads_thinking() {
         std::fs::read_to_string(&dump).expect(&dump)
     };
     check_thinking(&t, &read("chat"), &read("tools"));
+}
+
+/// Inkling 2's template (`data/inkling2.jinja`, the release's, which Unsloth's Mainline_Support GGUFs
+/// hold byte for byte) renders: transformers' `{% generation %}` tags, which llama.cpp ignores,
+/// `tojson(sort_keys=true, separators=(",", ":"))` for the tool declaration and `dictsort` for the
+/// call's arguments. The expected text is Python Jinja2's render with the tags dropped and
+/// `tojson` as `json.dumps`.
+#[test]
+fn inkling2_template_renders_tools_and_calls() {
+    let (_, tok) = tokenizer(&bpe_vocab("qwen2"));
+    let t = ChatTemplate::new(&data("inkling2.jinja"), &tok).unwrap();
+    let call = ToolCall {
+        name: "get_weather".into(),
+        arguments: serde_json::json!({"unit": "c", "city": "Paris"}),
+        id: "call_1".into(),
+    };
+    let msgs = [
+        ("system", "Be brief.", vec![], ""),
+        ("user", "Weather in Paris?", vec![], ""),
+        ("assistant", "", vec![call], ""),
+        ("tool", "{\"temp\": 21}", vec![], "call_1"),
+    ]
+    .map(|(role, content, tool_calls, id)| ToolMessage {
+        role: role.into(),
+        content: content.into(),
+        tool_calls,
+        tool_call_id: id.into(),
+    });
+    let tools = [
+        serde_json::json!({"type": "function", "function": {"name": "get_weather",
+        "description": "Weather now", "parameters": {"type": "object", "properties":
+        {"city": {"type": "string"}, "unit": {"type": "string"}}, "required": ["city"]}}}),
+    ];
+    assert_eq!(
+        t.render_tools(&msgs, &tools, true).unwrap(),
+        "<|message_system|>tool_declare<|content_xml|>[{\"description\":\"Weather now\",\"name\":\"get_weather\",\
+         \"parameters\":{\"properties\":{\"city\":{\"type\":\"string\"},\"unit\":{\"type\":\"string\"}},\
+         \"required\":[\"city\"],\"type\":\"object\"},\"type\":\"function\"}]<|end_message|>\
+         <|message_system|><|content_text|>Be brief.<|end_message|>\
+         <|message_system|><|content_text|>Thinking effort level: 0.9<|end_message|>\
+         <|message_user|><|content_text|>Weather in Paris?<|end_message|>\
+         <|message_model|>get_weather<|content_invoke_tool_json|>{\"name\":\"get_weather\",\"args\":\
+         {\"city\":\"Paris\",\"unit\":\"c\"}}<|end_message|><|content_model_end_sampling|>\
+         <|message_tool|>get_weather<|content_text|>{\"temp\": 21}<|end_message|>"
+    );
+}
+
+/// `tojson`'s `separators` and `sort_keys`, by keyword and by position (after `ensure_ascii` and
+/// `indent`), as llama.cpp's Jinja takes them: keys in byte order, nested objects too.
+#[test]
+fn tojson_sorts_keys_and_takes_separators() {
+    let (_, tok) = tokenizer(&bpe_vocab("qwen2"));
+    let render = |src: &str| {
+        ChatTemplate::new(src, &tok)
+            .unwrap()
+            .render(&[], false)
+            .unwrap()
+    };
+    let v = "{\"b\": [1, {\"z\": 1, \"a\": 2}], \"a\": 0, \"B\": 3}";
+    assert_eq!(
+        render(&format!(
+            "{{{{ {v} | tojson(sort_keys=true, separators=(\",\", \":\")) }}}}"
+        )),
+        "{\"B\":3,\"a\":0,\"b\":[1,{\"a\":2,\"z\":1}]}"
+    );
+    assert_eq!(
+        render(&format!(
+            "{{{{ {v} | tojson(false, none, [\";\", \"=\"], true) }}}}"
+        )),
+        "{\"B\"=3;\"a\"=0;\"b\"=[1;{\"a\"=2;\"z\"=1}]}"
+    );
+    assert_eq!(
+        render(&format!("{{{{ {v} | tojson(sort_keys=false) }}}}")),
+        "{\"b\": [1, {\"z\": 1, \"a\": 2}], \"a\": 0, \"B\": 3}"
+    );
+    assert_eq!(
+        render("{%- generation -%} x {%- endgeneration %}|{% generation %}y{% endgeneration -%} z"),
+        "x|yz"
+    );
 }

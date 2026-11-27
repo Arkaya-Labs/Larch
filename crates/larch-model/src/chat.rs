@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use larch_records::LoadError;
-use minijinja::value::{Kwargs, Value as Jinja, ValueKind};
+use minijinja::value::{Kwargs, Rest, Value as Jinja, ValueKind};
 use minijinja::{Environment, Error, ErrorKind, context};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -134,7 +134,7 @@ impl ChatTemplate {
             Err(Error::new(ErrorKind::InvalidOperation, msg))
         });
         env.add_filter("tojson", tojson);
-        env.add_template_owned("chat", src.to_owned())
+        env.add_template_owned("chat", without_generation_tags(src).into_owned())
             .map_err(|_| LoadError::Template(code::SYNTAX))?;
         let text = |id: Option<u32>| {
             id.map(|i| String::from_utf8_lossy(tok.decode_piece(i)).into_owned())
@@ -316,19 +316,61 @@ impl ChatTemplate {
     }
 }
 
-/// llama.cpp's Jinja `tojson`: Python's separators (`, ` and `: `; `,` and newlines with `indent`),
-/// keys in the value's order, floats as C++ writes them, strings escaped as JSON and nothing more
-/// (no HTML escaping, UTF-8 kept unless `ensure_ascii`). Its arguments as llama.cpp takes them:
-/// `ensure_ascii` then `indent`, by keyword or position; an indent that is negative or not an
-/// integer is none; `sort_keys=true` fails, as there.
-// ponytail: `separators`, which the Qwen, Llama 3.x and Mistral templates do not pass, fails the
-// render. Upgrade: with the template comparison of a family that passes it.
-fn tojson(
-    value: &Jinja,
-    ensure_ascii: Option<Jinja>,
-    indent: Option<Jinja>,
-    kwargs: Kwargs,
-) -> Result<String, Error> {
+/// `src` with transformers' `{% generation %}` and `{% endgeneration %}` tags (which mark the
+/// assistant's tokens for training masks) as `{% if true %}` and `{% endif %}`, so the text between
+/// renders as llama.cpp renders it: it ignores both tags. The whitespace markers are kept, so trim
+/// works as written. Inkling 2's template wraps each assistant message in them.
+fn without_generation_tags(src: &str) -> Cow<'_, str> {
+    if !src.contains("generation") {
+        return Cow::Borrowed(src);
+    }
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(at) = rest.find("{%") {
+        out.push_str(&rest[..at]);
+        let tag = &rest[at..];
+        let Some(end) = tag.find("%}") else {
+            break;
+        };
+        let inner = &tag[2..end];
+        let (open, body) = match inner.strip_prefix(['-', '+']) {
+            Some(b) => (&inner[..1], b),
+            None => ("", inner),
+        };
+        let (body, close) = match body.strip_suffix(['-', '+']) {
+            Some(b) => (b, &body[b.len()..]),
+            None => (body, ""),
+        };
+        let word = match body.trim() {
+            "generation" => Some("if true"),
+            "endgeneration" => Some("endif"),
+            _ => None,
+        };
+        match word {
+            Some(w) => out.push_str(&format!("{{%{open} {w} {close}%}}")),
+            None => out.push_str(&tag[..end + 2]),
+        }
+        rest = &tag[end + 2..];
+    }
+    out.push_str(rest);
+    Cow::Owned(out)
+}
+
+/// llama.cpp's Jinja `tojson`: Python's separators (`, ` and `: `; `,` and newlines with `indent`)
+/// unless `separators` names them, keys in the value's order (byte order with `sort_keys`), floats
+/// as C++ writes them, strings escaped as JSON and nothing more (no HTML escaping, UTF-8 kept unless
+/// `ensure_ascii`). Its arguments as llama.cpp takes them: `ensure_ascii`, `indent`, `separators`
+/// then `sort_keys`, by keyword or position; an indent that is negative or not an integer is none,
+/// and `separators` that is not a list is the default. Inkling 2's template passes both.
+fn tojson(value: &Jinja, args: Rest<Jinja>, kwargs: Kwargs) -> Result<String, Error> {
+    if args.len() > 4 {
+        return Err(Error::new(
+            ErrorKind::TooManyArguments,
+            "tojson takes at most 4 arguments",
+        ));
+    }
+    let pos = |i: usize| args.get(i).cloned();
+    let (ensure_ascii, indent, separators, sort_keys) = (pos(0), pos(1), pos(2), pos(3));
     let ascii = kwargs
         .get::<Option<Jinja>>("ensure_ascii")?
         .or(ensure_ascii)
@@ -341,28 +383,44 @@ fn tojson(
         // llama.cpp casts to `int`, so a huge indent wraps there instead of exhausting memory.
         .map(|n| n as i32)
         .and_then(|n| usize::try_from(n).ok());
-    if kwargs
+    let sort = kwargs
         .get::<Option<Jinja>>("sort_keys")?
-        .is_some_and(|v| v.is_true())
-    {
-        return Err(Error::new(
-            ErrorKind::InvalidOperation,
-            "tojson sort_keys=true is not implemented, as in llama.cpp",
-        ));
-    }
+        .or(sort_keys)
+        .is_some_and(|v| v.is_true());
+    // llama.cpp reads the first two items of a list as strings; anything else keeps the default.
+    let given: Vec<String> = match kwargs.get::<Option<Jinja>>("separators")?.or(separators) {
+        Some(v) if v.kind() == ValueKind::Seq => v.try_iter()?.map(|s| s.to_string()).collect(),
+        _ => Vec::new(),
+    };
     kwargs.assert_all_used()?;
+    let item = given.first().cloned().unwrap_or_else(|| match indent {
+        Some(_) => ",".into(),
+        None => ", ".into(),
+    });
+    let key = given.get(1).cloned().unwrap_or_else(|| ": ".into());
+    let f = Format {
+        indent,
+        ascii,
+        sort,
+        item: &item,
+        key: &key,
+    };
     let mut out = String::new();
-    write_json(&mut out, value, indent, ascii, 0)?;
+    write_json(&mut out, value, &f, 0)?;
     Ok(out)
 }
 
-fn write_json(
-    out: &mut String,
-    v: &Jinja,
+/// How [`tojson`] writes: its arguments, resolved.
+struct Format<'a> {
     indent: Option<usize>,
     ascii: bool,
-    depth: usize,
-) -> Result<(), Error> {
+    sort: bool,
+    item: &'a str,
+    key: &'a str,
+}
+
+fn write_json(out: &mut String, v: &Jinja, f: &Format, depth: usize) -> Result<(), Error> {
+    let (indent, ascii) = (f.indent, f.ascii);
     let map = match v.kind() {
         ValueKind::Seq | ValueKind::Iterable => false,
         ValueKind::Map => true,
@@ -400,19 +458,24 @@ fn write_json(
         }
     };
     out.push(if map { '{' } else { '[' });
+    let mut items: Vec<Jinja> = v.try_iter()?.collect();
+    if map && f.sort {
+        // Python's json.dumps(sort_keys=True), as llama.cpp sorts: UTF-8 byte order of the keys.
+        items.sort_by_cached_key(|k| k.to_string());
+    }
     let mut empty = true;
-    for item in v.try_iter()? {
+    for item in items {
         if !empty {
-            out.push_str(if indent.is_some() { "," } else { ", " });
+            out.push_str(f.item);
         }
         empty = false;
         newline(out, depth + 1);
         if map {
             write_str(out, &item.to_string(), ascii);
-            out.push_str(": ");
-            write_json(out, &v.get_item(&item)?, indent, ascii, depth + 1)?;
+            out.push_str(f.key);
+            write_json(out, &v.get_item(&item)?, f, depth + 1)?;
         } else {
-            write_json(out, &item, indent, ascii, depth + 1)?;
+            write_json(out, &item, f, depth + 1)?;
         }
     }
     if !empty {
