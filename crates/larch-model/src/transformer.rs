@@ -3521,8 +3521,7 @@ impl Transformer {
             rows.flat_map(|r| &hv[r * row..][..row]).copied().collect()
         };
         if !on.is_empty() {
-            // Rows past `from` are gathered too: the device part reads h from its start.
-            let (nd, all) = (on.len() as i64, on.len() == live as usize && from == 0);
+            let (nd, all) = (on.len() as i64, on.len() == live as usize);
             if !all {
                 let hg = gather(&mut on.iter().copied());
                 s.upload(h.buffer(), h.offset(), &hg)?;
@@ -3533,7 +3532,9 @@ impl Transformer {
             let dev = c.dev.as_ref().ok_or(KError::InvalidArg)?;
             let [g, u, dn] = sp.dev.map(|w| w.t(dev));
             let sc = [&self.sc.gate, &self.sc.up, &self.sc.act];
-            let (hd, od) = (h.rows(0, nd)?, out.rows(0, nd)?);
+            // Every row has a resident expert: they run where forward left them, past `from`.
+            let hd = h.rows(if all { from } else { 0 }, nd)?;
+            let od = out.rows(0, nd)?;
             let id_rows = if check { self.id_rows } else { 0 };
             let experts = [Experts::One(g?), Experts::One(u?), Experts::One(dn?)];
             routed(s, id_rows, experts, sc, m, &hd, &ids, &weights, &od)?;

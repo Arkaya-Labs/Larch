@@ -923,20 +923,28 @@ fn split_layers_decode_their_cold_experts_in_place() {
     let checked = sp.step(&[], &[(&prompt[4..7], 4, &TABLE_A)], &[0, 1, 2]);
     sp.check = false;
     assert_eq!(checked, want[4 * V..7 * V], "a check step's rows");
-    // A decode row beside a prompt chunk: the row's logits alone; the chunk's 7 rows count their
-    // 28 pairs in the 2 split layers, a cold one in layer 1 for each row at least.
-    sp.clear_kv();
-    for (i, &t) in prompt[..5].iter().enumerate() {
-        sp.step(&[Some((t, i as i32, &TABLE_A))], &[], &[0]);
-    }
-    let alone = sp.step(&[Some((prompt[5], 5, &TABLE_A))], &[], &[0]);
+    // A decode row beside a prompt chunk: the row's logits alone, and the chunk's (on split_ffn
+    // from the row after it) the resident load's; the chunk's 7 rows count their 28 pairs in the 2
+    // split layers, a cold one in layer 1 for each row at least.
     let chunk = [5, 9, 2, 200, 31, 7, 64];
-    let beside = sp.step(
-        &[Some((prompt[5], 5, &TABLE_A))],
-        &[(&chunk, 0, &TABLE_B)],
-        &[0],
+    let mixed = |r: &mut Rig| {
+        r.clear_kv();
+        for (i, &t) in prompt[..5].iter().enumerate() {
+            r.step(&[Some((t, i as i32, &TABLE_A))], &[], &[0]);
+        }
+        let alone = r.step(&[Some((prompt[5], 5, &TABLE_A))], &[], &[0]);
+        let decode = [Some((prompt[5], 5, &TABLE_A[..]))];
+        let beside = r.step(&decode, &[(&chunk, 0, &TABLE_B)], &[0, 7]);
+        (alone, beside)
+    };
+    let (alone, beside) = mixed(&mut sp);
+    assert_eq!(beside[..V], alone[..], "a decode row beside a prompt chunk");
+    let resident = mixed(&mut res).1;
+    close(
+        "a prompt chunk beside a decode row",
+        &resident[V..],
+        &beside[V..],
     );
-    assert_eq!(beside, alone, "a decode row beside a prompt chunk");
     let (hits, misses) = sp.model.expert_hits().unwrap();
     assert_eq!(
         hits + misses,

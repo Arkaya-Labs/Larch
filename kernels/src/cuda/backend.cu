@@ -281,6 +281,11 @@ static bool pinned_holds(const void* p, uint64_t bytes) {
 static larch_status buffer_wrap_host(larch_device* vd, void* host, uint64_t bytes, larch_buffer** out) {
   const auto* d = static_cast<const device*>(vd);
   if (!host || !bytes) return vv_fail(LARCH_ERR_INVALID_ARG, "buffer_wrap_host: empty range");
+#if defined(__HIP_PLATFORM_AMD__)
+  // ponytail: larch.h promises the wrap on CUDA only; take it on HIP once a HIP run checks in-place reads (wrap_host,
+  // ops' mixed wrapped cases) against the CPU reference.
+  return vv_fail(LARCH_ERR_UNSUPPORTED, "buffer_wrap_host: not on HIP");
+#endif
   if (!pinned_holds(host, bytes))
     return vv_fail(LARCH_ERR_UNSUPPORTED, "buffer_wrap_host: not inside a page-locked host buffer");
   if (cudaError_t e = cudaSetDevice(d->ordinal)) return fail(e, "cudaSetDevice");
