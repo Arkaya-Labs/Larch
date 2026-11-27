@@ -63,6 +63,10 @@ const WORDS: [&str; 30] = [
 /// and a mark, which split apart under `qwen2`.
 const MARK_WORDS: [&str; 4] = ["e\u{301}", "u\u{308}", "हि", ">\u{301}"];
 
+/// `inkling2`'s extra words (GPT-4o's pre-tokeniser): a capital run, a word with its contraction, a
+/// punctuation run with its trailing slashes and line break, and a mark inside a word.
+const GPT4O_WORDS: [&str; 5] = [" HELLO", "World's", "World", ";//\n", "ae\u{301}"];
+
 /// (text, GGUF token type): control 3, user-defined 4, unknown 2, unused 5; `<|endoftext|>` is
 /// normal in the file and made control by its text.
 const SPECIAL: [(&str, i32); 13] = [
@@ -115,7 +119,11 @@ const NO_TENSORS: &[(&str, Vec<u64>, u32, Vec<u8>)] = &[];
 fn bpe_kv(pre: &str) -> Vec<(String, Value)> {
     let mut tokens: Vec<String> = byte_chars().map(String::from).to_vec();
     let mut merges = Vec::new();
-    let marks: &[&str] = if pre == "qwen35" { &MARK_WORDS } else { &[] };
+    let marks: &[&str] = match pre {
+        "qwen35" => &MARK_WORDS,
+        "inkling2" => &GPT4O_WORDS,
+        _ => &[],
+    };
     for w in WORDS.iter().chain(marks) {
         let cs: Vec<char> = byte_level(w).chars().collect();
         for j in 1..cs.len() {
@@ -199,11 +207,12 @@ fn spm_vocab() -> Vec<u8> {
     write(&kv, NO_TENSORS)
 }
 
-fn vocabs() -> [(&'static str, Vec<u8>); 4] {
+fn vocabs() -> [(&'static str, Vec<u8>); 5] {
     [
         ("synth-llama3", bpe_vocab("llama-bpe")),
         ("synth-qwen2", bpe_vocab("qwen2")),
         ("synth-qwen35", bpe_vocab("qwen35")),
+        ("synth-inkling2", bpe_vocab("inkling2")),
         ("synth-spm", spm_vocab()),
     ]
 }
@@ -1044,6 +1053,18 @@ fn gguf_templates_render_tools() {
     }
     let (g, tok) = tokenizer_file(&format!("{dir}/m7.gguf"));
     check_tools_refused(&ChatTemplate::from_gguf(&g, &tok).unwrap());
+}
+
+/// Inkling 2 Mini's vocabulary (m15, GPT-4o's pre-tokeniser over 200,058 tokens) against tokdump at
+/// b12723 (`m15.tokens.jsonl`). The header of m15's GGUF is enough: `<LARCH_MODELS>/m15.gguf` may be
+/// the file or a vocabulary-only copy of its `tokenizer.*` keys. Its chat format is not checked here.
+#[test]
+#[ignore = "needs m15's GGUF or its vocabulary: LARCH_MODELS=<dir>"]
+fn inkling_vocab() {
+    let dir = std::env::var("LARCH_MODELS").expect("LARCH_MODELS=<dir of the GGUFs>");
+    let (_, tok) = tokenizer_file(&format!("{dir}/m15.gguf"));
+    check_tokens(&tok, "m15");
+    check_lossless(&tok, false, &data("prompts.jsonl"));
 }
 
 /// m2's own template with `enable_thinking` true and false against tokdump's renders, which
