@@ -3,6 +3,27 @@
 Test machine: RTX 5070 Ti 16 GB, Ryzen 7 9800X3D, Windows 11 + WSL2 (8 logical CPUs in WSL). Model m13
 (`bench/models.toml`). Raw results: [`35b-expert-spill-2026-11-27/`](35b-expert-spill-2026-11-27/).
 
+## Summary
+
+**Kept.** A static split's hot experts stay on the card and only the cold tail is read in place from page-locked host
+memory, inside the decode graph (`mmvq_id_mixed` over a wrapped host range), with the split capped at the layers the
+decode cost picks. Decode and check rows give the resident load's bits. Only `LARCH_EXPERT_CACHE=1` with
+`bench/routes/m13.experts` beside the model takes it (the default is unchanged). B is `e3ffd4b`; every B number is
+**with the shipped profile**.
+
+| Load | larch B (with the shipped profile) | llama.cpp ncm 3 | ncm 4 | the fewest ncm that fits its free memory | larch A |
+|---|---|---|---|---|---|
+| W4@1 | 161.8 | 130.4: **+24.1 %** | 125.3: +29.1 % | ncm 4: +29.1 % | 136.0: +19.0 % |
+| W4@4 | 298.2 | 262.4 (straight after B): **+13.6 %** | 232.1: +28.5 % | ncm 5, 224.6: +32.8 % | 245.8: +21.3 % |
+| W4@8, 4 seats | 300.5 | 307.2: **−2.2 %, behind** | 288.8: +4.1 % | ncm 7, 239.2: +25.6 % | 245.3: +22.5 % |
+| W4@8, 8 seats (measurement) | 335.8 | 307.2: **+9.3 %** | 288.8: +16.3 % | ncm 7: +40.4 % | — |
+| W4@16 | 300.4 | 68.5 | 71.6 | ncm 9, 235.1: +27.8 % | 246.1: +22.1 % |
+
+At W4@16 llama.cpp's faster settings past its free memory: ncm 8 243.5 (+23.4 %), ncm 7 266.3 (+12.8 %). One full run a
+cell for B; the A B B A slices (W4@4 +22.0 %, W4@1 +20.0 %, spreads under 1 %) are the controlled comparison. llama.cpp
+cells are last night's except W4@4's pair and today's L runs. The goal (ahead of ncm 3 at W4@4, no loss at W4@1) is met;
+W4@8 at 4 seats is 2.2 % behind ncm 3 and ahead with 8 seats (the seats default is a separate decision).
+
 ## Plan
 
 1. Setup: A is `ef28629` rebuilt (the night's `b3a53bf3…` binary is gone); cherry-pick the CUDA wrap of page-locked
@@ -188,6 +209,72 @@ B = `larch 0.0.0 (1b29835)`, sha256 `b202456c…`, clean tree. One run, W4@4 `--
   Decode at 1 and 4 seats gives the same KL to five figures: decode rows take the resident load's bits whatever the
   placement (Lane Z's resident-bit decode read 0.00405). `--mode all` runs after the report, as planned.
 
+## M: measurements
+
+Timed runs only, nothing else running, the histogram protocol on every run, `LARCH_PROFILE_STEPS=1
+LARCH_GRAPH_DIAGNOSTICS=1` on both sides. A = `ef28629` (`c1ad854a…`), B = `e3ffd4b` (`582252d6…`).
+
+**A B B A**, `--slice 1/10` (every B plan line: 20 split layers after the loader's replan, mapped=1):
+
+| Load | A (A1 / A2) | B (B1 / B2) | tok/s | TTFT p50 | TTFT p99 | TPOT p50 | TPOT p99 |
+|---|---|---|---|---|---|---|---|
+| W4@4 | 237.3 (237.2 / 237.4) | 289.6 (289.8 / 289.4) | **+22.0 %** | −1.0 %, noise | −8.4 % | −19.0 % | −17.3 % |
+| W4@1 | 135.4 (135.6 / 135.3) | 162.6 (163.1 / 162.1) | **+20.0 %** | −7.9 % | −13.9 % | −17.0 % | −17.5 % |
+
+**Full runs on B** (one each; plan line N, the loader replanning from 15 to 20 where its check came out short):
+
+| Run | plan | tok/s | TTFT p50 / p99 ms | TPOT p50 / p99 ms | replayed decode steps (step ms) | eager decode steps |
+|---|---|---|---|---|---|---|
+| W4@1 | 20, mapped=1 | 161.8 | 117 / 508 | 5.63 / 5.82 | 64,238 1-row (5.60) | 0 |
+| W4@4 (r2) | 20, mapped=1 | 298.2 | 134 / 594 | 12.55 / 15.02 | 15,539 4-row (11.02), 136 1-row (5.84) | 0 |
+| W4@4 (r1, **void**: planned 15, no replan) | 15, mapped=1 | 298.2 | 130 / 617 | 12.56 / 15.20 | — | — |
+| W4@8, 4 seats | 20, mapped=1 | 300.5 | 4,456 / 6,146 | 12.48 / 15.03 | 15,612 4-row (11.00) | 0 |
+| W4@8, `--set max_batch_seqs=8` | 29, mapped=1, 8 slots | 335.8 | 137 / 1,343 | 22.78 / 27.09 | 7,540 8-row (19.17), 200 4-row (11.55) | 0 |
+| W4@16 | 20, mapped=1 | 300.4 | 12,752 / 16,054 | 12.56 / 14.94 | (4 seats) | 0 |
+
+llama.cpp `--n-cpu-moe 3` straight after B's W4@4: 261.9 (after r1) and 262.4 (after r2), TPOT p99 17.14 and 17.06,
+TTFT p99 1,170 and 1,478. Prompt chunks beside decode rows (3 decode rows and a 512-row chunk, eager on B): 133 ms on B
+against 151 ms on A (A B B A W4@4, `-steps.txt`); SMOKE's 180 ms was before the review's gather fix.
+
+- **KEEP**: B ahead of A at W4@4 outside noise (+22.0 %), not slower at W4@1 (+20.0 %), TPOT p99 better (−17 %), parity
+  passed. **Kept.**
+- **TTFT**: better than A at both loads; at W4@1 TTFT p99 is still behind llama.cpp ncm 3 (508 against 415 ms, last
+  night's), as A's was (565).
+- **The void run.** The protocol checks for the plan N the first B load showed (20); r1's load passed its check at 15 and
+  did not replan. It was run again (r2, 20) and the pair with llama.cpp made again; r1 is reported, not counted.
+
+## G against M
+
+| Rows | today (A) | G's prediction (cap 15) | measured on B (cap 20) | G at cap 20 |
+|---|---|---|---|---|
+| 1 | 6.81 ms | 5.47 | 5.57 to 5.60 | 5.51 |
+| 4 | 13.8 | 10.11 | 10.95 to 11.02 | 10.15 |
+| 8 | 24.9 | 16.54 | 19.17 (29 layers, 8 seats) | — |
+
+At one row the model is within 2 %; at four rows the measured step is 0.8 ms (8 %) over it: the load hosts 920 experts,
+not the 718 G2 assumed (the replan's larger charge), and W4's cold share runs above the histogram's. The predicted gains
+(+25 % at one row, +36 % at four) came out as +20 % and +22 % in tok/s (A B B A); prompt and mixed steps are part of it.
+
+## Toward Basalt and Strata on a 16 GB card
+
+This pass is their expert cache, exact for decode: the hot experts on the card, the cold tail in RAM read in place, with
+the resident load's bits. On m13 with the shipped profile: 161.8 tok/s at one chat, 298.2 at four, 300.5 at eight on
+four seats and 335.8 on eight. What remains, with this pass's numbers:
+
+- **MTP drafting at one chat.** One row runs at 5.60 ms a step (178 steps a second), the card mostly idle; a drafter's
+  check steps already keep decode's bits on split layers (K2's check-step test), so drafting adds no new path.
+- **A low-bit cold tail.** A cold pair costs about 360 µs, gate and up read at about 3 GB/s (debt row): first a cold-path
+  decode that keeps the bus busy, then Q2_K cold copies (a third fewer bytes) once the read is bandwidth-bound.
+- **The head-to-head model that fits 32 GB of RAM.** Not run: this pass measured m13 only (920 experts, 1.4 GB, on the
+  host). A model whose experts need most of 32 GB puts far more of its routes on the host, where the cold path's
+  360 µs a pair decides.
+
+## Next step
+
+The cold-path read (debt row one): `g1.cu` shows a cold Q3_K gate or up matrix at about 3 GB/s over a bus that streams
+53. A decode of the cold tensor with its loads in flight together, measured on `g1.cu` and the A B B A above, is the
+lever both for larger caps and for the 32 GB model.
+
 ## Debt
 
 Each row has a marker in the code (`ponytail:`) or is named here.
@@ -232,18 +319,4 @@ Each row has a marker in the code (`ponytail:`) or is named here.
 | `larch 0.0.0 (ef28629)` | `c1ad854a…` | `ef28629` (#20's branch head, before its review fix) | A: rebuilt today, as the night's `b3a53bf3…` binary was gone; the same commit, not the same bytes |
 | `larch 0.0.0 (1b29835)` | `b202456c…` | `1b29835`, this branch, clean tree | B: SMOKE |
 | `larch 0.0.0 (e3ffd4b)` | `582252d6…` | `e3ffd4b`, this branch, clean tree | B: parity and M (the review fixes) |
-
-## M (interim: the session's usage limit cut the run short)
-
-A B B A, `--slice 1/10`, A = `ef28629` (`c1ad854a…`), B = `e3ffd4b` (`582252d6…`, 20 split layers, mapped=1, every plan
-line checked), step profile and graph lines on every run:
-
-| Load | A (A1 / A2) | B (B1 / B2) | tok/s | TTFT p50 | TTFT p99 | TPOT p99 |
-|---|---|---|---|---|---|---|
-| W4@4 | 237.3 (237.2 / 237.4) | 289.6 (289.8 / 289.4) | **+22.0 %** | −1.0 %, noise | −8.4 % | −17.3 % |
-| W4@1 | 135.4 (135.6 / 135.3) | 162.6 (163.1 / 162.1) | **+20.0 %** | −7.9 % | −13.9 % | −17.5 % |
-
-Full W4@4 on B: 298.2 tok/s (TTFT p50 130, p99 617; TPOT p99 15.20), and llama.cpp `--n-cpu-moe 3` straight after it
-261.9 (TPOT p99 17.14): +13.9 %. **That B run is void by the protocol**: its load planned 15 split layers (no replan this
-time), not the 20 the checks expect; it was not run again. The full W4@8, W4@8 at 8 seats and W4@16 runs were still
-running when the session stopped; their files land in the results directory unchecked.
+| llama-serve-bench `3726f061…` | — | `9c4753d` against llama.cpp b12723 | the 27 Nov build, unchanged |
