@@ -19,7 +19,9 @@ again in this session, below). Raw results are in [`35b-vs-llamacpp-2026-11-25/`
    llama.cpp on the original file, and both its quality and its speed are reported against that file.
 2. **Larch with the faster copy vs llama.cpp with the original file (same session, 2 runs a side):** aggregate
    **+19.6 % at 1 chat** and **+24.9 % at 4 chats**. This is not a same-file baseline (D15): llama.cpp cannot load
-   the copy (it refuses the cold-expert tensors' shape; checked 26 Nov), so it runs the original. TTFT p50 is 31 % and 44 % lower and TPOT p99 22 % and 20 % lower. The loss: TTFT p99 at 1 chat is
+   the copy, which is a larch-only layout and not a standard GGUF with some Q2_K tensors. It refuses it at load:
+   `check_tensor_dims: tensor 'blk.0.ffn_down_exps.weight' has wrong shape; expected 512, 2048, 256, got 512,
+   2048, 167, 1` (PR #16, `35b-final-2026-11-26/copy-load.log`). So llama.cpp runs the original. TTFT p50 is 31 % and 44 % lower and TPOT p99 22 % and 20 % lower. The loss: TTFT p99 at 1 chat is
    20.8 % higher (484 vs 401 ms); at 4 chats it is 63 % lower.
 3. **Quality of the faster copy:** mean KL against the llama.cpp CUDA reference dump of the original file is 8.8 %
    (prefill) and 7.9 % (decode) above the original file's under larch, inside the 10 % budget (an extra gate of ours on top of D12's bound;
@@ -68,8 +70,16 @@ refused on the model file, as above.
 
 The sweep's search (`--n-cpu-moe`: the fewest MoE layers on the CPU at which the driver runs W4's largest shape,
 4 × 2560, with every CUDA0 buffer under the free VRAM; then `-t`/`-b`/`-ub` by max √(pp2048 · tg128)): 3 layers
-again, `-t 4 -b 2048 -ub 1024` (the sweep had `-b 1024`). CUDA0 buffers 15,618 MiB of 15,728 MiB free. Larch's
-memory use did not change for the original file, so no other count was tried. Log: `wsl5070-m13-llama-search.txt`.
+again, `-t 4 -b 2048 -ub 1024` (the sweep had `-b 1024`). CUDA0 buffers 15,618 MiB of 15,728 MiB free by
+`nvidia-smi`. Larch's memory use did not change for the original file, so no other count was tried. Log:
+`wsl5070-m13-llama-search.txt`.
+
+llama.cpp itself reports 15,009 MiB free on this card (its load line, committed in PR #16 as
+`35b-final-2026-11-26/wsl5070-m13-llama-load.txt`), and larch reads the same figure. Against that reading,
+`--n-cpu-moe 3` is past llama.cpp's own reported free memory at every load here, and runs partly from shared
+system memory through the Windows driver's fallback (estimated from one-sequence load lines, not measured).
+`--n-cpu-moe 3` stays the protocol's pick (the flags file's rule), so it stays the baseline here. PR #16 shows
+`--n-cpu-moe 4`, which stays inside the reported free memory at one sequence, beside it.
 
 ## Quality
 
@@ -139,8 +149,8 @@ From the fit diagnostics of arm A (`LARCH_FIT_DIAGNOSTICS=1`) and the loader's c
 - But the load also takes 132–199 MB the plan does not count (the post-load check passed by 2.4 MB, carried by that
   over-reserve). A plan that only shrinks the pool would load 3 layers, fail the check and reload at 4. Naming that
   memory comes first.
-- Larch reads 821 MiB less free VRAM at start than the llama.cpp search's probe; whether the two readings are taken
-  alike is to be checked.
+- Larch read 821 MiB less free VRAM at start than the llama.cpp search's `nvidia-smi` probe. The two are different
+  readings: llama.cpp's own free-memory line gives 15,009 MiB, the figure larch reads too (llama.cpp flags, above).
 
 ## Memory margin (faster copy, W4 at 1)
 
@@ -172,12 +182,14 @@ difference is inside the branch's run spread (6.5 %). The branch changes no deco
 |---|---|
 | `c352d7b1…` | larch, branch `feat/35b-repack` at `b71282c` (PR #6): final m13 rows, m1/m5 final rows, `regress-*-B*` |
 | `6d683e09…` | larch, dev at `488cd91`: the arms (step 1), the margin run, `regress-*-A*` |
-| `d28ab07f…` | llama.cpp's W4 driver at b12723 (`abca692`) |
+| `d28ab07f…` | llama.cpp's W4 driver (`tools/llama-serve-bench`) against b12723 (`abca692`), built from a driver state that is not committed: PR #1's committed driver builds a different hash (`1fe5fde…`) |
 
 The parity files carry no build field; they were made with the dev binary at `488cd91`.
 
 ## Protocol notes
 
+- The parity prompts were not checked against the text that recorded `bench/routes/m13.experts`; if they overlap,
+  the copies' KL is optimistic.
 - Not re-run: the `--n-cpu-moe 2` probe, which aborted at 15,581 MiB free while free memory was still settling
   (`wsl5070-m13-llama-search.txt`), and a further m1 W4 at 8 dev/branch pair. The 26 Nov report measures llama.cpp's
   fit with its own load log.
