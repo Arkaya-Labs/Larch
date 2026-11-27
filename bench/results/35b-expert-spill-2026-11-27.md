@@ -207,7 +207,10 @@ B = `larch 0.0.0 (1b29835)`, sha256 `b202456c…`, clean tree. One run, W4@4 `--
 | decode `--parallel 4` | 17 | 0.00403 | 0.0170 | 0.9445 | 14,564 / 0 (96 mixed) | 0.0354 | pass |
 
   Decode at 1 and 4 seats gives the same KL to five figures: decode rows take the resident load's bits whatever the
-  placement (Lane Z's resident-bit decode read 0.00405). `--mode all` runs after the report, as planned.
+  placement (Lane Z's resident-bit decode read 0.00405).
+- **Parity `--mode all`** on B after the report (untimed, histogram in): **every mode passed**: prefill 0.00418, decode
+  0.00403 (56,529 steps replayed), chunked 0.00410 (102 replayed; dev's "chunk steps ran without a decode row" refusal did
+  not occur on this branch), cached 0.00483; bound 0.0354 (`parity-m13-all.log`).
 
 ## M: measurements
 
