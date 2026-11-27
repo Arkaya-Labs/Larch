@@ -8,7 +8,9 @@
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
 
-use larch_kernels::{Buffer, CPU, CPU_COMPUTE, DType, Device, KError, KvPool, Stream, Tensor, ops};
+use larch_kernels::{
+    Buffer, CPU, CPU_COMPUTE, DType, Device, Graph, KError, KvPool, Stream, Tensor, ops,
+};
 use larch_model::gguf::{self, Gguf, Value, code};
 use larch_model::learn::{DeviceSuffix, LearnError};
 use larch_model::{
@@ -416,6 +418,10 @@ struct Rig {
     logits: Buffer,
     /// Hand each step's ids to `Model::embed_tokens` before the forward pass, as the engine does.
     prime: bool,
+    /// The steps' [`StepBatch::check`]: the prefill chunks are check chunks.
+    check: bool,
+    /// Capture each step's forward pass in one graph (no cut allowed) and replay it.
+    capture: bool,
 }
 
 impl Rig {
@@ -457,6 +463,8 @@ impl Rig {
             input,
             logits,
             prime: false,
+            check: false,
+            capture: false,
         }
     }
 
@@ -525,7 +533,7 @@ impl Rig {
             prefill_q_len: t(6),
             logits_rows: t(7),
             attn_splits: 0,
-            check: false,
+            check: self.check,
         };
         let shape = [len(want), i64::from(tiny::VOCAB)];
         let logits = Tensor::new(&self.logits, 0, DType::F32, &shape).unwrap();
@@ -533,10 +541,21 @@ impl Rig {
         if self.prime {
             self.model.embed_tokens(&self.s, &tok).unwrap();
         }
-        self.model
-            .forward(&self.s, &batch, &kv, &logits)
-            .map_err(|e| (e, larch_kernels::last_error()))
-            .unwrap();
+        if self.capture {
+            let model = &mut self.model;
+            let (cut, last) =
+                Graph::capture_pieces(&self.s, |s| model.forward(s, &batch, &kv, &logits))
+                    .map_err(|e| (e, larch_kernels::last_error()))
+                    .unwrap()
+                    .expect("a device that captures graphs");
+            assert!(cut.is_empty(), "the step cut its graph {} times", cut.len());
+            last.launch(&self.s).unwrap();
+        } else {
+            self.model
+                .forward(&self.s, &batch, &kv, &logits)
+                .map_err(|e| (e, larch_kernels::last_error()))
+                .unwrap();
+        }
         let mut out = vec![0f32; want.len() * V];
         self.s.download(&self.logits, 0, &mut out).unwrap();
         out
@@ -833,6 +852,108 @@ fn streamed_prefill_computes_what_the_cpu_path_does() {
             }
         }
         assert_eq!(r.model.streamed_steps(), 2, "{layers} host layers");
+    }
+}
+
+/// On CUDA (GPU 0): a split layer's decode rows read its cold experts in place (`mmvq_id_mixed`
+/// over the host experts' page-locked weights) inside the step's graph, so a split load decodes as
+/// the resident load does, bit for bit: at 1 and 4 rows, a check step's rows as their one-row
+/// decodes, a decode row beside a prompt chunk as the same row alone, and each decode step replayed
+/// from one graph piece as it ran eagerly. Layer 0 keeps 2 of its 4 experts and layer 1 one, so
+/// every row's 2 experts in layer 1 include a cold one; the prompt rows, which keep the host path,
+/// count those cold pairs from their routed ids, and the decode rows count none. Skips without CUDA.
+#[test]
+fn split_layers_decode_their_cold_experts_in_place() {
+    let cuda = larch_kernels::Device::open(0)
+        .ok()
+        .and_then(|d| d.props().ok())
+        .is_some_and(|p| p.backend == larch_kernels::Backend::Cuda);
+    if !cuda {
+        return;
+    }
+    let b = tiny::gguf(Arch::Qwen3Moe, 1);
+    let split = plan(&[&[0, 1], &[3]], false);
+    let gpu = |name: &str, p: Option<&ExpertPlan>| {
+        let loaded = load_by_on(&b, name, 0, |path, d, s| match p {
+            Some(p) => Transformer::load_cached(path, d, s, MAX_ROWS, p),
+            None => Transformer::load_placed(path, d, s, MAX_ROWS, Placement::default()),
+        });
+        Rig::loaded(loaded.unwrap())
+    };
+    let (mut res, mut sp) = (
+        gpu("mixed-resident", None),
+        gpu("mixed-split", Some(&split)),
+    );
+    let prompt: Vec<i32> = (0..12)
+        .map(|i| (i * 37 + 11) % tiny::VOCAB as i32)
+        .collect();
+    let one = |r: &mut Rig| {
+        r.clear_kv();
+        (0..prompt.len())
+            .flat_map(|i| r.step(&[Some((prompt[i], i as i32, &TABLE_A))], &[], &[0]))
+            .collect::<Vec<f32>>()
+    };
+    let want = one(&mut res);
+    assert!(want.iter().all(|x| x.is_finite()));
+    assert_eq!(one(&mut sp), want, "1 row");
+    let tables: [&[i32]; 4] = [&TABLE_A, &TABLE_B, &[23, 22, 21, 20], &[19, 18, 17, 16]];
+    let four = |r: &mut Rig| {
+        r.clear_kv();
+        (0..6)
+            .flat_map(|i| {
+                let d: Vec<Decode> = (0..4)
+                    .map(|q| Some((prompt[(i + 3 * q) % 12], i as i32, tables[q])))
+                    .collect();
+                r.step(&d, &[], &[0, 1, 2, 3])
+            })
+            .collect::<Vec<f32>>()
+    };
+    assert_eq!(four(&mut sp), four(&mut res), "4 rows");
+    assert_eq!(
+        sp.model.expert_hits(),
+        Some((0, 0)),
+        "decode rows count no pairs"
+    );
+    // Three guesses checked at once: their one-row decodes' logits.
+    sp.clear_kv();
+    for i in 0..4 {
+        sp.step(&[Some((prompt[i], i as i32, &TABLE_A))], &[], &[0]);
+    }
+    sp.check = true;
+    let checked = sp.step(&[], &[(&prompt[4..7], 4, &TABLE_A)], &[0, 1, 2]);
+    sp.check = false;
+    assert_eq!(checked, want[4 * V..7 * V], "a check step's rows");
+    // A decode row beside a prompt chunk: the row's logits alone; the chunk's 7 rows count their
+    // 28 pairs in the 2 split layers, a cold one in layer 1 for each row at least.
+    sp.clear_kv();
+    for i in 0..5 {
+        sp.step(&[Some((prompt[i], i as i32, &TABLE_A))], &[], &[0]);
+    }
+    let alone = sp.step(&[Some((prompt[5], 5, &TABLE_A))], &[], &[0]);
+    let chunk = [5, 9, 2, 200, 31, 7, 64];
+    let beside = sp.step(
+        &[Some((prompt[5], 5, &TABLE_A))],
+        &[(&chunk, 0, &TABLE_B)],
+        &[0],
+    );
+    assert_eq!(beside, alone, "a decode row beside a prompt chunk");
+    let (hits, misses) = sp.model.expert_hits().unwrap();
+    assert_eq!(
+        hits + misses,
+        7 * 2 * 2,
+        "only the prompt rows took the host path"
+    );
+    assert!(misses >= 7, "{misses} cold pairs");
+    // Each decode step in one graph piece, replayed as it ran.
+    for n in [1usize, 4] {
+        sp.clear_kv();
+        let d: Vec<Decode> = (0..n).map(|q| Some((prompt[q], 0, tables[q]))).collect();
+        let rows: Vec<i32> = (0..n as i32).collect();
+        let eager = sp.step(&d, &[], &rows);
+        sp.capture = true;
+        let replayed = sp.step(&d, &[], &rows);
+        sp.capture = false;
+        assert_eq!(replayed, eager, "{n} rows replayed");
     }
 }
 

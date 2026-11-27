@@ -445,6 +445,12 @@ struct ExpertCache {
     dev: Option<Buffer>,
     /// Per layer.
     splits: Vec<Option<Split>>,
+    /// The host experts' page-locked weights as a device buffer read in place over the bus
+    /// ([`Buffer::view_host`]), and each layer's expert table (i32 `[layers * experts]`: a device
+    /// slot, else -1 - a host slot) for `mmvq_id_mixed`: a split layer's decode and check rows run
+    /// there, inside the step's graph. `None` for dynamic residency, whose slots move between
+    /// steps, or where the backend wraps no host memory or the weights are not page-locked.
+    mixed: Option<(Buffer, Buffer)>,
     /// The routing counts so far; where [`Transformer::record_routes`] saves them, once it is on.
     hist: Histogram,
     path: Option<PathBuf>,
@@ -2170,8 +2176,10 @@ impl Transformer {
                         // Where the pool may stream them, in host memory the GPU copies from at
                         // full speed (page-locked: 57 against 22 GB/s through the file map and
                         // the staging on a 5070 Ti); plain memory where the device has none.
-                        // As the pool below asks: no expert-cache plan, no split layer.
-                        let pinned = match place.stream_rows > 0 && plan.is_none() && !split {
+                        // As the pool below asks (no expert-cache plan, no split layer), and for
+                        // a static split, whose decode rows read the cold experts in place.
+                        let pool = place.stream_rows > 0 && plan.is_none() && !split;
+                        let pinned = match pool || (split && !dynamic) {
                             false => None,
                             true => match Buffer::alloc_host(s.device(), held) {
                                 Ok(b) => Some(b),
@@ -2323,6 +2331,41 @@ impl Transformer {
             }
         };
 
+        // A static split's decode and check rows read its cold experts in place, on the device; a
+        // backend that wraps no host memory, or plain host memory, leaves them on split_ffn.
+        let mixed = match (&host_experts, moe, &cache_dev) {
+            (Some(h), Some(m), Some(_)) if !dynamic => {
+                match Buffer::view_host(dev, &h.weights, 0..h.weights.bytes()) {
+                    Ok(view) => {
+                        let e = m.experts as usize;
+                        let mut table = vec![0i32; layout.len() * e];
+                        for (l, sp) in layout.iter().enumerate() {
+                            let Some(sp) = sp else { continue };
+                            for (x, t) in table[l * e..][..e].iter_mut().enumerate() {
+                                *t = if sp.slot[x] >= 0 {
+                                    sp.slot[x]
+                                } else {
+                                    -1 - sp.hslot[x]
+                                };
+                            }
+                        }
+                        let t = alloc(DType::I32.bytes(table.len() as u64))?;
+                        s.upload(&t, 0, &table).map_err(backend)?;
+                        Some((view, t))
+                    }
+                    Err(KError::Unsupported | KError::InvalidArg) => None,
+                    Err(e) => return Err(backend(e)),
+                }
+            }
+            _ => None,
+        };
+        if cache_dev.is_some() && std::env::var("LARCH_FIT_DIAGNOSTICS").is_ok_and(|v| v == "1") {
+            let layers = layout.iter().filter(|l| l.is_some()).count();
+            eprintln!(
+                "larch_split_decode,mapped={},layers={layers}",
+                u8::from(mixed.is_some())
+            );
+        }
         let cache = match (cache_dev, moe) {
             (Some(slots), Some(m)) => Some(RefCell::new(ExpertCache {
                 copy: dynamic
@@ -2331,6 +2374,7 @@ impl Transformer {
                     .map_err(backend)?,
                 dev: Some(slots),
                 splits: layout,
+                mixed,
                 hist: Histogram::uniform(0, cfg.n_layers, m.experts),
                 path: None,
                 pending: Vec::new(),
@@ -2883,6 +2927,20 @@ impl Transformer {
             }
             return Ok(());
         }
+        // A split layer's decode and check rows (a check step's every row, else the decode rows
+        // leading the step) run on the device, the cold experts read in place: a resident layer's
+        // bits, inside the step's graph. Prompt rows keep split_ffn after them, eagerly: their host
+        // section has no tag for rows that start past 0. Adapters and router deltas keep split_ffn.
+        let from = match ad.is_none() && delta.is_none() {
+            true => self.mixed_rows(s, layer, m, h, &ids, &weights, out)?,
+            false => 0,
+        };
+        if from == rows {
+            return Ok(());
+        }
+        if from > 0 && s.capturing() {
+            return Err(KError::Unsupported);
+        }
         // `streaming` is the last pass's: the MTP block (layer `layers.len()`) runs outside any pass
         // and has no plan in the pool, where it would wait on copies nothing queued. Beside decode
         // rows only the prefill rows stream; the decode rows run on the CPU path below, the bits a
@@ -2918,7 +2976,7 @@ impl Transformer {
             return Err(KError::InvalidArg);
         }
         if !s.capturing() {
-            return self.host_experts(s, layer, rows, live, self.check.get(), true);
+            return self.host_experts(s, layer, rows, from, live, self.check.get(), true);
         }
         // A graph would keep the version's buffers past the swap that frees them.
         if ad.is_some() || delta.is_some() {
@@ -2926,6 +2984,60 @@ impl Transformer {
         }
         // The section ends this piece; the replay runs it by tag before the next.
         s.cut(host_tag(layer, rows, self.check.get()))
+    }
+
+    /// [`moe_ffn`](Self::moe_ffn)'s rows of a split layer that run through [`Experts::Mixed`] (hot
+    /// experts in the device slots, cold ones read in place from host memory), into `out`: every row
+    /// of a check step, else the decode rows that lead the step. 0 (none run) for a layer that is not
+    /// split, keeps no expert on the device, or has no in-place view.
+    // ponytail: the rows run unfused (gate, up, silu_mul, down), 11 to 23 µs a layer over the fused
+    // entries on the 5070 Ti (fused_bench, 27 Nov); give fused_moe_gate_up and fused_moe_down a
+    // mixed layer if a profile shows the split layers.
+    #[allow(clippy::too_many_arguments)]
+    fn mixed_rows(
+        &self,
+        s: &Stream,
+        layer: usize,
+        m: MoeCfg,
+        h: &Tensor,
+        ids: &Tensor,
+        weights: &Tensor,
+        out: &Tensor,
+    ) -> Result<i64, KError> {
+        let Some(c) = self.split_cache() else {
+            return Ok(0);
+        };
+        let c = c.borrow();
+        let (Some((view, tables)), Some(Some(sp)), Some(dev)) =
+            (&c.mixed, c.splits.get(layer), &c.dev)
+        else {
+            return Ok(0);
+        };
+        let rows = h.shape()[0];
+        let n = if self.check.get() {
+            rows
+        } else {
+            self.stream_decode.min(rows)
+        };
+        if n == 0 || sp.slot.iter().all(|&d| d < 0) {
+            return Ok(0);
+        }
+        let e = i64::from(m.experts);
+        let at = DType::I32.bytes((layer as i64 * e) as u64);
+        let table = Tensor::new(tables, at, DType::I32, &[e])?;
+        let mixed = |i: usize| -> Result<Experts, KError> {
+            Ok(Experts::Mixed {
+                hot: sp.dev[i].t(dev)?,
+                cold: sp.host[i].t(view)?,
+                table,
+            })
+        };
+        let experts = [mixed(0)?, mixed(1)?, mixed(2)?];
+        let sc = [&self.sc.gate, &self.sc.up, &self.sc.act];
+        let (hn, i) = (h.rows(0, n)?, ids.rows(0, n)?);
+        let (w, o) = (weights.rows(0, n)?, out.rows(0, n)?);
+        routed(s, self.check_rows(), experts, sc, m, &hn, &i, &w, &o)?;
+        Ok(n)
     }
 
     /// The router's logits of `h` (plus the layer's deltas) and their top k into the route scratch: the chosen ids
@@ -3184,6 +3296,7 @@ impl Transformer {
         s: &Stream,
         layer: usize,
         rows: i64,
+        from: i64,
         live: i64,
         check: bool,
         count: bool,
@@ -3210,14 +3323,18 @@ impl Transformer {
         else {
             return Err(KError::InvalidArg);
         };
-        if rows > self.max_rows || !(1..=rows).contains(&live) {
+        if rows > self.max_rows || !(1..=rows).contains(&live) || !(0..live).contains(&from) {
             return Err(KError::InvalidArg);
         }
         // The MTP block past the trunk has no row in the histogram.
         let count = count && layer < self.layers.len();
         if let Some(c) = self.split_cache() {
             let c = &mut *c.borrow_mut();
-            return self.split_ffn(s, c, x, layer, m, rows, live, check, count);
+            return self.split_ffn(s, c, x, layer, m, rows, from, live, check, count);
+        }
+        // Only a split layer's prompt rows start past 0 (mixed_rows ran the rows before them).
+        if from > 0 {
+            return Err(KError::InvalidArg);
         }
         let (d, e, k) = (
             i64::from(self.cfg.d_model),
@@ -3290,7 +3407,7 @@ impl Transformer {
         }
     }
 
-    /// A split layer's routed experts of a step of `rows` rows, the first `live` of them, after
+    /// A split layer's routed experts of a step of `rows` rows, rows `from` to `live`, after
     /// [`moe_ffn`](Self::moe_ffn)'s route, run eagerly and by a replay's host step alike: its
     /// device part has a shape per step, so no graph holds it. One download reads the ids, weights
     /// and `h` from the route scratch; each (row, slot) runs where its expert is. The device's
@@ -3312,6 +3429,7 @@ impl Transformer {
         layer: usize,
         m: MoeCfg,
         rows: i64,
+        from: i64,
         live: i64,
         check: bool,
         count: bool,
@@ -3322,10 +3440,22 @@ impl Transformer {
         let host_rows = if check { ID_ROWS } else { 0 };
         let (e, k) = (m.experts as usize, m.used as usize);
         let at = DType::F32.bytes((rows * i64::from(m.experts)) as u64);
-        let (all_pairs, n) = (rows as usize * k, live as usize * k);
+        let (all_pairs, skip, n) = (rows as usize * k, from as usize * k, live as usize * k);
         let h = Tensor::new(route, at + 8 * all_pairs as u64, DType::F16, &[rows, d])?;
-        let out = Tensor::new(&self.sc.t, 0, DType::F16, &[live, d])?;
-        let resid = Tensor::new(&self.sc.x, 0, DType::F32, &[live, d])?;
+        // Rows from `from` on: `live` now counts them, as `out` and `resid` start there.
+        let live = live - from;
+        let out = Tensor::new(
+            &self.sc.t,
+            DType::F16.bytes((from * d) as u64),
+            DType::F16,
+            &[live, d],
+        )?;
+        let resid = Tensor::new(
+            &self.sc.x,
+            DType::F32.bytes((from * d) as u64),
+            DType::F32,
+            &[live, d],
+        )?;
         let mut staging = x
             .staging
             .lock()
@@ -3336,14 +3466,16 @@ impl Transformer {
         s.download(route, at, v)?;
         let (ids, rest) = v.split_at(4 * all_pairs);
         let (ws, hv) = rest.split_at(4 * all_pairs);
-        let ids: Vec<usize> = ids[..4 * n]
+        let hv = &hv[2 * from as usize * d as usize..];
+        let ids: Vec<usize> = ids[4 * skip..4 * n]
             .chunks_exact(4)
             .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
             .collect();
-        let ws: Vec<f32> = ws[..4 * n]
+        let ws: Vec<f32> = ws[4 * skip..4 * n]
             .chunks_exact(4)
             .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
             .collect();
+        let n = n - skip;
         if ids.iter().any(|&i| i >= e) {
             return Err(KError::InvalidArg);
         }
@@ -3388,7 +3520,8 @@ impl Transformer {
             rows.flat_map(|r| &hv[r * row..][..row]).copied().collect()
         };
         if !on.is_empty() {
-            let (nd, all) = (on.len() as i64, on.len() == live as usize);
+            // Rows past `from` are gathered too: the device part reads h from its start.
+            let (nd, all) = (on.len() as i64, on.len() == live as usize && from == 0);
             if !all {
                 let hg = gather(&mut on.iter().copied());
                 s.upload(h.buffer(), h.offset(), &hg)?;
@@ -3808,7 +3941,7 @@ impl Model for Transformer {
         let (layer, rows, check) = untag(tag);
         // On an all-split load no layer waits on the route log, so a replay's routes skew nothing.
         let count = self.split_cache().is_some() && self.route_log.is_none();
-        self.host_experts(s, layer, rows, i64::from(live), check, count)
+        self.host_experts(s, layer, rows, 0, i64::from(live), check, count)
     }
 
     fn set_router_deltas(&mut self, s: &Stream, d: Option<&RouterDeltas>) -> Result<(), KError> {
@@ -4372,6 +4505,7 @@ impl Transformer {
                 RefCell::new(ExpertCache {
                     dev: None,
                     splits: Vec::new(),
+                    mixed: None,
                     hist: Histogram::uniform(0, 0, 0),
                     path: None,
                     copy: None,
