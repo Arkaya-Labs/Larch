@@ -175,6 +175,9 @@ fn spellings(family: Family) -> &'static [&'static str] {
         Family::Qwen3 => &["<tool_call>"],
         Family::Llama3 => &["<|python_tag|>", "{", "{\"", " {", " {\"", "{\n"],
         Family::Mistral => &["[TOOL_CALLS]", "[", "[{", " [", " [{", "[{\""],
+        // Every Inkling message, an answer's too, opens with `<|message_model|>`: a call shows
+        // only after the tool's name, so no first token tells it.
+        Family::Inkling => &[],
     }
 }
 

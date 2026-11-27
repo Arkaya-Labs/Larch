@@ -4248,7 +4248,7 @@ fn opener(text: &str, family: Family) -> usize {
     let bare = |at: &usize| {
         let line = text[*at..].trim_start();
         match family {
-            Family::Qwen3 => false,
+            Family::Qwen3 | Family::Inkling => false,
             Family::Llama3 => line.starts_with('{'),
             Family::Mistral => line.starts_with("[{") || line == "[",
         }

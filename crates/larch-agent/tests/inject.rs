@@ -525,6 +525,7 @@ impl Tool for Fetch {
 fn wrap(family: Family, marker: &str) -> String {
     let close = match family {
         Family::Qwen3 => "</tool_call>",
+        Family::Inkling => "<|end_message|>",
         Family::Llama3 | Family::Mistral => "",
     };
     format!("{}{marker}{close}", family.marker())

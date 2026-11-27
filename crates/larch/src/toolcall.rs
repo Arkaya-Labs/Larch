@@ -16,7 +16,24 @@ pub enum Family {
     Llama3,
     /// `[TOOL_CALLS][{"name": ..., "arguments": {...}}]`, or that array bare, ending the reply.
     Mistral,
+    /// Inkling 2's messages: `<|message_model|>NAME<|content_invoke_tool_json|>{"name":...,
+    /// "args":{...}}<|end_message|>`, one message per call, beside `<|content_thinking|>` and
+    /// `<|content_text|>` messages of the same shape. Every tag is a control token, so the reply
+    /// reads only where the detokenizer keeps [`INKLING_TAGS`] as text.
+    Inkling,
 }
+
+/// Inkling 2's message tags, which its replies are read by: llama.cpp's `preserved_tokens`
+/// (common/parsers/inkling.cpp) with the text kinds Splash's chat format reads as the answer's.
+pub const INKLING_TAGS: [&str; 7] = [
+    "<|message_model|>",
+    "<|content_thinking|>",
+    "<|content_text|>",
+    "<|content_tool_error|>",
+    "<|content_invoke_tool_text|>",
+    "<|content_invoke_tool_json|>",
+    "<|end_message|>",
+];
 
 impl Family {
     /// The text that opens a call in this format.
@@ -25,6 +42,7 @@ impl Family {
             Self::Qwen3 => "<tool_call>",
             Self::Llama3 => "<|python_tag|>",
             Self::Mistral => "[TOOL_CALLS]",
+            Self::Inkling => "<|content_invoke_tool_json|>",
         }
     }
 
@@ -39,6 +57,7 @@ impl Family {
             ],
             Self::Llama3 => &[("<|python_tag|>", "")],
             Self::Mistral => &[("[TOOL_CALLS]", "")],
+            Self::Inkling => &[("<|content_invoke_tool_json|>", "<|end_message|>")],
         }
     }
 }
@@ -114,6 +133,9 @@ pub struct Parsed {
 /// `think_open` says the rendered prompt ends with an open `<think>`: the reply up to its first
 /// `</think>` is then thinking. Otherwise only a leading `<think>...</think>` block is.
 pub fn parse(family: Family, text: &str, think_open: bool) -> Parsed {
+    if family == Family::Inkling {
+        return parse_inkling(text);
+    }
     let mut parsed = Parsed::default();
     let mut rest = text.trim_start();
     let block = if think_open {
@@ -151,6 +173,76 @@ pub fn parse(family: Family, text: &str, think_open: bool) -> Parsed {
             parsed.error = more.map(|_| ParseError::MultipleCalls);
         }
         Err(error) => parsed.error = Some(error),
+    }
+    parsed
+}
+
+/// An Inkling 2 reply, message by message: its thinking messages joined as the thinking, its text
+/// messages (`content_text`, a tool error, a text-invoked tool's text) joined as the answer, and its
+/// call messages in order. A reply without tags (a detokenizer that hid them) is all answer. A
+/// message cut off at `max_tokens` keeps what it holds: thinking as `UnclosedThinking`, a call's JSON
+/// checked as written.
+fn parse_inkling(text: &str) -> Parsed {
+    const OPEN: &str = "<|message_model|>";
+    const END: &str = "<|end_message|>";
+    let mut parsed = Parsed::default();
+    let (mut thinking, mut answer, mut calls) = (Vec::new(), Vec::new(), Vec::new());
+    // Text before the first message has no kind; the model opens its own messages, so it is the
+    // answer's, as a reply without tags is.
+    let mut messages = text.split(OPEN);
+    if let Some(head) = messages.next().map(str::trim)
+        && !head.is_empty()
+    {
+        answer.push(head.trim_end_matches(END).trim());
+    }
+    for message in messages {
+        let (body, closed) = match message.split_once(END) {
+            Some((body, rest)) => {
+                // Text between messages (none in the format) stays the answer's.
+                let rest = rest.trim();
+                if !rest.is_empty() {
+                    answer.push(rest);
+                }
+                (body, true)
+            }
+            None => (message, false),
+        };
+        if let Some(t) = body.strip_prefix("<|content_thinking|>") {
+            thinking.push(t.trim());
+            if !closed {
+                parsed.error = Some(ParseError::UnclosedThinking);
+            }
+        } else if let Some((_name, json)) = body.split_once(Family::Inkling.marker()) {
+            calls.push(first_json(json).and_then(|(v, _)| to_call(v)));
+        } else {
+            let t = [
+                "<|content_text|>",
+                "<|content_tool_error|>",
+                "<|content_invoke_tool_text|>",
+            ]
+            .iter()
+            .find_map(|tag| body.strip_prefix(tag))
+            .unwrap_or(body);
+            answer.push(t.trim());
+        }
+    }
+    parsed.thinking = (!thinking.is_empty()).then(|| thinking.join("\n\n"));
+    parsed.text_before = answer.join("\n\n");
+    let mut calls = calls.into_iter();
+    match calls.next() {
+        Some(Ok(call)) => parsed.call = Some(call),
+        Some(Err(e)) => parsed.error = Some(e),
+        None => {}
+    }
+    for call in calls {
+        match call {
+            Ok(c) if parsed.call.is_some() => parsed.later.push(c),
+            // A later call that does not read ends them, as in the Qwen format.
+            _ => {
+                parsed.error.get_or_insert(ParseError::MultipleCalls);
+                break;
+            }
+        }
     }
     parsed
 }
@@ -224,6 +316,8 @@ fn find_call(family: Family, text: &str) -> Option<(&str, Found<'_>)> {
             let call = first_json(after).and_then(|(v, rest)| first_call(v, more(rest)));
             Some((before, call))
         }
+        // parse() reads Inkling's messages itself.
+        Family::Inkling => None,
         Family::Llama3 => {
             // Other JSON after the call (a result in a code fence) is not a second call.
             let more = |rest: &str| {
@@ -388,6 +482,7 @@ fn to_call(value: Value) -> Result<ToolCall, ParseError> {
     let args = o
         .remove("arguments")
         .or_else(|| o.remove("parameters"))
+        .or_else(|| o.remove("args"))
         .unwrap_or_else(|| json!({}));
     if !args.is_object() {
         return Err(ParseError::ArgsNotObject);
@@ -484,7 +579,7 @@ pub fn grammar(
             "the XML tool-call body in the {family:?} format"
         )));
     }
-    let mut calls = Vec::new();
+    let (mut calls, mut names) = (Vec::new(), Vec::new());
     for t in tools {
         let f = &t["function"];
         let Some(name) = f["name"].as_str() else {
@@ -495,23 +590,38 @@ pub fn grammar(
         if matches!(&mode, Mode::Named(n) if n != name) {
             continue;
         }
+        names.push(name);
         let mut params = (f.get("parameters").cloned())
             .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
         if let Some(o) = params.as_object_mut() {
             o.entry("type").or_insert_with(|| "object".into());
+        }
+        // Inkling's template writes a call's arguments with their keys sorted (`dictsort`), so its
+        // model writes them so too.
+        if family == Family::Inkling {
+            sort_properties(&mut params);
         }
         // Checked for the XML body too, so both bodies refuse the same schemas.
         let args = json_schema_regex(&params)?;
         calls.push(match xml {
             true => xml_call_regex(name, &params)?,
             false => {
-                let (key, id) = match family {
-                    Family::Llama3 => ("parameters", ""),
-                    Family::Mistral => ("arguments", r#"(?:, "id": "[a-zA-Z0-9]{9}")?"#),
-                    Family::Qwen3 => ("arguments", ""),
-                };
-                let name = escape(&json!(name).to_string());
-                format!(r#"\{{"name": {name}, "{key}": {args}{id}\}}"#)
+                let name_json = escape(&json!(name).to_string());
+                if family == Family::Inkling {
+                    // As the template writes it, compact. The message's name before the marker is
+                    // the caller's: Auto triggers at the marker, Required writes it.
+                    format!(
+                        r#"\{{"name":{name_json},"args":{args}\}}{}"#,
+                        escape("<|end_message|>")
+                    )
+                } else {
+                    let (key, id) = match family {
+                        Family::Llama3 => ("parameters", ""),
+                        Family::Mistral => ("arguments", r#"(?:, "id": "[a-zA-Z0-9]{9}")?"#),
+                        _ => ("arguments", ""),
+                    };
+                    format!(r#"\{{"name": {name_json}, "{key}": {args}{id}\}}"#)
+                }
             }
         });
     }
@@ -522,10 +632,33 @@ pub fn grammar(
         });
     }
     let call = format!("(?:{})", calls.join("|"));
+    if family == Family::Inkling {
+        // Each call is a message of its own. Auto triggers at the marker, after the message's
+        // name, and holds the body; a required call opens its message, named for its tool, from
+        // the first answer token, and more may follow.
+        if mode == Mode::Auto {
+            return Ok(Grammar {
+                trigger: Some(family.marker().into()),
+                pattern: call,
+            });
+        }
+        let (open, marker) = (escape("<|message_model|>"), escape(family.marker()));
+        let named: Vec<String> = (names.iter().zip(&calls))
+            .map(|(name, body)| format!("{open}{}{marker}{body}", escape(name)))
+            .collect();
+        let one = format!("(?:{})", named.join("|"));
+        return Ok(Grammar {
+            trigger: None,
+            pattern: match mode {
+                Mode::Required => format!("{one}+"),
+                _ => one,
+            },
+        });
+    }
     let pattern = match family {
         Family::Qwen3 => format!(r"\n{call}\n</tool_call>"),
-        Family::Llama3 => call,
         Family::Mistral => format!(r" ?\[{call}\]"),
+        _ => call,
     };
     let marker = escape(family.marker());
     Ok(match (mode, family) {
@@ -547,6 +680,22 @@ pub fn grammar(
             pattern: format!(r"\n{{0,2}}(?:{marker})?{pattern}"),
         },
     })
+}
+
+/// `schema`'s `properties`, and those of every object nested in it, in key order.
+fn sort_properties(schema: &mut Value) {
+    match schema {
+        Value::Object(o) => {
+            if let Some(Value::Object(props)) = o.get_mut("properties") {
+                let mut sorted: Vec<(String, Value)> = std::mem::take(props).into_iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                props.extend(sorted);
+            }
+            o.values_mut().for_each(sort_properties);
+        }
+        Value::Array(a) => a.iter_mut().for_each(sort_properties),
+        _ => {}
+    }
 }
 
 /// One tool's XML body, `<function=NAME>` through `</function>`.
@@ -672,6 +821,7 @@ pub fn family_for(arch: &str, config_override: Option<&str>) -> Option<Family> {
         "qwen2" | "qwen3" | "qwen3moe" | "qwen35" | "qwen35moe" => Some(Family::Qwen3),
         "llama" | "llama3" => Some(Family::Llama3),
         "mistral" => Some(Family::Mistral),
+        "inkling2" | "inkling2_loop" => Some(Family::Inkling),
         _ => None,
     }
 }
@@ -913,11 +1063,12 @@ mod tests {
         assert!(xml_body(qwen35));
     }
 
-    const BODIES: [(Family, bool); 4] = [
+    const BODIES: [(Family, bool); 5] = [
         (Family::Qwen3, false),
         (Family::Qwen3, true),
         (Family::Llama3, false),
         (Family::Mistral, false),
+        (Family::Inkling, false),
     ];
 
     fn tools() -> Vec<Value> {
@@ -963,6 +1114,20 @@ mod tests {
             (Family::Mistral, _) => {
                 format!("[TOOL_CALLS][{{\"name\": {name}, \"arguments\": {args}}}]")
             }
+            (Family::Inkling, _) => {
+                // The template's `dictsort` order.
+                let mut sorted: Vec<_> = args.as_object().unwrap().iter().collect();
+                sorted.sort_by_key(|(k, _)| *k);
+                let args: serde_json::Map<String, Value> = sorted
+                    .into_iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                let args = Value::Object(args);
+                format!(
+                    "<|message_model|>{}<|content_invoke_tool_json|>{{\"name\":{name},\"args\":{args}}}<|end_message|>",
+                    c.name
+                )
+            }
         }
     }
 
@@ -990,7 +1155,7 @@ mod tests {
                     if mode != Mode::Auto {
                         texts = vec![rendered.clone()];
                         // The control token the detokenizer may hide: the bare form passes too.
-                        if family != Family::Qwen3 {
+                        if !matches!(family, Family::Qwen3 | Family::Inkling) {
                             texts.push(rendered.replacen(family.marker(), "", 1));
                         }
                     }
@@ -1144,6 +1309,49 @@ mod tests {
                 let g = grammar(Family::Qwen3, std::slice::from_ref(&tool), xml, Mode::Auto);
                 assert!(unsupported(g), "{params} xml={xml}");
             }
+        }
+    }
+
+    /// Inkling 2's reply as its template lays a turn out (data/inkling2.jinja in larch-model): its
+    /// messages read by kind, as llama.cpp's parser (common/parsers/inkling.cpp) reads them.
+    #[test]
+    fn inkling_replies_read_by_message() {
+        let ink = |t: &str| parse(Family::Inkling, t, false);
+        let think = "<|message_model|><|content_thinking|>Need the weather.<|end_message|>";
+        let text = "<|message_model|><|content_text|>Checking.<|end_message|>";
+        let a = "<|message_model|>get_weather<|content_invoke_tool_json|>{\"name\":\"get_weather\",\"args\":{\"city\":\"Oslo\"}}<|end_message|>";
+        let b = "<|message_model|>now<|content_invoke_tool_json|>{\"name\":\"now\",\"args\":{}}<|end_message|>";
+        let p = ink(&format!("{think}{text}{a}{b}"));
+        assert_eq!(p.thinking.as_deref(), Some("Need the weather."));
+        assert_eq!(p.text_before, "Checking.");
+        assert_eq!(p.call, Some(call("get_weather", json!({"city": "Oslo"}))));
+        assert_eq!(p.later, [call("now", json!({}))]);
+        assert_eq!(p.error, None);
+        // Reasoning may come again after text; both parts join.
+        let p = ink(&format!(
+            "{think}{text}{think}<|message_model|><|content_text|>Done.<|end_message|>"
+        ));
+        assert_eq!(
+            p.thinking.as_deref(),
+            Some("Need the weather.\n\nNeed the weather.")
+        );
+        assert_eq!(
+            (p.text_before.as_str(), p.call),
+            ("Checking.\n\nDone.", None)
+        );
+        // Cut off at max_tokens inside its thinking.
+        let p = ink("<|message_model|><|content_thinking|>Still think");
+        assert_eq!(p.thinking.as_deref(), Some("Still think"));
+        assert_eq!(p.error, Some(ParseError::UnclosedThinking));
+        // A broken call, and text whose tags a detokenizer hid.
+        let p = ink("<|message_model|>x<|content_invoke_tool_json|>{\"name\":");
+        assert!(
+            matches!(p.error, Some(ParseError::InvalidJson { .. })),
+            "{p:?}"
+        );
+        assert_eq!(ink("plain answer").text_before, "plain answer");
+        for arch in ["inkling2", "inkling2_loop"] {
+            assert_eq!(family_for(arch, None), Some(Family::Inkling));
         }
     }
 }
