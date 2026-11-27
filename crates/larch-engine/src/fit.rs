@@ -522,15 +522,16 @@ pub(crate) fn expert_residency(
 
 /// What a split layer costs a decode step over the same layer whole on the device, in µs at 1, 4
 /// and 8 rows: its experts run unfused (gate, up, silu_mul and down through `mmvq_id_mixed`) where
-/// a whole layer's run fused (`fused_moe_gate_up`, `fused_moe_down`).
-// ponytail: an estimate until fused_bench measures it on the 5070 Ti (G3, 27 Nov); re-measure on
-// another card.
-pub(crate) const SPLIT_LAYER_US: [f64; 3] = [40.0, 80.0, 120.0];
+/// a whole layer's run fused (`fused_moe_gate_up`, `fused_moe_down`). Measured on the RTX 5070 Ti,
+/// 27 Nov 2026, at the hybrid MoE target's shapes: fused_bench's unfused less fused gate_up and down
+/// (Q3_K, Q4_K) plus `mmvq_id_mixed` with no cold pair less `mmvq_id` (bench/results'
+/// 35b-expert-spill g1.cu). Re-measure on another card.
+pub(crate) const SPLIT_LAYER_US: [f64; 3] = [11.3, 18.1, 23.1];
 /// What one cold (row, expert) pair costs a decode step, in µs at 1, 4 and 8 rows: its gate, up and
-/// down read in place from page-locked host memory over the bus, inside `mmvq_id_mixed`.
-// ponytail: an estimate until G1 measures it on the 5070 Ti over PCIe 5.0 (27 Nov); re-measure on
-// another card or bus.
-pub(crate) const COLD_PAIR_US: [f64; 3] = [150.0, 150.0, 150.0];
+/// down read in place from page-locked host memory over the bus, inside `mmvq_id_mixed`. Measured
+/// with g1.cu on the RTX 5070 Ti over PCIe 5.0, 27 Nov 2026: one cold pair in the step against
+/// none (pairs add about linearly, 350 µs each at 4 and 8 rows). Re-measure on another card or bus.
+pub(crate) const COLD_PAIR_US: [f64; 3] = [359.9, 369.4, 307.1];
 
 /// The routed experts' bytes a per-expert load can keep on the device under `reserve`: the room
 /// less the weights without their experts and each layer's three 256-byte-aligned slot tables.

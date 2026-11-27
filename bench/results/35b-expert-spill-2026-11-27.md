@@ -57,6 +57,64 @@ ncm 5 (14,890 MiB); `-np 8` is 3 MiB past at ncm 6 (15,012) and fits at ncm 7 (1
   settings that fit; at 16 chats llama.cpp's faster settings run past its reported memory, as ncm 3 does at W4@4.
 - **W4@1:** ahead of all three (last night's cells).
 
+## G: the gates (GO)
+
+One GPU hold after L (`g1-g3.txt`). **G1** (`g1.cu`): one layer at m13's expert shapes, 100 of 256 experts cold in a
+wrapped page-locked range, the split layer's routed experts as the model runs them (`mmvq_id_mixed` gate and up,
+`silu_mul`, `mmvq_id_mixed` down, weighted), captured in a graph over 512 rotating id sets, best of four replays; µs a
+layer:
+
+| rows | cold a row | resident (`mmvq_id`) | split | split gate+up | split down |
+|---|---|---|---|---|---|
+| 1 | 0 | 43.0 | 43.5 | 25.8 | 17.3 |
+| 1 | 1 | 43.7 | 403.4 | 361.8 | 42.0 |
+| 1 | 2 | 42.1 | 741.9 | 648.4 | 102.1 |
+| 4 | 0 | 123.8 | 127.5 | 78.8 | 46.4 |
+| 4 | 1 in the step | 124.7 | 496.9 | 404.3 | 101.3 |
+| 4 | 1 | 125.7 | 1536.4 | 1233.8 | 292.9 |
+| 8 | 0 | 234.2 | 239.6 | 149.4 | 86.3 |
+| 8 | 1 in the step | 233.2 | 546.7 | 423.0 | 125.5 |
+| 8 | 1 | 236.7 | 3083.2 | 2398.9 | 668.4 |
+
+A cold pair costs **359.9, 369.4 and 307.1 µs** at 1, 4 and 8 rows (one in the step against none), and pairs add about
+linearly (about 350 µs each). Cold gate and up dominate (Q3_K, 512 rows of 2,048 a matrix: about 3 GB/s over the bus);
+cold down (Q4_K, 2,048 rows of 512) reads at about 24 GB/s. The brief's lever for a dominant cold down (the cold
+tensor's own alignment in place of `a8 = false`) does not apply: down does not dominate, and Q3_K's decoder does not take
+8-byte loads. The table lookup costs 0.5 to 5.4 µs a layer with no cold pair.
+
+**G3** (`fused_bench --rows 1,4,8`, m13's q3_k/q4_k layer): unfused less fused gate_up and down a layer is 10.8, 14.4 and
+17.7 µs; with G1's table lookup, `SPLIT_LAYER_US` = 11.3, 18.1, 23.1. Fused gate_up + down a layer: 36.6, 115.4 and
+222.1 µs.
+
+**G2** (K3's test, the card's figures: 718 experts' bytes on the host):
+
+| cap | layers split | experts on the host | host share of routed pairs | cold pairs a step at 1, 4, 8 rows |
+|---|---|---|---|---|
+| 6 | 6 | 718 | 0.246 % | 0.79, 3.15, 6.30 |
+| 8 | 8 | 718 | 0.124 % | 0.40, 1.58, 3.17 |
+| 10 | 10 | 718 | 0.077 % | 0.25, 0.99, 1.97 |
+| 12 | 12 | 718 | 0.054 % | 0.17, 0.69, 1.39 |
+| 16 | 16 | 718 | 0.035 % | 0.11, 0.44, 0.89 |
+| 20 | 20 | 718 | 0.026 % | 0.08, 0.34, 0.68 |
+| uncapped | 37 | 718 | 0.018 % | 0.06, 0.23, 0.47 |
+
+**GO**: step(rows) = base + 4 × fused + N × `SPLIT_LAYER_US` + cold pairs × `COLD_PAIR_US`, base = 5.11, 9.2 and 15.0 ms:
+
+| cap | 1-row step | 4-row step | 8-row step |
+|---|---|---|---|
+| 6 | 5.608 | 10.934 | 17.962 |
+| 8 | 5.490 | 10.392 | 17.046 |
+| 12 | 5.455 | 10.135 | 16.591 |
+| **15 (chosen)** | **5.470** | **10.113** | **16.535** |
+| 16 | 5.478 | 10.115 | 16.530 |
+| 20 | 5.513 | 10.149 | 16.558 |
+| uncapped (37) | 5.697 | 10.417 | 16.886 |
+
+The lowest 4-row step whose 1-row step is at most 6.2 ms is cap 15: **10.11 ms, under 12.0: GO**. The plan's own cost at
+4 seats picks 15 too (11 at 1 row, 16 at 8). Against today's 6.81, 13.8 and 24.9 ms that predicts about +25 % at one
+row and +36 % at four, if nothing else moves. Constants in `fit.rs`: `SPLIT_LAYER_US` [11.3, 18.1, 23.1],
+`COLD_PAIR_US` [359.9, 369.4, 307.1].
+
 ## Method
 
 - **Machine and order.** One session. Every GPU job (runs, ctest, benches, GPU tests, parity) is its own process in one
