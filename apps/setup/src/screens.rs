@@ -864,8 +864,14 @@ impl Setup {
                     .items_center()
                     .gap(u(16.))
                     .py(u(14.))
-                    .child(div().text_color(th.ink2).child("Install in"))
-                    .child(mono(p.root.display().to_string()).text_size(u(13.))),
+                    .child(div().flex_none().text_color(th.ink2).child("Install in"))
+                    // min_w_0 lets a long path wrap inside the card instead of running past it.
+                    .child(
+                        mono(p.root.display().to_string())
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(u(13.)),
+                    ),
             );
         }
         let foot = if modify {
@@ -1445,6 +1451,7 @@ impl Setup {
                 .child(
                     div()
                         .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .child(
