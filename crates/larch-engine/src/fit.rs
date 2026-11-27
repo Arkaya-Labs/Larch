@@ -1257,7 +1257,9 @@ mod tests {
         };
         let plan = |b: Backend, free: u64, counts: &[u64]| {
             let d = card(b, free, 0);
-            expert_residency(&d, weights, &experts, counts, m, &c, 8192, 0.85, reserve, 0, 1)
+            expert_residency(
+                &d, weights, &experts, counts, m, &c, 8192, 0.85, reserve, 0, 1,
+            )
         };
         let room = free
             - (512 << 20)
@@ -1331,8 +1333,14 @@ mod tests {
         assert!(held <= left, "{held} > {left}");
         assert!(share(&r) < 0.005, "{}", share(&r));
         // No histogram, or an even one, keeps whole layers.
-        assert_eq!(capped_split(&experts, &vec![5; 40 * 256], 256, left, 8), None);
-        assert_eq!(cheapest_split(&experts, &vec![0; 40 * 256], m, left, 4, [60.0, 150.0]), None);
+        assert_eq!(
+            capped_split(&experts, &vec![5; 40 * 256], 256, left, 8),
+            None
+        );
+        assert_eq!(
+            cheapest_split(&experts, &vec![0; 40 * 256], m, left, 4, [60.0, 150.0]),
+            None
+        );
         // 60 us a split layer and 150 us a cold pair at 4 rows.
         let r = cheapest_split(&experts, &h.counts, m, left, 4, [60.0, 150.0]).unwrap();
         assert!((6..=20).contains(&split(&r)), "{}", split(&r));
