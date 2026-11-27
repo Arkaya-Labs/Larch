@@ -1283,21 +1283,14 @@ pub(crate) fn hybrid_slots(seats: u32) -> u32 {
 /// hybrid (`slots` state slots) whose experts partly sit in host memory (`in_ram`), planned for
 /// `planned` slots: when it asks for more slots than the load holds, or for fewer than its host
 /// layers pay for. Elsewhere the slots grow live from free memory ([`Engine::grow_seats`]) or cost
-/// no host layer.
-/// Where the loader picks the expert cache by seats (`flips`: CUDA, `LARCH_EXPERT_CACHE`
-/// unset), many chats ([`MANY_SEATS`] or more) also flip it, a plan of its own.
-fn replan_due(want: u32, slots: u32, in_ram: bool, planned: Option<u32>, flips: bool) -> bool {
-    let many = |n| n >= MANY_SEATS;
-    slots > 0
-        && in_ram
-        && planned.is_some_and(|p| want > slots || want < p || (flips && many(want) != many(p)))
+/// no host layer. Seats pick no other plan: only `LARCH_EXPERT_CACHE` takes the expert cache.
+fn replan_due(want: u32, slots: u32, in_ram: bool, planned: Option<u32>) -> bool {
+    slots > 0 && in_ram && planned.is_some_and(|p| want > slots || want < p)
 }
 
-/// The state slots a hybrid's many-chats plan pays for, with the expert cache where a route
-/// histogram places experts (the loader's `cache`), else whole layers and the prefill pool; fast
-/// mode plans for one. 5070 Ti, 35B, 11 Nov, 3 alternating rounds: 4 chats 169 against 126 tok/s
-/// (TTFT p50 264 against 811 ms), 1 chat 66 against 98. A load that already holds this many
-/// never switches up ([`Demand::seats`]).
+/// The state slots a hybrid's many-chats plan pays for, with whole host layers and the prefill
+/// pool (the expert cache only where `LARCH_EXPERT_CACHE` asks: the loader's `cache`); fast mode
+/// plans for one. A load that already holds this many never switches up ([`Demand::seats`]).
 pub(crate) const MANY_SEATS: u32 = 4;
 
 /// Requests waiting on full seats this long switch a fast plan to many chats.
@@ -3883,9 +3876,7 @@ impl Engine {
     fn replan_due(&self, want: u32) -> bool {
         let l = self.loaded.as_ref().expect("loaded engine");
         let in_ram = l.info.class.experts_in_ram;
-        let flips = l.info.caps.backend == Backend::Cuda
-            && std::env::var_os("LARCH_EXPERT_CACHE").is_none();
-        replan_due(want, l.model.state_slots(), in_ram, l.seats_planned, flips)
+        replan_due(want, l.model.state_slots(), in_ram, l.seats_planned)
     }
 
     /// Queues a reload with the plan's seats as `partial` asks and returns its reply; None when
@@ -9029,11 +9020,7 @@ mod tests {
         asked: Option<u32>,
         auto: Option<PathBuf>,
     ) -> (Loaded, EffectiveConfig, u32, crate::Ledger) {
-        let path = std::env::temp_dir().join(format!(
-            "larch-fake-cuda-{before}-{forced:?}-{:?}-{}.gguf",
-            std::thread::current().id(),
-            std::process::id()
-        ));
+        let path = fake_cuda_path(before, forced);
         std::fs::write(&path, tiny::gguf(Arch::Qwen35Moe, 3)).unwrap();
         let mut opts = EngineOptions::new(path.clone(), CPU);
         opts.max_context = tiny::CTX;
@@ -9072,6 +9059,15 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         let (n, l) = (host.load(Ordering::Relaxed), *ledger.lock().unwrap());
         (loaded.expect("the load fits"), cfg, n, l)
+    }
+
+    /// The model file [`fake_cuda_seats`] writes and loads for `before` and `forced`.
+    fn fake_cuda_path(before: u64, forced: Option<u32>) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "larch-fake-cuda-{before}-{forced:?}-{:?}-{}.gguf",
+            std::thread::current().id(),
+            std::process::id()
+        ))
     }
 
     /// (fake props at `before`, the tiny hybrid's config, the weight bytes its plan places on the
@@ -9151,33 +9147,51 @@ mod tests {
         assert_eq!(plan(bytes + one, Some(layer), None).0, 0, "resident");
     }
 
-    /// Through the real loader on a fake CUDA card: a many-chats load (4 seats asked) with no
-    /// route histogram plans whole layers with the stream pool, as a one-chat load does: a card a
-    /// layer short of the weights and four slots moves one layer without the pool and two with it.
-    /// Its expert cache would place experts only from a histogram, and without one it kept whole
-    /// layers and no pool (5070 Ti, the hybrid MoE target, W4@8, 26 Nov: prompt chunks beside
-    /// decode rows on the CPU, 472 ms against 130 with the pool).
+    /// Through the real loader on a fake CUDA card: a many-chats load (4 seats asked) plans whole
+    /// layers with the stream pool, as a one-chat load does, with or without a recorded route
+    /// histogram beside the model: a card a layer short of the weights and four slots moves one
+    /// layer without the pool and two with it. The expert cache (only `LARCH_EXPERT_CACHE` takes
+    /// it) ran slower there (5070 Ti, the hybrid MoE target, W4@8: with no histogram it kept no
+    /// pool, prompt chunks beside decode rows 472 ms against 130, 26 Nov; from a recorded one
+    /// 188.5 tok/s against 237.1, 27 Nov).
     #[test]
-    fn a_many_chats_load_without_a_histogram_keeps_the_stream_pool() {
+    fn a_many_chats_load_keeps_whole_layers_and_the_stream_pool() {
+        use larch_model::{Histogram, MoeCfg};
         let (props, c, bytes, l, slot) = fake_cuda_terms();
         let need = |beside, seats| {
             crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
         };
         let four = need(reserve_at(&l, slot, 4), 4) + crate::FREE_SWING;
-        let g = larch_model::gguf::Gguf::parse(&tiny::gguf(Arch::Qwen35Moe, 3)).unwrap();
+        let file = tiny::gguf(Arch::Qwen35Moe, 3);
+        let g = larch_model::gguf::Gguf::parse(&file).unwrap();
         let layer: u64 = (g.tensors.iter())
             .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
             .map(|t| t.bytes)
             .sum();
-        let plan = |pool| {
+        let short = bytes - layer + four;
+        let m = MoeCfg::from_gguf(&g, c.arch).unwrap().unwrap();
+        let mut hot = Histogram::uniform(file.len() as u64, c.n_layers, m.experts);
+        hot.counts[0] = 1;
+        let hist = Histogram::path(&fake_cuda_path(short, None));
+        let plan = |pool, recorded: bool| {
+            if recorded {
+                hot.write(&hist).unwrap();
+            }
             crate::FAKE_POOL.set(pool);
-            let short = bytes - layer + four;
             let (loaded, _, n, _) = fake_cuda_seats(short, |_, _| 1 << 30, None, Some(4), None);
             crate::FAKE_POOL.set(None);
+            if recorded {
+                std::fs::remove_file(&hist).unwrap();
+            }
             (n, loaded.model.state_slots())
         };
-        assert_eq!(plan(Some(0)), (1, 4), "no pool");
-        assert_eq!(plan(Some(layer)), (2, 4), "the pool's layer");
+        assert_eq!(plan(Some(0), false), (1, 4), "no pool");
+        assert_eq!(plan(Some(layer), false), (2, 4), "the pool's layer");
+        assert_eq!(
+            plan(Some(layer), true),
+            (2, 4),
+            "a histogram beside the model"
+        );
     }
 
     /// Through the real loader on a fake CUDA card: a host layer moved without the pool that
@@ -9251,29 +9265,21 @@ mod tests {
     #[test]
     fn only_a_differing_plan_replans() {
         use super::replan_due;
-        assert!(replan_due(4, 2, true, Some(1), true));
-        assert!(replan_due(1, 4, true, Some(4), true));
+        assert!(replan_due(4, 2, true, Some(1)));
+        assert!(replan_due(1, 4, true, Some(4)));
         assert!(
-            !replan_due(2, 2, true, Some(1), true),
+            !replan_due(2, 2, true, Some(1)),
             "the plan for one chat already holds 2"
         );
         assert!(
-            !replan_due(4, 2, false, Some(1), true),
+            !replan_due(4, 2, false, Some(1)),
             "no host experts: the slots grow live"
         );
-        assert!(!replan_due(4, 0, true, Some(1), true), "no recurrent state");
+        assert!(!replan_due(4, 0, true, Some(1)), "no recurrent state");
+        assert!(!replan_due(4, 2, true, None), "a forced or custom load");
         assert!(
-            !replan_due(4, 2, true, None, true),
-            "a forced or custom load"
-        );
-        assert!(
-            replan_due(4, 4, true, Some(1), true),
-            "many chats take the expert cache"
-        );
-        assert!(!replan_due(8, 8, true, Some(4), true), "already many chats");
-        assert!(
-            !replan_due(4, 8, true, Some(1), false),
-            "off CUDA or with a forced cache, crossing 4 seats changes no plan"
+            !replan_due(4, 4, true, Some(1)),
+            "crossing 4 seats on slots it holds picks no other plan"
         );
     }
 
