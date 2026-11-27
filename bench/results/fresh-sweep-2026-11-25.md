@@ -27,10 +27,14 @@ the GPU log is `fresh-sweep-2026-11-25-gpu-log.csv`.
    TTFT p99 is within noise.
 6. **vs vLLM** (m1; vLLM runs AWQ INT4 weights, *different weights* from the GGUF): on W2 chats larch is −6.2 % (at 4)
    and −10.6 % (at 8) in aggregate, with TPOT p99 6–11 % higher. W1 at 1 is within noise on aggregate (−3.1 %).
-   TTFT p99 is higher in all three rows (+6 % to +269 %; the W1 figure is one 859 ms cold first turn in larch r1).
+   TTFT p99 is higher in all three rows (+6 % to +269 %). The W1 figure is the mean of two runs and is set by one
+   859 ms cold first turn in larch r1; r2 alone (205 ms) is about +42 %.
    vLLM's own GGUF path is 1.4–4.8× below larch in aggregate on every row. The W4 vLLM rows ran, but `compare` refuses them
    (`n_ctx_seq` 8192 vs 2560, as in October), so they are shown as detail only, not as results.
 7. **m13 vs llama.cpp** (same file; llama.cpp with `--n-cpu-moe 3`, searched; larch with dev defaults): a clear loss.
+   Superseded by [`35b-final-2026-11-26.md`](35b-final-2026-11-26.md): larch's split was not recorded here, and
+   `--n-cpu-moe 3` fits only by spilling past llama.cpp's own reported free memory into system memory (measured
+   26 Nov from its load log).
    Aggregate −9.9 % at 1 and −31.6 % at 4; TPOT p99 +2.9 % and +71.1 %; TTFT p99 +68.5 % and +93.9 %. All outside noise.
 8. Thermals: max 71 °C; no thermal or HW-slowdown reason (0x20, 0x40, 0x8, 0x80) in any of the 729 samples; no pause.
 
@@ -38,13 +42,15 @@ the GPU log is `fresh-sweep-2026-11-25-gpu-log.csv`.
 
 > On one RTX 5070 Ti (16 GB, WSL2) on 25 November 2026, we compared larch (dev `488cd91`) with llama.cpp b12723,
 > Ollama 0.40.18 and vLLM 0.34.0, using the same GGUF files for llama.cpp and Ollama and AWQ INT4 weights for vLLM.
-> On 200 independent prompts with exact output lengths, larch's aggregate throughput on two 7–8B models was 5–7 %
-> above llama.cpp's at 4 concurrent requests, 17 % above at 8 and 31–36 % above at 16, within noise at 1, while its
+> On 200 independent prompts with exact output lengths, larch's aggregate throughput on two 7–8B models was about 5–7 %
+> above llama.cpp's at 4 concurrent requests (4.7–6.5 %), 17 % above at 8 and 31–36 % above at 16, within noise at 1, while its
 > p99 time to first token was 7–35 % higher in five of the eight rows. In llama.cpp's fixed pp512/tg128 shape larch
 > was within noise at 1 and 4 sequences and 10–16 % slower at 8 and 16. Over localhost HTTP with natural end of
 > sequence, larch's aggregate was 46–76 % above Ollama's at 8 and 16 concurrent requests and within noise on a single
-> 12-turn chat. Against vLLM with AWQ weights larch was 6–11 % lower in aggregate on multi-turn chats at 4 and 8
-> concurrent requests, and on the 35B mixture-of-experts model m13 it was 10 % and 32 % below llama.cpp at 1 and 4.
+> 12-turn chat. Against vLLM with AWQ weights (vLLM over HTTP, larch in process) larch was 6–11 % lower in aggregate on multi-turn chats at 4 and 8
+> concurrent requests, and on the 35B mixture-of-experts model m13 it was 10 % and 32 % below llama.cpp at 1 and 4
+> (larch's defaults against llama.cpp's tuned `--n-cpu-moe 3`, which spills into system memory; superseded by the
+> 26 November report).
 
 ## Headline (medians; % = larch vs the baseline; "noise" = under 2 % or under either engine's run-to-run spread)
 
@@ -162,7 +168,7 @@ different weights (AWQ).
 | CPU, RAM | AMD Ryzen 7 9800X3D, 8 logical CPUs and 23 GiB visible to WSL |
 | OS | Ubuntu 26.04.1 LTS on WSL2, kernel 6.18.33.2-microsoft-standard-WSL2 |
 | larch | dev `488cd912432011773a432e706cee5223397fe402`. Release build `cargo build --release --locked -p larch --no-default-features --bin larch --example serve_bench`: CUDA backend, the default kernel list, rustc 1.99.0, nvcc 13.3.73, g++ 14.3.0. `larch` sha256 `6d683e09aea3…`, equal to `build` in all 121 JSONs it wrote (in process, plus the bench client of every HTTP run); `serve_bench` sha256 `75488ee2d587…` |
-| Engine settings | dev defaults (no `LARCH_*` variable set). m13: dev's own MoE placement (`larch bench` does not log the split it chose) |
+| Engine settings | dev defaults (no `LARCH_*` variable set). m13: dev's own MoE placement, not logged in this sweep (`LARCH_FIT_DIAGNOSTICS=1` would have printed it) |
 | llama.cpp | b12723 (`abca6920035e`, clean checkout of the tag), `-DGGML_CUDA=ON`, GGML_NATIVE (120a-real), via `baseline.py --llama-src`; `llama-serve-bench` build `d28ab07fd41b…` (this branch's driver fixes, see below). Searched flags (`baseline.py flags`): m1 `-t 4 -b 2048 -ub 1024`, m5 `-t 8 -b 2048 -ub 1024`, m13 `-t 4 -b 1024 -ub 1024 --n-cpu-moe 3`, all with `-ngl 99 -fa on -ctk f16 -ctv f16` |
 | Ollama | 0.40.18 (its bundled llama-server, CUDA backend), its own model store; `OLLAMA_NUM_PARALLEL=N`, `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=f16`, `OLLAMA_KEEP_ALIVE=-1` (`baseline.py ollama-serve`), on port 11435 |
 | vLLM | 0.34.0, torch 2.14.0, transformers 5.22.2, vllm-gguf-plugin 0.0.5 with gguf 0.19.0, Python 3.12.14, uv 0.12.10. AWQ: m1's base weights in AWQ INT4 from the hugging-quants organization, revision `db1f81ad4b8c7e39777509fac66c652eb0a52f91` (October's), MarlinLinearKernel, FLASH_ATTN. GGUF: `m1.gguf` with `--tokenizer <awq>`, the plugin's GGUFModelLoader, FLASH_ATTN |
@@ -318,7 +324,7 @@ bench rule was changed for them.
 | vLLM W4 as results | they ran (detail below), but `compare` refuses every W4 pair: `n_ctx_seq differs: 8192 vs 2560` |
 | `compare` on the Ollama rows | refused by design: m1 W1 r1 "hash or length off the manifest" (natural EOS); m1 W4 at 8 r1 "not one of wsl5070's rows (chat.jsonl at 8, cache_prompt True)" |
 | vLLM `/tokenize` vocabulary check | replaced by token-id prompts plus the per-turn prompt-token check (see protocol differences) |
-| m13 larch placement record | `larch bench` does not print the MoE split it chose; finding it would need an engine log flag, out of scope |
+| m13 larch placement record | not set for this sweep: `LARCH_FIT_DIAGNOSTICS=1` prints it (`larch_host_experts_plan`), and the 26 Nov report records it |
 | W2 at 4 / W5 / W7 vs llama.cpp or Ollama, Ollama or vLLM on m5/m13, cache-on rows | not part of this sweep's brief |
 | `baseline.py check` row completeness | it expects the machine's full row set under baseline.py's own file names; this sweep runs the brief's subset with October's names. Its gate part passes on the committed files (the 8 lines above) |
 | `cargo fmt`, `clippy`, `cargo test` | no Rust changed |
@@ -372,8 +378,11 @@ CARGO_TARGET_DIR=$T CARGO_BUILD_JOBS=8 nice -n 19 cargo build --release --locked
 nice -n 19 $BL --llama-src <llama.cpp-b12723 checkout> build
 $BL models; $BL --alias m13 models; $BL --alias m13 manifest
 
-$T/release/larch parity -m $M/m1.gguf --ref <m1-cublas-ub32.jsonl> --bound 0.0880593441491973 --margin 0.703125 --mode all
-$T/release/larch parity -m $M/m5.gguf --ref <m5-cublas-ub32.jsonl> --bound 0.06534985856703847 --margin 1.234375 --mode all
+# the oracle dumps' key renamed in copies (see Parity, "Reference header"); every other byte checked equal
+sed '1s/^{"vivace_oracle":1,/{"larch_oracle":1,/' <m1-cublas-ub32.jsonl> > <m1-ref>; cmp <(tail -n +2 <m1-cublas-ub32.jsonl>) <(tail -n +2 <m1-ref>)
+sed '1s/^{"vivace_oracle":1,/{"larch_oracle":1,/' <m5-cublas-ub32.jsonl> > <m5-ref>; cmp <(tail -n +2 <m5-cublas-ub32.jsonl>) <(tail -n +2 <m5-ref>)
+$T/release/larch parity -m $M/m1.gguf --ref <m1-ref> --bound 0.0880593441491973 --margin 0.703125 --mode all
+$T/release/larch parity -m $M/m5.gguf --ref <m5-ref> --bound 0.06534985856703847 --margin 1.234375 --mode all
 
 $BL --alias <m> flags
 $BL --alias <m> --row fixed run    # the gate

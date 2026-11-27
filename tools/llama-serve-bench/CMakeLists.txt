@@ -19,7 +19,10 @@ FetchContent_MakeAvailable(llama)
 if(FETCHCONTENT_SOURCE_DIR_LLAMA)
     execute_process(COMMAND git -C "${FETCHCONTENT_SOURCE_DIR_LLAMA}" describe --tags --exact-match --dirty
                     OUTPUT_VARIABLE LLAMA_TAG OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FETCHCONTENT_SOURCE_DIR_LLAMA}/.git/HEAD")
+    # A worktree's or submodule's .git is a file; its HEAD lives in the git dir git names.
+    execute_process(COMMAND git -C "${FETCHCONTENT_SOURCE_DIR_LLAMA}" rev-parse --absolute-git-dir
+                    OUTPUT_VARIABLE LLAMA_GIT_DIR OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LLAMA_GIT_DIR}/HEAD")
 endif()
 
 add_executable(llama-serve-bench main.cpp)
