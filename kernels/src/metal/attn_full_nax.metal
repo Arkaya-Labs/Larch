@@ -25,7 +25,7 @@ instantiate_kernel("vv_attn_full_nax64", attention_nax, half, 64, 32, 64, 64, 4,
 // against f16 (MLX's mixed mma). Masked scores take finite_min, so a dead row (past the tile's rows, whose Q loads
 // as zeros) stays finite and is never stored. Tile x counts the sequences' BQ-row tiles in order; the host launches
 // an upper bound, and the tiles past the last return at once. head_dim is exactly BD.
-template <int BD, int WM, int WN>
+template <int BD, int WM, int WN, bool HM>
 [[kernel, max_total_threads_per_threadgroup(WM * WN * 32)]] void attn_paged_nax(
     const device uchar* q [[buffer(0)]], const device half* kp [[buffer(1)]], const device half* vp [[buffer(2)]],
     const device uchar* bt [[buffer(3)]], const device uchar* lens [[buffer(4)]],
@@ -39,7 +39,7 @@ template <int BD, int WM, int WN>
   using frag_t = stile_t::NAXFrag_t;
   constexpr short kEPF = frag_t::kElemsPerFrag, kRowsPT = otile_t::kRowsPerThread;
 
-  uint t = tg.x, s = 0, first = 0, len = 0;
+  uint t = HM ? tg.y : tg.x, s = 0, first = 0, len = 0;
   for (; s < a.seqs; ++s, first += len, t -= (len + BQ - 1) / BQ) {
     len = uint(max(*(const device int*)(lens + s * a.lens_rs), 0));
     if (t < (len + BQ - 1) / BQ) break;
@@ -47,7 +47,7 @@ template <int BD, int WM, int WN>
   // Past the last tile, or past q's rows: lens that sum past them are a caller bug the host cannot see.
   if (s == a.seqs || first + t * BQ >= a.q_rows) return;  // the whole threadgroup
   const uint j0 = t * BQ, rows = min(min(uint(BQ), len - j0), a.q_rows - first - j0);
-  const uint h = tg.y, kvh = h / (a.heads / a.kv_heads);
+  const uint h = HM ? tg.x : tg.y, kvh = h / (a.heads / a.kv_heads);
   const int pos0 = *(const device int*)(start + s * a.start_rs) + int(j0), kend = pos0 + int(rows);  // keys [0, kend)
   const device int* table = (const device int*)(bt + s * a.bt_rs);
 
@@ -189,8 +189,15 @@ template <int BD, int WM, int WN>
     Otile.store(O, o_ld);
 }
 // head_dim 64 and 128 without a split, 256 split in 4 (MLX's wide-head shape): 64 q rows, 4 simdgroups at 64 and
-// 128, 32 rows in 2 x 4 at 256 (16 KB of score exchange).
-template [[host_name("vv_attn_paged_nax64")]] kernel decltype(attn_paged_nax<64, 4, 1>) attn_paged_nax<64, 4, 1>;
-template [[host_name("vv_attn_paged_nax128")]] kernel decltype(attn_paged_nax<128, 4, 1>) attn_paged_nax<128, 4, 1>;
-template [[host_name("vv_attn_paged_nax256")]] kernel decltype(attn_paged_nax<256, 2, 4>) attn_paged_nax<256, 2, 4>;
+// 128, 32 rows in 2 x 4 at 256 (16 KB of score exchange). HM (the _hm kernels, LARCH_METAL_ATTN_NAX_HM) swaps the
+// grid so x is the q head: the threadgroups that run together then read every kv head's half of the same pool slots,
+// for A/B timing at long contexts (1.5x MLX at 32K positions with x the tile, M5, 27 Nov).
+#define PAGED_NAX(name, bd, wm, wn, hm)                                                     \
+  template [[host_name(name)]] kernel decltype(attn_paged_nax<bd, wm, wn, hm>) attn_paged_nax<bd, wm, wn, hm>;
+PAGED_NAX("vv_attn_paged_nax64", 64, 4, 1, false)
+PAGED_NAX("vv_attn_paged_nax128", 128, 4, 1, false)
+PAGED_NAX("vv_attn_paged_nax256", 256, 2, 4, false)
+PAGED_NAX("vv_attn_paged_nax64_hm", 64, 4, 1, true)
+PAGED_NAX("vv_attn_paged_nax128_hm", 128, 4, 1, true)
+PAGED_NAX("vv_attn_paged_nax256_hm", 256, 2, 4, true)
 #pragma clang diagnostic pop

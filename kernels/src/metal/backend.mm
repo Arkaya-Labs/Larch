@@ -82,9 +82,11 @@ struct kernels {
 //   vv_mmvq_id1n, which keeps all 32 lanes busy; 0 keeps vv_mmvq_id1, for A/B timing.
 // LARCH_METAL_ATTN_NAX (default 1): flash prefill at head_dim 64, 128 or 256 takes vv_attn_paged_nax (MLX's NAX
 //   attention over the paged pool, macOS 26.2 and the tensor API); 0 keeps vv_attn_flash, for A/B timing.
+// LARCH_METAL_ATTN_NAX_HM (default 0): 1 launches vv_attn_paged_nax with the q head as grid x (the _hm kernels),
+//   for A/B timing at long contexts.
 struct feed {
   bool concurrent = true, commit = true, profile = false, simd_kernels = true, moe_prefetch = true, gdn_wide = true,
-       moe_narrow = true, gdn_chunk = true, attn_nax = true;
+       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false;
 };
 static constexpr uint32_t first_commit = 32, commit_every = 128;
 struct mtl_device : larch_device {
@@ -164,7 +166,8 @@ static larch_status read_feed(feed* f) {
                                  std::pair{"LARCH_METAL_GDN_WIDE", &f->gdn_wide},
                                  std::pair{"LARCH_METAL_MOE_NARROW", &f->moe_narrow},
                                  std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk},
-                                 std::pair{"LARCH_METAL_ATTN_NAX", &f->attn_nax}}) {
+                                 std::pair{"LARCH_METAL_ATTN_NAX", &f->attn_nax},
+                                 std::pair{"LARCH_METAL_ATTN_NAX_HM", &f->attn_nax_hm}}) {
     const char* c = std::getenv(name);
     if (c && std::strcmp(c, "0") && std::strcmp(c, "1"))
       return vv_fail(LARCH_ERR_INVALID_ARG, std::string(name) + " must be 0 or 1");
@@ -478,7 +481,8 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
         if (!from) return vv_fail(LARCH_ERR_DRIVER, std::string("larch_nax.metallib: ") + err.localizedDescription.UTF8String);
         k.attn_full_nax = opt("vv_attn_full_nax64", 32 * ATTN_FULL_SG, dense);
         for (int wide = 0; wide < 3 && fed.attn_nax; ++wide)  // 4, 4 and 2 x 4 simdgroups (attn_full_nax.metal)
-          k.attn_paged_nax[wide] = opt("vv_attn_paged_nax" + std::to_string(64 << wide), wide == 2 ? 256 : 128);
+          k.attn_paged_nax[wide] = opt("vv_attn_paged_nax" + std::to_string(64 << wide) + (fed.attn_nax_hm ? "_hm" : ""),
+                                       wide == 2 ? 256 : 128);
         from = lib;
       }
     }
@@ -1607,8 +1611,9 @@ void attend(larch_stream* vs, const attn_view& a, const larch_kv_pool* pool, uin
     if (const id<MTLComputePipelineState> nax = ks(vs).attn_paged_nax[wide];
         nax && pool->head_dim == (64u << wide) && !(a.q.rs % 2) && !(a.out.rs % 2)) {
       const int64_t tile = wide == 2 ? 32 : 64;
-      groups(stream, nax, bufs, args, (a.q.rows + tile - 1) / tile + a.table.rows, wide == 2 ? 256 : 128,
-             a.q.shape[1]);
+      const int64_t tiles = (a.q.rows + tile - 1) / tile + a.table.rows;
+      const bool hm = stream->dev->fed.attn_nax_hm;
+      groups(stream, nax, bufs, args, hm ? a.q.shape[1] : tiles, wide == 2 ? 256 : 128, hm ? tiles : a.q.shape[1]);
       return;
     }
     const int64_t tile = wide == 2 && flash == ks(vs).attn_flash[wide] ? ATTN_FLASH_ROWS256 : ATTN_FLASH_ROWS;
