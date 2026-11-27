@@ -159,6 +159,35 @@ B = `larch 0.0.0 (1b29835)`, sha256 `b202456c…`, clean tree. One run, W4@4 `--
 - **Result.** 275.9 tok/s, TTFT p50 171 ms and p99 708, TPOT p50 12.60 and p99 16.07 (A on this slice last night: 236.7
   to 239.4 tok/s). Measured against A in M.
 
+## P: checks
+
+- **Code review** (high, `origin/dev...HEAD`): 4 important, 3 nits. Fixed: a mixed step's prompt rows were gathered and
+  scattered whenever decode rows led the step (about 6 MB of copies a split layer; `e3ffd4b`, with the test now checking
+  the chunk's rows against the resident load); HIP answers UNSUPPORTED for the wrap, as `larch.h` promises it on CUDA
+  only. Kept as debt rows below: split layers' decode rows go uncounted in the histogram; a captured step with decode
+  and prompt rows on split layers is refused and runs eager; the cost assumes the in-place path where dynamic residency
+  or a backend without the wrap pays a round trip; the shortfall replan (pre-existing: last night's split loads replanned
+  from 577 to 809 MB of charge). Not changed: the wrap comment in `larch.h` is the change approved for this branch; freeing
+  a wrap does not wait for queued reads (the Rust view holds the host buffer; a C caller is warned by the header's
+  ordering rule).
+- **Over-engineering review**: nothing to cut ("Lean already. Ship.").
+- `cargo fmt --all --check`: clean. `cargo clippy --workspace --all-targets --all-features -- -D warnings` (CUDA backend):
+  clean after two fixes (`3865686`).
+- `cargo test --locked --workspace` (CUDA backend, GPU lock held): 3,178 passed, **1 failed**, 34 ignored. The failure is
+  the known `larch-agent` `a_manifest_written_mid_run_makes_the_task_tested` (Windows' `npm` on `PATH`, no `node`).
+- `ctest` (CUDA build, RelWithDebInfo): **20 of 20 passed**, none skipped (`ops` 1,347 cases with K1's 12, `wrap_host`).
+- **Parity**, m13 on B (`e3ffd4b`, sha256 `582252d6…`), histogram in, `LARCH_EXPERT_CACHE=1`; every mode on a split load
+  read in place (`larch_split_decode,mapped=1`; parity's loads plan at their own context and seats):
+
+| mode | split layers | mean KL | p99 KL | top-1 | decode steps replayed / eager | bound | result |
+|---|---|---|---|---|---|---|---|
+| prefill | 14 | 0.00418 | 0.0185 | 0.9411 | 0 / 1 | 0.0354 | pass |
+| decode | 10 | 0.00403 | 0.0170 | 0.9445 | 56,529 / 0 | 0.0354 | pass |
+| decode `--parallel 4` | 17 | 0.00403 | 0.0170 | 0.9445 | 14,564 / 0 (96 mixed) | 0.0354 | pass |
+
+  Decode at 1 and 4 seats gives the same KL to five figures: decode rows take the resident load's bits whatever the
+  placement (Lane Z's resident-bit decode read 0.00405). `--mode all` runs after the report, as planned.
+
 ## Method
 
 - **Machine and order.** One session. Every GPU job (runs, ctest, benches, GPU tests, parity) is its own process in one
@@ -182,3 +211,4 @@ B = `larch 0.0.0 (1b29835)`, sha256 `b202456c…`, clean tree. One run, W4@4 `--
 |---|---|---|---|
 | `larch 0.0.0 (ef28629)` | `c1ad854a…` | `ef28629` (#20's branch head, before its review fix) | A: rebuilt today, as the night's `b3a53bf3…` binary was gone; the same commit, not the same bytes |
 | `larch 0.0.0 (1b29835)` | `b202456c…` | `1b29835`, this branch, clean tree | B: SMOKE |
+| `larch 0.0.0 (e3ffd4b)` | `582252d6…` | `e3ffd4b`, this branch, clean tree | B: parity and M (the review fixes) |
