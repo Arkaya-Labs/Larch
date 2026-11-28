@@ -847,6 +847,71 @@ kernel void vv_mmvq_id_rq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], b
   }
 }
 
+// Prototype for metal_perf affine-q3 only (no backend path): dense mmvq on Q3_K rewritten exactly into an MLX-style
+// affine 3-bit layout, on MLX's qmv_fast plan (quantized.h qmv_fast_impl and qdot<3>: 2 simdgroups of 4 columns, 16
+// weights a lane, 512 of k a step, x pre-divided by powers of 2 so each code is masked, never shifted). A row
+// (a.b_rs apart) holds the codes q + 4 (0..7) of its k weights, 8 in 3 bytes as MLX packs them (k 3 / 8 bytes),
+// then one int8 scale sc - 32 a 16 weights (k / 16), then each Q3_K block's fp16 d (k / 256 x 2). Weight = s
+// (code - 4) with s = d sc, the same f32 value Q3_K decodes, so a lane's 16 weights are one group:
+// sum = s (codes . x - 4 sum x). Grid (rows, ceil(n / 8)), out f32.
+kernel void vv_mmvq_aq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], device uchar* out [[buffer(2)]],
+                        constant mm_args& a [[buffer(3)]], uint2 tg [[threadgroup_position_in_grid]],
+                        ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+  constexpr short RS = 4;
+  const uint n0 = (tg.y * 2 + sg) * RS;
+  if (n0 >= a.n) return;  // the whole simdgroup
+  const uint code_bytes = a.k * 3 / 8, groups = a.k / 16;
+  device const half* xr = (device const half*)(x + tg.x * a.a_rs) + lane * 16;
+  bytes_in wr[RS];
+  for (short i = 0; i < RS; ++i) wr[i] = w + u64(min(n0 + i, a.n - 1)) * a.b_rs;
+  float res[RS] = {};
+  for (uint k0 = 0; k0 < a.k; k0 += 512, xr += 512) {
+    float xt[16], sum = 0.0f;
+#pragma unroll
+    for (short i = 0; i < 16; i += 8) {
+      const float v[8] = {float(xr[i]),     float(xr[i + 1]), float(xr[i + 2]), float(xr[i + 3]),
+                          float(xr[i + 4]), float(xr[i + 5]), float(xr[i + 6]), float(xr[i + 7])};
+      sum += v[0] + v[1] + v[2] + v[3] + v[4] + v[5] + v[6] + v[7];
+      xt[i] = v[0];
+      xt[i + 1] = v[1] / 8.0f;
+      xt[i + 2] = v[2] / 64.0f;
+      xt[i + 3] = v[3] / 2.0f;
+      xt[i + 4] = v[4] / 16.0f;
+      xt[i + 5] = v[5] / 128.0f;
+      xt[i + 6] = v[6] / 4.0f;
+      xt[i + 7] = v[7] / 32.0f;
+    }
+    const uint g = k0 / 16 + lane;
+#pragma unroll
+    for (short r = 0; r < RS; ++r) {
+      bytes_in c = wr[r] + g * 6;
+      float acc = 0.0f;
+#pragma unroll
+      for (short i = 0; i < 2; ++i) {
+        bytes_in b = c + 3 * i;
+        thread const float* t = xt + 8 * i;
+        acc += (b[0] & 0x07) * t[0];
+        acc += (b[0] & 0x38) * t[1];
+        acc += (b[0] & 0xc0) * t[2];
+        acc += (b[1] & 0x01) * (t[2] * 256.0f);
+        acc += (b[1] & 0x0e) * t[3];
+        acc += (b[1] & 0x70) * t[4];
+        acc += (b[1] & 0x80) * t[5];
+        acc += (b[2] & 0x03) * (t[5] * 256.0f);
+        acc += (b[2] & 0x1c) * t[6];
+        acc += (b[2] & 0xe0) * t[7];
+      }
+      const float s = float(*(device const half*)(wr[r] + code_bytes + groups + g / 16 * 2)) *
+                      float(*(device const char*)(wr[r] + code_bytes + g));
+      res[r] += s * (acc - 4.0f * sum);
+    }
+  }
+  for (short r = 0; r < RS; ++r) {
+    const float v = simd_sum(res[r]);
+    if (!lane && n0 + r < a.n) ((device float*)(out + tg.x * a.c_rs))[n0 + r] = v;
+  }
+}
+
 // mmvq_id1 for experts under 4 blocks wide (k < 1024: MoE down projections of 512 and 768),
 // where mmvq1's lane groups, which each walk every 4th block (every 2nd for Q6_K), leave groups idle (half of
 // them at k = 512). Here a simdgroup owns MMVQ1N_C columns and lane group g takes the (column, block) units

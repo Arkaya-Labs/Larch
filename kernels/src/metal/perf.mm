@@ -52,6 +52,8 @@ void usage() {
             "--k WIDTH --weighted 0|1 --iterations COUNT");
   std::puts("  metal_perf repack-id --device ORDINAL --experts COUNT --rows ROWS --slots USED --n COLS --k WIDTH "
             "--weighted 0|1 --iterations COUNT   (Q3_K, k a multiple of 512: the repacked-expert prototype)");
+  std::puts("  metal_perf affine-q3 --device ORDINAL --rows ROWS --n COLS --k WIDTH --iterations COUNT   (Q3_K, k a "
+            "multiple of 512: the exact MLX-style affine prototype)");
   std::puts("  metal_perf gemm --device ORDINAL --m ROWS --n COLS --k WIDTH --iterations COUNT");
   std::puts("  metal_perf add --device ORDINAL --d WIDTH --iterations COUNT");
   std::puts("  metal_perf linear --device ORDINAL --format FORMAT --m ROWS --n COLS --k WIDTH --iterations COUNT");
@@ -67,7 +69,7 @@ void usage() {
 arguments parse_arguments(int argc, char** argv) {
   if (argc < 2) fail("missing measurement mode; pass --help for usage");
   arguments parsed{argv[1], {}};
-  if (parsed.mode != "copy" && parsed.mode != "mmvq" && parsed.mode != "st" && parsed.mode != "mmvq-id" && parsed.mode != "repack-id" && parsed.mode != "add" && parsed.mode != "dequant" &&
+  if (parsed.mode != "copy" && parsed.mode != "mmvq" && parsed.mode != "st" && parsed.mode != "mmvq-id" && parsed.mode != "repack-id" && parsed.mode != "affine-q3" && parsed.mode != "add" && parsed.mode != "dequant" &&
       parsed.mode != "attn-decode" &&
       parsed.mode != "attn-prefill" && parsed.mode != "gemm" && parsed.mode != "linear" && parsed.mode != "sample")
     fail("unknown measurement mode '" + parsed.mode + "'");
@@ -885,6 +887,190 @@ void run_repack_id(const arguments& parsed) {
   if (rel > 1e-3) fail("vv_mmvq_id_rq3 differs from larch_mmvq_id by more than 1e-3 of the output's peak");
 }
 
+// ggml's dequantize_row_q3_K for one 110-byte block, written out on its own here (not from repack_aq3's indexing)
+// so the affine prototype's weights are checked against Q3_K's: 256 f32 weights in ggml's order.
+float half_to_float(uint16_t h) {  // exact: arm64's native fp16
+  _Float16 v;
+  std::memcpy(&v, &h, 2);
+  return float(v);
+}
+
+void q3_k_block_ref(const uint8_t* blk, float* y) {
+  uint16_t dh;
+  std::memcpy(&dh, blk + 108, 2);
+  const float d_all = half_to_float(dh);
+  const uint8_t *hm = blk, *q = blk + 32;
+  uint32_t aux[4];
+  std::memcpy(aux, blk + 96, 12);
+  const uint32_t kmask1 = 0x03030303, kmask2 = 0x0f0f0f0f, tmp = aux[2];
+  aux[2] = ((aux[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
+  aux[3] = ((aux[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
+  aux[0] = (aux[0] & kmask2) | (((tmp >> 0) & kmask1) << 4);
+  aux[1] = (aux[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
+  int8_t scales[16];
+  std::memcpy(scales, aux, 16);
+  int is = 0;
+  uint8_t m = 1;
+  for (int n = 0; n < 256; n += 128) {
+    int shift = 0;
+    for (int j = 0; j < 4; ++j) {
+      float dl = d_all * float(scales[is++] - 32);
+      for (int l = 0; l < 16; ++l) *y++ = dl * float(int8_t((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
+      dl = d_all * float(scales[is++] - 32);
+      for (int l = 0; l < 16; ++l) *y++ = dl * float(int8_t((q[l + 16] >> shift) & 3) - ((hm[l + 16] & m) ? 0 : 4));
+      shift += 2;
+      m <<= 1;
+    }
+    q += 32;
+  }
+}
+
+// Q3_K rows of nb blocks in vv_mmvq_aq3's layout (ops.metal): codes q + 4, 8 in 3 bytes; int8 sc - 32 per 16
+// weights; fp16 d per block. Rows rs bytes apart (16-byte aligned). Weight i of block b: sub-block c = i / 32,
+// n = c / 4, bit pair u = c % 4, l = i % 32; scale index 8 n + 2 u + l / 16, which is i / 16.
+bytes repack_aq3(const bytes& w, uint64_t rows, uint64_t nb, uint64_t rs) {
+  bytes out(size_t(rows * rs), 0);
+  const uint64_t k = nb * 256, code_bytes = k * 3 / 8, groups = k / 16;
+  for (uint64_t r = 0; r < rows; ++r) {
+    uint8_t* o = out.data() + r * rs;
+    for (uint64_t b = 0; b < nb; ++b) {
+      const uint8_t* q = w.data() + (r * nb + b) * 110;
+      uint32_t aux[3];
+      std::memcpy(aux, q + 96, 12);
+      for (int i = 0; i < 256; ++i) {
+        const int c = i / 32, n = c / 4, u = c % 4, l = i % 32;
+        const int lo = (q[32 + 32 * n + l] >> (2 * u)) & 3, hi = (q[l] >> (4 * n + u)) & 1;
+        const uint64_t e = b * 256 + i, bit = 3 * e;
+        const uint32_t code = uint32_t(lo | hi << 2);  // q + 4
+        o[bit / 8] |= uint8_t(code << (bit % 8));
+        if (bit % 8 > 5) o[bit / 8 + 1] |= uint8_t(code >> (8 - bit % 8));
+      }
+      for (int si = 0; si < 16; ++si) {  // ggml's get_scale: low nibble from bytes 0-7, top 2 bits from 8-11
+        const int lo = si < 8 ? (q[96 + si] & 0xF) : (q[96 + si - 8] >> 4);
+        const int hi = (q[104 + si % 4] >> (2 * (si / 4))) & 3;
+        o[code_bytes + b * 16 + si] = uint8_t(int8_t((lo | hi << 4) - 32));
+      }
+      std::memcpy(o + code_bytes + groups + b * 2, q + 108, 2);
+      (void)aux;
+    }
+  }
+  return out;
+}
+
+// metal_perf affine-q3: larch_mmvq on Q3_K blocks (today's kernels) against vv_mmvq_aq3 on the same weights in the
+// exact affine layout, f32 out. First checks every repacked weight equals ggml's Q3_K value bit for bit, then prints
+// both times, the bytes per weight and the largest output difference relative to the output's peak; exits 1 on a
+// weight mismatch or past 1e-3.
+void run_affine_q3(const arguments& parsed) {
+  require_only(parsed, {"--device", "--rows", "--n", "--k", "--iterations"});
+  const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
+  const uint64_t rows = bounded(parsed, "--rows", 1, 64);
+  const uint64_t n = bounded(parsed, "--n", 1, kMaxDimension);
+  const uint64_t k = bounded(parsed, "--k", 512, kMaxDimension);
+  const uint64_t iterations = bounded(parsed, "--iterations", 1, kMaxIterations);
+  if (k % 512) fail("--k must be a multiple of 512");
+  const uint64_t nb = k / 256, code_bytes = k * 3 / 8, groups = k / 16;
+  const uint64_t rs = (code_bytes + groups + nb * 2 + 15) / 16 * 16;
+  rng g(43);
+  const bytes w = quant(LARCH_Q3_K, int64_t(n), int64_t(k), g);
+  const bytes wr = repack_aq3(w, n, nb, rs);
+  uint64_t mismatched = 0;
+  for (uint64_t r = 0; r < n; ++r) {
+    const uint8_t* o = wr.data() + r * rs;
+    for (uint64_t b = 0; b < nb; ++b) {
+      float ref[256];
+      q3_k_block_ref(w.data() + (r * nb + b) * 110, ref);
+      uint16_t dh;
+      std::memcpy(&dh, o + code_bytes + groups + b * 2, 2);
+      for (int i = 0; i < 256; ++i) {
+        const uint64_t e = b * 256 + i, bit = 3 * e;
+        const uint32_t word = uint32_t(o[bit / 8]) | (bit / 8 + 1 < code_bytes ? uint32_t(o[bit / 8 + 1]) << 8 : 0);
+        const int code = int(word >> (bit % 8) & 7);
+        const float s = half_to_float(dh) * float(int8_t(o[code_bytes + e / 16]));
+        const float mine = s * float(code - 4);
+        if (std::memcmp(&mine, &ref[i], 4)) ++mismatched;
+      }
+    }
+  }
+  const bytes x = halves(size_t(rows * k), g);
+  session run(ordinal);
+  larch_buffer* w_vv = run.allocate(w.size(), "affine-q3 weights");
+  larch_buffer* x_vv = run.allocate(x.size(), "affine-q3 x");
+  larch_buffer* out_vv = run.allocate(rows * n * 4, "affine-q3 output");
+  run.upload(w_vv, w.data(), w.size(), "affine-q3 weight upload");
+  run.upload(x_vv, x.data(), x.size(), "affine-q3 x upload");
+  run.sync("affine-q3 setup");
+  const int64_t rr = int64_t(rows), kk = int64_t(k), nn = int64_t(n);
+  const larch_tensor weight = tensor(w_vv, LARCH_Q3_K, 2, {nn, kk}, {int64_t(nb), 1});
+  const larch_tensor activation = tensor(x_vv, LARCH_F16, 2, {rr, kk}, {kk, 1});
+  const larch_tensor output = tensor(out_vv, LARCH_F32, 2, {rr, nn}, {nn, 1});
+  check(larch_mmvq(run.stream, &weight, &activation, nullptr, &output), run.device, "affine-q3 ref");
+  std::vector<float> ref(static_cast<size_t>(rows * n));
+  check(larch_download(run.stream, out_vv, 0, ref.data(), rows * n * 4), run.device, "affine-q3 ref download");
+  run.sync("affine-q3 reference");
+  const uint64_t ref_ns = gpu_elapsed(run, [&] {
+    for (uint64_t i = 0; i < iterations; ++i)
+      check(larch_mmvq(run.stream, &weight, &activation, nullptr, &output), run.device, "larch_mmvq");
+  });
+  run.sync("affine-q3 reference timing");
+
+  id<MTLDevice> device = direct_device(ordinal);
+  id<MTLComputePipelineState> pipe = metal_pipeline(device, "vv_mmvq_aq3");
+  id<MTLCommandQueue> queue = [device newCommandQueue];
+  id<MTLBuffer> w_buf = [device newBufferWithBytes:wr.data() length:wr.size() options:MTLResourceStorageModeShared];
+  id<MTLBuffer> x_buf = [device newBufferWithBytes:x.data() length:x.size() options:MTLResourceStorageModeShared];
+  id<MTLBuffer> out_buf = [device newBufferWithLength:rows * n * 4 options:MTLResourceStorageModeShared];
+  if (!queue || !w_buf || !x_buf || !out_buf) fail("affine-q3 buffers could not be allocated");
+  mm_args a = {};
+  a.a_rs = k * 2;
+  a.b_rs = rs;
+  a.c_rs = n * 4;
+  a.m = uint32_t(rows);
+  a.n = uint32_t(n);
+  a.k = uint32_t(k);
+  a.c_f32 = 1;
+  const auto encode = [&](id<MTLComputeCommandEncoder> e) {
+    [e setComputePipelineState:pipe];
+    [e setBuffer:w_buf offset:0 atIndex:0];
+    [e setBuffer:x_buf offset:0 atIndex:1];
+    [e setBuffer:out_buf offset:0 atIndex:2];
+    [e setBytes:&a length:sizeof a atIndex:3];
+    [e dispatchThreadgroups:MTLSizeMake(NSUInteger(rows), NSUInteger((n + 7) / 8), 1)
+        threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+  };
+  {
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];
+    encode(e);
+    [e endEncoding];
+    [cb commit];
+    wait_for(cb, "affine-q3 check");
+  }
+  const auto* mine = static_cast<const float*>(out_buf.contents);
+  double peak = 0, err = 0;
+  for (uint64_t i = 0; i < rows * n; ++i) {
+    peak = std::max(peak, double(std::fabs(ref[size_t(i)])));
+    err = std::max(err, double(std::fabs(mine[i] - ref[size_t(i)])));
+  }
+  const double rel = peak > 0 ? err / peak : err;
+  id<MTLCommandBuffer> cb = [queue commandBuffer];
+  id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];  // serial: each call waits for the one before
+  for (uint64_t i = 0; i < iterations; ++i) encode(e);
+  [e endEncoding];
+  [cb commit];
+  wait_for(cb, "affine-q3 timing");
+  const double aq_ns = (cb.GPUEndTime - cb.GPUStartTime) * 1e9;
+  std::printf("mode=affine-q3 rows=%llu n=%llu k=%llu iterations=%llu ref_us=%.3f affine_us=%.3f "
+              "q3k_bits_per_weight=%.4f affine_bits_per_weight=%.4f weight_mismatches=%llu max_rel=%.3g %s\n",
+              static_cast<unsigned long long>(rows), static_cast<unsigned long long>(n),
+              static_cast<unsigned long long>(k), static_cast<unsigned long long>(iterations),
+              double(ref_ns) / 1e3 / double(iterations), aq_ns / 1e3 / double(iterations), 110.0 * 8 / 256,
+              double(code_bytes + groups + nb * 2) * 8 / double(k), static_cast<unsigned long long>(mismatched), rel,
+              !mismatched && rel <= 1e-3 ? "pass" : "FAIL");
+  if (mismatched) fail("affine-q3 weights differ from ggml's Q3_K values");
+  if (rel > 1e-3) fail("vv_mmvq_aq3 differs from larch_mmvq by more than 1e-3 of the output's peak");
+}
+
 // A chain of dependent one-row adds, x += h: at a small d, the cost of one dispatch in a serial encoder, which
 // a decode pays for each of its few-microsecond ops.
 void run_add(const arguments& parsed) {
@@ -1199,6 +1385,7 @@ int main(int argc, char** argv) {
       else if (parsed.mode == "st") run_st(parsed);
       else if (parsed.mode == "mmvq-id") run_mmvq_id(parsed);
       else if (parsed.mode == "repack-id") run_repack_id(parsed);
+      else if (parsed.mode == "affine-q3") run_affine_q3(parsed);
       else if (parsed.mode == "add") run_add(parsed);
       else if (parsed.mode == "dequant") run_dequant(parsed);
       else if (parsed.mode == "attn-prefill") run_attention_prefill(parsed);
