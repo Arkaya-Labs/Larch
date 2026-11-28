@@ -772,7 +772,7 @@ bytes repack_nq3(const bytes& w, uint64_t rows, uint64_t nb, uint64_t rs);  // b
 // the output's peak; exits 1 past 1e-3.
 void run_repack_id(const arguments& parsed) {
   require_only(parsed, {"--device", "--experts", "--rows", "--slots", "--n", "--k", "--weighted", "--iterations",
-                        "--layout"});
+                        "--layout", "--lanes", "--cols"});
   const auto layout_arg = parsed.values.find("--layout");
   const bool nq3 = layout_arg != parsed.values.end() && layout_arg->second == "nq3";
   if (layout_arg != parsed.values.end() && !nq3 && layout_arg->second != "rq3") fail("--layout must be rq3 or nq3");
@@ -829,8 +829,16 @@ void run_repack_id(const arguments& parsed) {
   run.sync("repack-id reference timing");
 
   id<MTLDevice> device = direct_device(ordinal);
-  id<MTLComputePipelineState> pipe =
-      metal_pipeline(device, !nq3 ? "vv_mmvq_id_rq3" : k % 1024 ? "vv_mmvq_id_nq3n" : "vv_mmvq_id_nq3");
+  // nq3 only: --lanes full|narrow (default narrow at k % 1024, which full cannot take) and --cols 2|4|8 a simdgroup
+  const auto lanes_arg = parsed.values.find("--lanes"), cols_arg = parsed.values.find("--cols");
+  const bool narrow = k % 1024 || (lanes_arg != parsed.values.end() && lanes_arg->second == "narrow");
+  const uint64_t cols = cols_arg == parsed.values.end() ? 4 : bounded(parsed, "--cols", 2, 8);
+  if (cols != 2 && cols != 4 && cols != 8) fail("--cols must be 2, 4 or 8");
+  if (!nq3 && cols != 4) fail("--cols is for --layout nq3");
+  const std::string name = !nq3 ? "vv_mmvq_id_rq3"
+                                : std::string(narrow ? "vv_mmvq_id_nq3n" : "vv_mmvq_id_nq3") +
+                                      (cols == 4 ? "" : "_c" + std::to_string(cols));
+  id<MTLComputePipelineState> pipe = metal_pipeline(device, name);
   id<MTLCommandQueue> queue = [device newCommandQueue];
   id<MTLBuffer> w_buf = [device newBufferWithBytes:wr.data() length:wr.size() options:MTLResourceStorageModeShared];
   id<MTLBuffer> x_buf = [device newBufferWithBytes:x.data() length:x.size() options:MTLResourceStorageModeShared];
@@ -862,7 +870,7 @@ void run_repack_id(const arguments& parsed) {
     [e setBuffer:wt_buf offset:0 atIndex:4];
     [e setBuffer:out_buf offset:0 atIndex:5];
     [e setBytes:&a length:sizeof a atIndex:6];
-    [e dispatchThreadgroups:MTLSizeMake(NSUInteger((n + 7) / 8), NSUInteger(weighted ? rows : pairs), 1)
+    [e dispatchThreadgroups:MTLSizeMake(NSUInteger((n + 2 * cols - 1) / (2 * cols)), NSUInteger(weighted ? rows : pairs), 1)
         threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
   };
   {
@@ -888,9 +896,9 @@ void run_repack_id(const arguments& parsed) {
   wait_for(cb, "repack-id timing");
   const double rq_ns = (cb.GPUEndTime - cb.GPUStartTime) * 1e9;
   const uint64_t read = std::min(pairs, experts) * n * nb * 110;
-  std::printf("mode=repack-id layout=%s experts=%llu rows=%llu slots=%llu n=%llu k=%llu weighted=%d iterations=%llu "
+  std::printf("mode=repack-id layout=%s kernel=%s experts=%llu rows=%llu slots=%llu n=%llu k=%llu weighted=%d iterations=%llu "
               "ref_us=%.3f repacked_us=%.3f ref_gbps=%.3f repacked_gbps=%.3f max_rel=%.3g %s\n",
-              nq3 ? "nq3" : "rq3", static_cast<unsigned long long>(experts), static_cast<unsigned long long>(rows),
+              nq3 ? "nq3" : "rq3", name.c_str(), static_cast<unsigned long long>(experts), static_cast<unsigned long long>(rows),
               static_cast<unsigned long long>(slots), static_cast<unsigned long long>(n),
               static_cast<unsigned long long>(k), int(weighted), static_cast<unsigned long long>(iterations),
               double(ref_ns) / 1e3 / double(iterations), rq_ns / 1e3 / double(iterations),

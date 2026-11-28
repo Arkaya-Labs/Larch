@@ -902,12 +902,12 @@ kernel void vv_mmvq1_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], dev
 // step of 1024 inputs, lane l item l % 4 of unit l / 4) or 4 (512 inputs, lane l fragments 4 (l % 2) .. + 3 of item
 // l / 2 % 4 of unit l / 8, all 32 lanes busy at k 512). x is read with packed loads (larch.h promises 2-byte
 // alignment only).
-template <short FH>
+template <short FH, short RS>
 kernel void mmvq_id_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in ids [[buffer(2)]],
                         bytes_in bias [[buffer(3)]], bytes_in wt [[buffer(4)]], device uchar* out [[buffer(5)]],
                         constant id_args& a [[buffer(6)]], uint2 tg [[threadgroup_position_in_grid]],
                         ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
-  constexpr short RS = 4, LPU = 4 * (8 / FH), UPS = 32 / LPU;  // lanes a unit, units a step
+  constexpr short LPU = 4 * (8 / FH), UPS = 32 / LPU;  // lanes a unit, units a step; RS columns a simdgroup
   const uint n0 = (tg.x * 2 + sg) * RS;
   if (n0 >= a.n) return;  // the whole simdgroup
   const uint r = a.weighted ? tg.y : tg.y / a.slots, first = a.weighted ? 0 : tg.y % a.slots;
@@ -977,9 +977,13 @@ kernel void mmvq_id_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], byte
       ((device half*)o)[n0 + c] = half(acc[c]);
   }
 }
-typedef decltype(mmvq_id_nq3<8>) mmvq_id_nq3_t;
-template [[host_name("vv_mmvq_id_nq3")]] kernel mmvq_id_nq3_t mmvq_id_nq3<8>;
-template [[host_name("vv_mmvq_id_nq3n")]] kernel mmvq_id_nq3_t mmvq_id_nq3<4>;
+typedef decltype(mmvq_id_nq3<8, 4>) mmvq_id_nq3_t;
+template [[host_name("vv_mmvq_id_nq3")]] kernel mmvq_id_nq3_t mmvq_id_nq3<8, 4>;
+template [[host_name("vv_mmvq_id_nq3n")]] kernel mmvq_id_nq3_t mmvq_id_nq3<4, 4>;
+template [[host_name("vv_mmvq_id_nq3_c2")]] kernel mmvq_id_nq3_t mmvq_id_nq3<8, 2>;
+template [[host_name("vv_mmvq_id_nq3n_c2")]] kernel mmvq_id_nq3_t mmvq_id_nq3<4, 2>;
+template [[host_name("vv_mmvq_id_nq3_c8")]] kernel mmvq_id_nq3_t mmvq_id_nq3<8, 8>;
+template [[host_name("vv_mmvq_id_nq3n_c8")]] kernel mmvq_id_nq3_t mmvq_id_nq3<4, 8>;
 
 // Prototype for metal_perf affine-q3 only (no backend path): dense mmvq on Q3_K rewritten exactly into an MLX-style
 // affine 3-bit layout, on MLX's qmv_fast plan (quantized.h qmv_fast_impl and qdot<3>: 2 simdgroups of 4 columns, 16
