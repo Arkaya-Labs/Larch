@@ -24,6 +24,7 @@ type_info info(larch_dtype t) {
     case LARCH_FP8_E4M3: return {1, 1};
     case LARCH_Q3_K: return {256, 110};
     case LARCH_Q2_K: return {256, 84};
+    case LARCH_NQ3: return {512, 220};
   }
   throw bad_arg("unknown dtype " + std::to_string(int(t)));
 }
@@ -188,6 +189,23 @@ static void q3_k(const uint8_t* b, float* y) {
     }
 }
 
+// Two Q3_K blocks in the nq3 layout (larch.h LARCH_NQ3): weight i is code - 4 times block i / 256's d (scale - 32),
+// in q3_k's f32 order, so the values are q3_k's of the blocks it was made from, bit for bit.
+static void nq3(const uint8_t* b, float* y) {
+  for (int i = 0; i < 512; ++i) {
+    const int u = i / 128, f = i % 128 / 16, j = i % 16 / 4, e = i % 4, pair = 2 * f + e / 2;
+    uint32_t w[3];
+    std::memcpy(w, b + 48 * u + 12 * j, 12);
+    const uint32_t v = pair < 15 ? w[pair / 5] >> (3 * (pair % 5))
+                                 : (w[0] >> 15 & 0x00010001u) | (w[1] >> 14 & 0x00020002u) | (w[2] >> 13 & 0x00040004u);
+    const int code = int((e % 2 ? v >> 16 : v) & 7), blk = i / 256, si = i % 256 / 16;
+    const uint8_t* s = b + 192 + 12 * blk;
+    const int sc = ((si < 8 ? s[si] & 0xF : s[si - 8] >> 4) | (s[8 + si % 4] >> (2 * (si / 4)) & 3) << 4) - 32;
+    const float dl = half(b + 216 + 2 * blk) * float(sc);
+    y[i] = dl * float(code - 4);
+  }
+}
+
 static void q6_k(const uint8_t* b, float* y) {
   const uint8_t* ql = b;
   const uint8_t* qh = b + 128;
@@ -230,6 +248,7 @@ void to_f32(larch_dtype t, const uint8_t* src, int64_t n, float* dst) {
     case LARCH_Q6_K: block = q6_k; break;
     case LARCH_Q3_K: block = q3_k; break;
     case LARCH_Q2_K: block = q2_k; break;
+    case LARCH_NQ3: block = nq3; break;
   }
   const type_info ti = info(t);
   for (int64_t i = 0; i < n / ti.block; ++i) block(src + i * ti.bytes, dst + i * ti.block);

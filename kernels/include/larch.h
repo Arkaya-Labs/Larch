@@ -17,7 +17,7 @@
  * stream returns, or larch_event_sync on an event recorded on it after the download, and holds the
  * data once that returns LARCH_OK (a backend may finish earlier, never later).
  *
- * ABI 3 to 5 add entries a backend may lack: it then answers a call LARCH_ERR_UNSUPPORTED, after the
+ * ABI 3 to 6 add entries and dtypes a backend may lack: it then answers a call LARCH_ERR_UNSUPPORTED, after the
  * same argument checks as every backend (so a malformed call is still INVALID_ARG). The CPU devices
  * have them all. */
 #ifndef LARCH_H
@@ -29,7 +29,7 @@
 extern "C" {
 #endif
 
-#define LARCH_ABI_VERSION 5
+#define LARCH_ABI_VERSION 6
 
 typedef enum {
   LARCH_OK = 0,
@@ -58,8 +58,14 @@ typedef enum {
   LARCH_Q5_0,
   LARCH_FP8_E4M3, /* KV pages only: OCP E4M3FN, one byte (bias 7, no infinity, S.1111.111 is NaN) */
   LARCH_Q3_K,     /* weights only: a GPU backend without its kernels answers UNSUPPORTED */
-  LARCH_Q2_K      /* ABI 5, weights only: a GPU backend answers UNSUPPORTED where it has no kernel for it (CUDA has
+  LARCH_Q2_K,     /* ABI 5, weights only: a GPU backend answers UNSUPPORTED where it has no kernel for it (CUDA has
                       embed, dequant and the mmvq_id calls) */
+  LARCH_NQ3       /* ABI 6, weights only: Q3_K's values bit for bit, its bytes rearranged for the Metal kernels in
+                     blocks of 512 weights (220 bytes, two Q3_K blocks: four 128-weight units of 48 code bytes, then the
+                     two blocks' 12 Q3_K scale bytes, then their fp16 d; the codes q + 4 of unit u's item j, inputs
+                     128 u + 16 f + 4 j + e, at byte 48 u + 12 j as 16 pairs 2 f + e / 2: pair P < 15 at bits
+                     3 (P % 5) and 16 + 3 (P % 5) of word P / 5, pair 15's bit b in bits 15 and 31 of word b).
+                     Rows and tensor offsets 4-byte aligned. Backends without its kernels answer UNSUPPORTED. */
 } larch_dtype;
 
 /* larch_device_props.flags */

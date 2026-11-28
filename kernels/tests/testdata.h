@@ -15,7 +15,8 @@ using rng = std::mt19937;
 
 // Elements per block of dtype t: 256 for the K quants, 32 for the other quants, 1 for plain dtypes.
 static inline int64_t block_of(int t) {
-  return t == LARCH_Q2_K || t == LARCH_Q3_K || t == LARCH_Q4_K || t == LARCH_Q5_K || t == LARCH_Q6_K ? 256
+  return t == LARCH_NQ3 ? 512
+         : t == LARCH_Q2_K || t == LARCH_Q3_K || t == LARCH_Q4_K || t == LARCH_Q5_K || t == LARCH_Q6_K ? 256
          : t == LARCH_Q8_0 || t == LARCH_Q4_0 || t == LARCH_Q5_0 ? 32
                                                                     : 1;
 }
@@ -29,6 +30,8 @@ static inline int64_t block_bytes(int t) {
       return 84;
     case LARCH_Q3_K:
       return 110;
+    case LARCH_NQ3:
+      return 220;
     case LARCH_Q4_K:
       return 144;
     case LARCH_Q5_K:
@@ -83,7 +86,7 @@ static inline bool lacks_kernels(larch_device* dev, larch_stream* s, larch_dtype
 }
 // Each dtype's name, indexed by larch_dtype.
 static const char* const DTYPE[] = {"f32",  "f16",  "bf16", "i32",  "q4_k",     "q5_k",
-                                    "q6_k", "q8_0", "q4_0", "q5_0", "fp8_e4m3", "q3_k", "q2_k"};
+                                    "q6_k", "q8_0", "q4_0", "q5_0", "fp8_e4m3", "q3_k", "q2_k", "nq3"};
 
 // n halves with magnitude in [2^-6, 2^hi), either sign.
 static inline bytes halves(size_t n, rng& g, int hi = 1) {
@@ -103,6 +106,7 @@ static inline bytes quant(larch_dtype t, int64_t rows, int64_t k, rng& g) {
   const std::vector<int> scales = t == LARCH_Q6_K     ? std::vector<int>{208}
                                   : t == LARCH_Q3_K   ? std::vector<int>{108}
                                   : t == LARCH_Q2_K   ? std::vector<int>{80, 82}
+                                  : t == LARCH_NQ3    ? std::vector<int>{216, 218}
                                   : block_of(t) == 256 ? std::vector<int>{0, 2}
                                                        : std::vector<int>{0};
   uint8_t* blk = b.data();
@@ -113,6 +117,36 @@ static inline bytes quant(larch_dtype t, int64_t rows, int64_t k, rng& g) {
   if (nb > 2)
     for (const int o : scales) blk[(nb - 1) * size + o] = blk[(nb - 1) * size + o + 1] = 0;
   return b;
+}
+
+// Q3_K rows of k inputs (k a multiple of 512) rewritten as LARCH_NQ3 (larch.h), from Q3_K's bits as ggml orders
+// them: weight i of a block is sub-block c = i / 32 (n = c / 4, bit pair u = c % 4, l = i % 32), its low bits
+// qs[32 n + l] >> 2 u, its high bit hmask[l] bit 4 n + u. Scales and d are copied as they are.
+static inline bytes nq3_from_q3_k(const bytes& w, int64_t rows, int64_t k) {
+  const int64_t nb = k / 256;
+  bytes out(w.size(), 0);
+  for (int64_t r = 0; r < rows; ++r)
+    for (int64_t b = 0; b < nb; ++b) {
+      const uint8_t* q = w.data() + (r * nb + b) * 110;
+      uint8_t* pair = out.data() + (r * nb + b / 2 * 2) * 110;
+      std::memcpy(pair + 192 + b % 2 * 12, q + 96, 12);
+      std::memcpy(pair + 216 + b % 2 * 2, q + 108, 2);
+      for (int i = 0; i < 256; ++i) {
+        const int c = i / 32, n = c / 4, u = c % 4, l = i % 32;
+        const uint32_t code = uint32_t((q[32 + 32 * n + l] >> (2 * u) & 3) | (q[l] >> (4 * n + u) & 1) << 2);
+        const int at = int(b % 2) * 256 + i, unit = at / 128, f = at % 128 / 16, j = at % 16 / 4, e = at % 4;
+        const int p = 2 * f + e / 2;
+        uint32_t words[3];
+        uint8_t* item = pair + 48 * unit + 12 * j;
+        std::memcpy(words, item, 12);
+        if (p < 15)
+          words[p / 5] |= code << (3 * (p % 5) + 16 * (e % 2));
+        else
+          for (int bit = 0; bit < 3; ++bit) words[bit] |= (code >> bit & 1) << (15 + 16 * (e % 2));
+        std::memcpy(item, words, 12);
+      }
+    }
+  return out;
 }
 
 // FNV-1a 64 of n bytes at p.

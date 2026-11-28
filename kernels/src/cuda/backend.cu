@@ -640,7 +640,7 @@ static const vv_ops table = {
     .quant_gemm_i8_split = cuda::quant_gemm_i8_split,
     // ponytail: HIP keeps the default (Q3_K refused) and builds no Q3_K kernels; take Q3_K there when ctest ops
     // passes it on an RDNA card.
-    .no_weights = 0,
+    .no_weights = 1u << LARCH_NQ3,  // Metal only
     // ponytail: CUDA only; HIP's hipHostMalloc would serve the same once a ROCm card runs the stream pool.
     .buffer_alloc_host = buffer_alloc_host,
     .mmvq_verify = cuda::mmvq_verify,

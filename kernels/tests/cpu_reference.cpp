@@ -190,6 +190,43 @@ static void quant_known_answers() {
   CHECK(std::strstr(larch_last_error(dev), "16 rows") != nullptr);
 }
 
+// LARCH_NQ3 holds Q3_K's values bit for bit: embed decodes it to the same f32 as the Q3_K blocks it was made from
+// (testdata.h's writer against cpu/quant.cpp's reader), and mmvq and mmvq_id give the same bits. A k that is not a
+// multiple of its 512-weight blocks is refused.
+static void nq3_is_q3_k() {
+  rng g(11);
+  const int64_t rows = 6, k = 1024;
+  const bytes q3 = quant(LARCH_Q3_K, rows, k, g), nq = nq3_from_q3_k(q3, rows, k);
+  const larch_tensor a = tensor(LARCH_Q3_K, {rows, k}, q3.data(), q3.size());
+  const larch_tensor b = tensor(LARCH_NQ3, {rows, k}, nq.data(), nq.size());
+  std::vector<int32_t> all(static_cast<size_t>(rows));
+  std::iota(all.begin(), all.end(), 0);
+  const larch_tensor ids = i32({rows}, all), ya = out(LARCH_F32, {rows, k}), yb = out(LARCH_F32, {rows, k});
+  OK(larch_embed(st, &a, &ids, &ya));
+  OK(larch_embed(st, &b, &ids, &yb));
+  const std::vector<float> va = read<float>(ya, size_t(rows * k)), vb = read<float>(yb, size_t(rows * k));
+  CHECK(std::memcmp(va.data(), vb.data(), va.size() * 4) == 0);
+  const larch_tensor x = f16({3, k}, random_h(size_t(3 * k)));
+  const larch_tensor oa = out(LARCH_F32, {3, rows}), ob = out(LARCH_F32, {3, rows});
+  OK(larch_mmvq(st, &a, &x, nullptr, &oa));
+  OK(larch_mmvq(st, &b, &x, nullptr, &ob));
+  CHECK(read<float>(oa, size_t(3 * rows)) == read<float>(ob, size_t(3 * rows)));
+  // Two experts of 3 rows each; row 0 of x picks expert 1 then 0.
+  const larch_tensor ea = tensor(LARCH_Q3_K, {rows, k}, q3.data(), q3.size());
+  const larch_tensor eb = tensor(LARCH_NQ3, {rows, k}, nq.data(), nq.size());
+  const larch_tensor pick = i32({1, 2}, {1, 0}), x1 = f16({1, k}, random_h(size_t(k)));
+  const larch_tensor ma = out(LARCH_F32, {1, 2, 3}), mb = out(LARCH_F32, {1, 2, 3});
+  OK(larch_mmvq_id(st, &ea, &x1, &pick, nullptr, nullptr, &ma));
+  OK(larch_mmvq_id(st, &eb, &x1, &pick, nullptr, nullptr, &mb));
+  CHECK(read<float>(ma, 6) == read<float>(mb, 6));
+  const bytes short_rows(220, 0);
+  const larch_tensor bad = tensor(LARCH_Q3_K, {1, 256}, short_rows.data(), 110);
+  larch_tensor bad_nq3 = bad;
+  bad_nq3.dtype = LARCH_NQ3;
+  const larch_tensor x256 = f16({1, 256}, random_h(256)), o1 = out(LARCH_F32, {1, 1});
+  BAD(larch_mmvq(st, &bad_nq3, &x256, nullptr, &o1));
+}
+
 // By hand: a = [[1, 2], [3, 4]], b_t = [[1, 0], [1, -1], [0.5, 2]], bias = [0.25, 0, -1] and alpha = 2
 // give c = [[2.25, -2, 8], [6.25, -2, 18]] over a c that starts as NaN (beta = 0 must not read it);
 // then beta = 0.5 over that c gives [[3.375, -3, 12], [9.375, -3, 27]].
@@ -1015,6 +1052,7 @@ int main() {
   OK(larch_stream_create(dev, &st));
   f16_conversion();
   quant_known_answers();
+  nq3_is_q3_k();
   gemm_by_hand();
   rope_positions();
   rope_multi_positions();

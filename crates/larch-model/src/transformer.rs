@@ -25,6 +25,7 @@ use larch_records::LoadError;
 use crate::card::{self, Route};
 use crate::experts::Histogram;
 use crate::gguf::{self, Gguf, code};
+use crate::nq3;
 use crate::{
     Arch, EmbedRun, Model, ModelConfig, MoeCfg, RouterDeltas, StateBatch, StepBatch, Taps,
 };
@@ -1762,9 +1763,28 @@ impl Transformer {
             .map(|t| t.1.div_ceil(PAGE) * PAGE)
             .max()
             .map_or(len, |e| e.min(len));
+        // Q3_K matrices the upload rewrites as nq3 for Metal's kernels (opt-in while the kernels
+        // land): a whole-resident load only, so each converted tensor is one span of `gpu`.
+        // The embedding stays Q3_K (embed and dequant read it). Converting needs the upload, which
+        // holds the same bytes as the map plus one staging chunk.
+        let nq3_spans: Vec<(u64, u64)> = match device_backend == Backend::Metal
+            && std::env::var("LARCH_METAL_NQ3").is_ok_and(|v| v == "1")
+            && host.is_empty()
+            && tables.is_empty()
+            && !host_embed
+        {
+            false => Vec::new(),
+            true => g
+                .tensors
+                .iter()
+                .filter(|t| t.name != "token_embd.weight" && nq3::converts(t.ggml_type, &t.dims))
+                .map(|t| (t.offset, t.bytes))
+                .collect(),
+        };
         let mapped = match Mmap::map(f.get_ref()) {
             Ok(map)
                 if map.bytes() == len
+                    && nq3_spans.is_empty()
                     && g.data_offset % 32 == 0
                     && host.is_empty()
                     && !host_embed =>
@@ -1831,7 +1851,10 @@ impl Transformer {
             }
             // 6.1: vectors (norms, biases, rope_freqs) are f32; matrices go through mmvq or dequant,
             // which take quants only, except the embedding table when it is not also the lm_head.
-            let dtype = gguf::dtype(t.ggml_type)?;
+            let dtype = match nq3_spans.contains(&(t.offset, t.bytes)) {
+                true => DType::Nq3,
+                false => gguf::dtype(t.ggml_type)?,
+            };
             let ok = match shape.len() {
                 1 => dtype == DType::F32,
                 _ => dtype.block() > 1 || (name == "token_embd.weight" && !cfg.tie_embeddings),
@@ -2137,14 +2160,50 @@ impl Transformer {
                     .collect();
                 let mut staging = vec![0u8; chunk.min(data_len) as usize];
                 // File bytes `from..from + n` to `to..` of the layout `dst` holds: each buffer
-                // from its start, the bytes where two overlap into both.
+                // from its start, the bytes where two overlap into both. An nq3 span goes in whole
+                // pairs of blocks, rewritten on the way.
                 let mut copy = |from: u64, n: u64, s: &Stream, dst: &[(&Buffer, u64)], to: u64| {
                     f.seek(SeekFrom::Start(g.data_offset + from))
                         .map_err(|_| LoadError::Io)?;
-                    for off in (0..n).step_by(chunk as usize) {
-                        let c = &mut staging[..chunk.min(n - off) as usize];
+                    let mut off = 0;
+                    while off < n {
+                        let span = nq3_spans
+                            .iter()
+                            .find(|t| t.0 <= from + off && from + off < t.0 + t.1);
+                        let step = match span {
+                            // `converts` makes each row, so each span, whole pairs.
+                            Some(t) => {
+                                let step = (chunk / 220 * 220).min(t.0 + t.1 - (from + off));
+                                if t.0 < from || step > n - off || !step.is_multiple_of(220) {
+                                    return Err(LoadError::BadGguf(
+                                        code::TENSOR,
+                                        g.data_offset + t.0,
+                                    ));
+                                }
+                                step
+                            }
+                            None => {
+                                let next = nq3_spans
+                                    .iter()
+                                    .map(|t| t.0)
+                                    .filter(|&o| o > from + off)
+                                    .min()
+                                    .unwrap_or(u64::MAX);
+                                chunk.min(n - off).min(next - (from + off))
+                            }
+                        };
+                        let c = &mut staging[..step as usize];
                         f.read_exact(c).map_err(|_| LoadError::Io)?;
+                        let converted;
+                        let c = match span {
+                            Some(_) => {
+                                converted = nq3::from_q3_k(c);
+                                &converted[..]
+                            }
+                            None => &c[..],
+                        };
                         let at = to + off;
+                        off += step;
                         for &(b, start) in dst {
                             let lo = at.max(start);
                             let hi = (at + c.len() as u64).min(start + b.bytes());

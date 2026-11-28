@@ -508,7 +508,7 @@ larch_status quant_gemm_i8(larch_stream*, const larch_tensor* w_quant, const lar
     const matmul_checked checked = check_quant_gemm(buffer_bytes, w_quant, x_f16, bias_or_null, out);
     const view w = checked.b_t, x = checked.a, b = checked.bias, o = checked.c;
     // Refuse before the empty-row return, so the answer does not depend on the row count.
-    need(w.dtype != LARCH_Q3_K && w.dtype != LARCH_Q2_K, "no int8 policy for this dtype");
+    need(w.dtype != LARCH_Q3_K && w.dtype != LARCH_Q2_K && w.dtype != LARCH_NQ3, "no int8 policy for this dtype");
     if (!x.rows) return;
     const int64_t groups = w.cols / 32;
     struct activation {

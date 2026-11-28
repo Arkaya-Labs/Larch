@@ -11,6 +11,7 @@ mod experts;
 mod fake;
 pub mod gguf;
 pub mod learn;
+pub mod nq3;
 pub mod oracle;
 pub mod projector;
 pub mod q2k;

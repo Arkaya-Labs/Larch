@@ -100,7 +100,7 @@ struct vv_ops {
   // backend lacks the pages of are refused the same way before its kv_write and attention ops run.
   uint32_t kv_dtypes = 1u << LARCH_F16;
   // The weight dtypes this backend has no kernels for, refused the same way before its quant ops run.
-  uint32_t no_weights = 1u << LARCH_Q3_K | 1u << LARCH_Q2_K;
+  uint32_t no_weights = 1u << LARCH_Q3_K | 1u << LARCH_Q2_K | 1u << LARCH_NQ3;
   larch_status (*device_set_threads)(larch_device*, uint32_t threads) = nullptr;
   larch_status (*buffer_alloc_host)(larch_device*, uint64_t bytes, larch_buffer** out, void** host) = nullptr;
   larch_status (*event_sync)(const larch_event*) = nullptr;

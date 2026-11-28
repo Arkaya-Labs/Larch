@@ -215,12 +215,15 @@ pub enum DType {
     Q5_0,
     Q3K,
     Q2K,
+    /// Q3_K's values in the Metal kernels' layout (larch.h `LARCH_NQ3`): blocks of 512 weights, 220 bytes.
+    Nq3,
 }
 
 impl DType {
     /// Elements per block (1 for plain types).
     pub const fn block(self) -> u64 {
         match self {
+            DType::Nq3 => 512,
             DType::Q2K | DType::Q3K | DType::Q4K | DType::Q5K | DType::Q6K => 256,
             DType::Q8_0 | DType::Q4_0 | DType::Q5_0 => 32,
             _ => 1,
@@ -240,6 +243,7 @@ impl DType {
             DType::Q5_0 => 22,
             DType::Q3K => 110,
             DType::Q2K => 84,
+            DType::Nq3 => 220,
         }
     }
 
@@ -258,9 +262,11 @@ impl DType {
     }
 
     /// The byte alignment of a tensor's offset: the element size, or 2 for a quant block (every block
-    /// size is even, with its f16 scales at even offsets).
+    /// size is even, with its f16 scales at even offsets), 4 for Nq3 (its kernels load words).
     const fn align(self) -> u64 {
-        if self.block() == 1 {
+        if matches!(self, DType::Nq3) {
+            4
+        } else if self.block() == 1 {
             self.block_bytes()
         } else {
             2
@@ -282,6 +288,7 @@ impl DType {
             DType::Q5_0 => T::LARCH_Q5_0,
             DType::Q3K => T::LARCH_Q3_K,
             DType::Q2K => T::LARCH_Q2_K,
+            DType::Nq3 => T::LARCH_NQ3,
         }
     }
 }

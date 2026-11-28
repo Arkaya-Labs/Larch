@@ -23,13 +23,13 @@
 #include "tests/testdata.h"
 
 using dtypes = uint32_t;  // a set: bit t for larch_dtype t, bit NUL for a NULL tensor
-constexpr int NUL = LARCH_Q2_K + 1;
+constexpr int NUL = LARCH_NQ3 + 1;
 constexpr dtypes F32 = 1u << LARCH_F32, F16 = 1u << LARCH_F16, I32 = 1u << LARCH_I32, OPT = 1u << NUL;
 constexpr dtypes QUANT = 1u << LARCH_Q2_K | 1u << LARCH_Q3_K | 1u << LARCH_Q4_K | 1u << LARCH_Q5_K | 1u << LARCH_Q6_K | 1u << LARCH_Q8_0 |
                          1u << LARCH_Q4_0 | 1u << LARCH_Q5_0;
 constexpr dtypes KV = F16 | 1u << LARCH_Q8_0 | 1u << LARCH_FP8_E4M3;  // the pool dtypes
 const char* const NAMES[] = {"f32",  "f16",  "bf16", "i32",  "q4_k",     "q5_k",
-                             "q6_k", "q8_0", "q4_0", "q5_0", "fp8_e4m3", "q3_k", "q2_k", "NULL"};
+                             "q6_k", "q8_0", "q4_0", "q5_0", "fp8_e4m3", "q3_k", "q2_k", "nq3",  "NULL"};
 constexpr uint32_t DIM0 = 1, DIM1 = 2, DIM2 = 4, POOL = ~0u;
 
 struct arg {
