@@ -55,7 +55,7 @@ void usage() {
   std::puts("  metal_perf repack-id --device ORDINAL --experts COUNT --rows ROWS --slots USED --n COLS --k WIDTH "
             "--weighted 0|1 --iterations COUNT   (Q3_K, k a multiple of 512: the repacked-expert prototype)");
   std::puts("  metal_perf affine-q3 --device ORDINAL --rows ROWS --n COLS --k WIDTH --iterations COUNT   (Q3_K, k a "
-            "multiple of 512: the exact MLX-style affine prototype) [--layout affine|nax]");
+            "multiple of 512: the exact MLX-style affine prototype) [--layout affine|nax|nax1]");
   std::puts("  metal_perf gemm --device ORDINAL --m ROWS --n COLS --k WIDTH --iterations COUNT");
   std::puts("  metal_perf add --device ORDINAL --d WIDTH --iterations COUNT");
   std::puts("  metal_perf linear --device ORDINAL --format FORMAT --m ROWS --n COLS --k WIDTH --iterations COUNT");
@@ -1013,15 +1013,17 @@ int nq3_code(const uint8_t* row, uint64_t i) {
 void run_affine_q3(const arguments& parsed) {
   require_only(parsed, {"--device", "--rows", "--n", "--k", "--iterations", "--layout"});
   const auto layout_arg = parsed.values.find("--layout");
-  const bool nax = layout_arg != parsed.values.end() && layout_arg->second == "nax";
-  if (layout_arg != parsed.values.end() && !nax && layout_arg->second != "affine") fail("--layout must be affine or nax");
+  const bool nax1 = layout_arg != parsed.values.end() && layout_arg->second == "nax1";
+  const bool nax = nax1 || (layout_arg != parsed.values.end() && layout_arg->second == "nax");
+  if (layout_arg != parsed.values.end() && !nax && layout_arg->second != "affine")
+    fail("--layout must be affine, nax or nax1");
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
   const uint64_t rows = bounded(parsed, "--rows", 1, 64);
   const uint64_t n = bounded(parsed, "--n", 1, kMaxDimension);
   const uint64_t k = bounded(parsed, "--k", 512, kMaxDimension);
   const uint64_t iterations = bounded(parsed, "--iterations", 1, kMaxIterations);
   if (k % 512) fail("--k must be a multiple of 512");
-  if (nax && rows > 16) fail("--layout nax takes at most 16 rows");
+  if (nax && !nax1 && rows > 16) fail("--layout nax takes at most 16 rows");
   const uint64_t nb = k / 256, code_bytes = k * 3 / 8, groups = k / 16;
   const uint64_t rs = (code_bytes + groups + nb * 2 + 15) / 16 * 16;
   rng g(43);
@@ -1068,8 +1070,9 @@ void run_affine_q3(const arguments& parsed) {
   run.sync("affine-q3 reference timing");
 
   id<MTLDevice> device = direct_device(ordinal);
-  id<MTLComputePipelineState> pipe = nax ? metal_pipeline(device, "vv_mmvq_nax_nq3", true)
-                                         : metal_pipeline(device, "vv_mmvq_aq3");
+  id<MTLComputePipelineState> pipe = nax1 ? metal_pipeline(device, "vv_mmvq1_nq3")
+                                     : nax  ? metal_pipeline(device, "vv_mmvq_nax_nq3", true)
+                                            : metal_pipeline(device, "vv_mmvq_aq3");
   id<MTLCommandQueue> queue = [device newCommandQueue];
   id<MTLBuffer> w_buf = [device newBufferWithBytes:wr.data() length:wr.size() options:MTLResourceStorageModeShared];
   id<MTLBuffer> x_buf = [device newBufferWithBytes:x.data() length:x.size() options:MTLResourceStorageModeShared];
@@ -1089,7 +1092,7 @@ void run_affine_q3(const arguments& parsed) {
     [e setBuffer:x_buf offset:0 atIndex:1];
     [e setBuffer:out_buf offset:0 atIndex:2];
     [e setBytes:&a length:sizeof a atIndex:3];
-    if (nax)
+    if (nax && !nax1)
       [e dispatchThreadgroups:MTLSizeMake(NSUInteger((n + 31) / 32), 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
     else
       [e dispatchThreadgroups:MTLSizeMake(NSUInteger(rows), NSUInteger((n + 7) / 8), 1)
@@ -1119,7 +1122,7 @@ void run_affine_q3(const arguments& parsed) {
   const double aq_ns = (cb.GPUEndTime - cb.GPUStartTime) * 1e9;
   std::printf("mode=affine-q3 layout=%s rows=%llu n=%llu k=%llu iterations=%llu ref_us=%.3f affine_us=%.3f "
               "q3k_bits_per_weight=%.4f affine_bits_per_weight=%.4f weight_mismatches=%llu max_rel=%.3g %s\n",
-              nax ? "nax" : "affine", static_cast<unsigned long long>(rows), static_cast<unsigned long long>(n),
+              nax1 ? "nax1" : nax ? "nax" : "affine", static_cast<unsigned long long>(rows), static_cast<unsigned long long>(n),
               static_cast<unsigned long long>(k), static_cast<unsigned long long>(iterations),
               double(ref_ns) / 1e3 / double(iterations), aq_ns / 1e3 / double(iterations), 110.0 * 8 / 256,
               double(code_bytes + groups + nb * 2) * 8 / double(k), static_cast<unsigned long long>(mismatched), rel,

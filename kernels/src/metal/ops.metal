@@ -847,6 +847,56 @@ kernel void vv_mmvq_id_rq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], b
   }
 }
 
+// Prototype for metal_perf affine-q3 --layout nax1 only (no backend path): one row of x on attn_full_nax.metal's
+// vv_mmvq_nax_nq3 layout, on MLX's qmv_fast plan (2 simdgroups of 4 columns, x loaded once for the 4). A step is
+// 1024 inputs: lane l takes item j = l % 4 of unit u = l / 4, its three code words, the unit's 8 int8 scales and its
+// block's d; its inputs are 16 f + 4 j + e of the unit. A pair of weights is one shift, one mask and one or into
+// half2 1024 + code, minus 1028: code - 4, exact. Each group's f32 dot takes its scale, each unit's sum its d.
+// Grid (rows, ceil(n / 8)), out f32; the host sends k a multiple of 512 and x rows 8-byte aligned.
+kernel void vv_mmvq1_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], device uchar* out [[buffer(2)]],
+                         constant mm_args& a [[buffer(3)]], uint2 tg [[threadgroup_position_in_grid]],
+                         ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+  constexpr short RS = 4;
+  const uint n0 = (tg.y * 2 + sg) * RS;
+  if (n0 >= a.n) return;  // the whole simdgroup
+  const uint units = a.k / 128, code_bytes = a.k * 3 / 8, d_at = code_bytes + a.k / 16, j = lane % 4;
+  bytes_in wr[RS];
+  for (short i = 0; i < RS; ++i) wr[i] = w + u64(min(n0 + i, a.n - 1)) * a.b_rs;
+  float res[RS] = {};
+  for (uint u = lane / 4; u < units; u += 8) {
+    device const half* xu = (device const half*)(x + tg.x * a.a_rs) + u * 128 + 4 * j;
+    float4 xs[8];
+#pragma unroll
+    for (short f = 0; f < 8; ++f) xs[f] = float4(*(device const half4*)(xu + 16 * f));
+#pragma unroll
+    for (short r = 0; r < RS; ++r) {
+      device const uint* c = (device const uint*)(wr[r] + (u * 4 + j) * 12);
+      const uint cw[3] = {c[0], c[1], c[2]};
+      const uint2 sc = *(device const uint2*)(wr[r] + code_bytes + u * 8);
+      float unit = 0.0f;
+#pragma unroll
+      for (short f = 0; f < 8; ++f) {
+        float g = 0.0f;
+#pragma unroll
+        for (short p = 0; p < 2; ++p) {
+          const short P = 2 * f + p;
+          const uint v = P < 15 ? cw[P / 5] >> (3 * (P % 5)) & 0x00070007u
+                                : (cw[0] >> 15 & 0x00010001u) | (cw[1] >> 14 & 0x00020002u) | (cw[2] >> 13 & 0x00040004u);
+          const float2 q = float2(as_type<half2>(v | 0x64006400u) - half2(1028.0h));
+          g = fma(q.x, xs[f][2 * p], g);
+          g = fma(q.y, xs[f][2 * p + 1], g);
+        }
+        unit = fma(float(as_type<char4>(f < 4 ? sc.x : sc.y)[f % 4]), g, unit);
+      }
+      res[r] = fma(float(*(device const half*)(wr[r] + d_at + u / 2 * 2)), unit, res[r]);
+    }
+  }
+  for (short r = 0; r < RS; ++r) {
+    const float v = simd_sum(res[r]);
+    if (!lane && n0 + r < a.n) ((device float*)(out + tg.x * a.c_rs))[n0 + r] = v;
+  }
+}
+
 // Prototype for metal_perf affine-q3 only (no backend path): dense mmvq on Q3_K rewritten exactly into an MLX-style
 // affine 3-bit layout, on MLX's qmv_fast plan (quantized.h qmv_fast_impl and qdot<3>: 2 simdgroups of 4 columns, 16
 // weights a lane, 512 of k a step, x pre-divided by powers of 2 so each code is masked, never shifted). A row
