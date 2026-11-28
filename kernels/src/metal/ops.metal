@@ -220,11 +220,11 @@ kernel void dequant(bytes_in w [[buffer(0)]], device uchar* out [[buffer(1)]], c
 
 // mmvq: one simdgroup per output column n. Lane l decodes sub-blocks l, l + 32, ... of w's row n once
 // and multiplies each into every x row (rows <= 16). a = x, b = w, c = out.
-// Each column reads all of x again, so backend.mm sends 1 row of Q4_K and Q6_K to vv_mmvq1_*, 3-16 rows of
-// them to mmvq_mma, and more rows of the other formats, or 2 rows, to mmvq_ext and mmvq_mm below.
-// ponytail: mmvq_mma decodes Q4_K and Q6_K only. Q5_K, Q8_0, Q4_0 and Q5_0 keep mmvq_ext and mmvq_mm (Q8_0
+// Each column reads all of x again, so backend.mm sends 1 row to vv_mmvq1_*, 2-16 rows of the K-quants to
+// mmvq_mma (Q4_K, Q5_K and Q6_K from 3), and the other rows and formats to mmvq_ext and mmvq_mm below.
+// ponytail: mmvq_mma decodes the K-quants only. Q8_0, Q4_0 and Q5_0 keep mmvq_ext and mmvq_mm (Q8_0
 // 14336 x 4096 at 8 rows: 548 us, llama.cpp 541, M5, 10 Oct). Give mmvq_mma a 16-weight decoder for a format
-// when a model with it shows mmvq in W2.
+// when a model with it shows mmvq in W2 (Q3_K and Q5_K: the 35B's 8-chat decode, 27 Nov).
 template <int QK, int BYTES, deq_fn F>
 kernel void mmvq(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in bias [[buffer(2)]],
                  device uchar* out [[buffer(3)]], constant mm_args& a [[buffer(4)]],
@@ -555,8 +555,19 @@ kernel void mmvq_ext(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
   }
 }
 
-// 16 weights, piece p (0-15) of a 256-weight Q4_K or Q6_K block, for mmvq_mma.
+// 16 weights, piece p (0-15) of a 256-weight K-quant block (elements 16 p to 16 p + 15), for mmvq_mma.
 typedef void (*deq16_fn)(bytes_in b, int p, thread float* y);
+void deq16p_q3_k(bytes_in b, int p, thread float* y) { deq16_q3_k(b, p / 2, p % 2, y); }
+void deq16_q5_k(bytes_in b, int p, thread float* y) {
+  const int c = p / 2, h = p % 2;
+  float sc, m;
+  scale_min_k4(c, b + 4, sc, m);
+  const float d = h16(b) * sc, mn = h16(b + 2) * m;
+  bytes_in qh = b + 16 + 16 * h, ql = b + 48 + 32 * (c / 2) + 16 * h;
+  const uchar u = uchar(1 << c);
+#pragma clang loop unroll(full)
+  for (int l = 0; l < 16; ++l) y[l] = d * float((c & 1 ? ql[l] >> 4 : ql[l] & 0xF) + (qh[l] & u ? 16 : 0)) - mn;
+}
 void deq16_q4_k(bytes_in b, int p, thread float* y) {
   const int c = p / 2;
   float sc, m;
@@ -577,7 +588,7 @@ void deq16_q6_k(bytes_in b, int p, thread float* y) {
   }
 }
 
-// mmvq for 3-16 rows of Q4_K and Q6_K on simdgroup matrices, after llama.cpp's few-row MMA kernel (mul_mv_mma):
+// mmvq for 2-16 rows of the K-quants on simdgroup matrices, after llama.cpp's few-row MMA kernel (mul_mv_mma):
 // a threadgroup owns 8 NT columns of w and all 8 RT rows of x, and its MMVQ_MMA_SG simdgroups split k in 64-wide
 // steps. A lane decodes the 16 weights its A fragments hold straight into registers and loads the x values of
 // its B fragments, so threadgroup memory only sums the simdgroups' partial tiles at the end. The loops must be
@@ -989,6 +1000,10 @@ template [[host_name("vv_mmvq_id1n_q3_k")]] kernel decltype(mmvq_id1n<110>) mmvq
 template [[host_name("vv_mmvq_id1n_q4_k")]] kernel decltype(mmvq_id1n<144>) mmvq_id1n<144>;
 template [[host_name("vv_mmvq_id1n_q5_k")]] kernel decltype(mmvq_id1n<176>) mmvq_id1n<176>;
 template [[host_name("vv_mmvq_id1n_q6_k")]] kernel decltype(mmvq_id1n<210>) mmvq_id1n<210>;
+template [[host_name("vv_mmvq_mma8_q3_k")]] kernel mmvq_mma_t mmvq_mma<110, deq16p_q3_k, 1>;
+template [[host_name("vv_mmvq_mma16_q3_k")]] kernel mmvq_mma_t mmvq_mma<110, deq16p_q3_k, 2>;
+template [[host_name("vv_mmvq_mma8_q5_k")]] kernel mmvq_mma_t mmvq_mma<176, deq16_q5_k, 1>;
+template [[host_name("vv_mmvq_mma16_q5_k")]] kernel mmvq_mma_t mmvq_mma<176, deq16_q5_k, 2>;
 template [[host_name("vv_mmvq_mma8_q4_k")]] kernel mmvq_mma_t mmvq_mma<144, deq16_q4_k, 1>;
 template [[host_name("vv_mmvq_mma16_q4_k")]] kernel mmvq_mma_t mmvq_mma<144, deq16_q4_k, 2>;
 template [[host_name("vv_mmvq_mma8_q6_k")]] kernel mmvq_mma_t mmvq_mma<210, deq16_q6_k, 1>;

@@ -523,14 +523,14 @@ static void deferred_dequant() {
 static void mmvq_rows() {
   constexpr int64_t n = 67;
   for (const int64_t k : {256, 768}) {
-    for (const larch_dtype q : {LARCH_Q4_K, LARCH_Q6_K}) {
+    for (const larch_dtype q : {LARCH_Q3_K, LARCH_Q4_K, LARCH_Q5_K, LARCH_Q6_K}) {
       const both w = up(make(q, {n, k}, 2)), bias = up(make(LARCH_F32, {n}, 3));
       for (int64_t rows = 1; rows <= 16; ++rows) {
         const both x = up(make(LARCH_F16, {rows, k}, 5));
         for (const larch_dtype out_type : {LARCH_F16, LARCH_F32}) {
           for (const bool with_bias : {false, true}) {
             const both out = up(make(out_type, {rows, n}, 7));
-            const std::string name = "mmvq " + std::string(q == LARCH_Q4_K ? "q4_k" : "q6_k") + " k " +
+            const std::string name = "mmvq " + std::string(q == LARCH_Q3_K ? "q3_k" : q == LARCH_Q4_K ? "q4_k" : q == LARCH_Q5_K ? "q5_k" : "q6_k") + " k " +
                                      std::to_string(k) + ", " + std::to_string(rows) + " rows " +
                                      (out_type == LARCH_F16 ? "f16" : "f32") +
                                      (with_bias ? " bias" : " no bias");
@@ -559,7 +559,7 @@ static void mmvq_tiles() {
   for (const auto& [q, format] : formats) {
     const int64_t k = block_of(q) == 256 ? 768 : 96;
     const both w = up(make(q, {n, k}, 2)), bias = up(make(LARCH_F32, {n}, 3));
-    // Q4_K and Q6_K from 3 rows: mmvq_mma. The others at 2-4: the shared-x kernel (4 its widest one-tile case);
+    // The K-quants from 3 rows (Q3_K from 2): mmvq_mma. The others at 2-4: the shared-x kernel (4 its widest one-tile case);
     // 5 and 8: the 1-tile kernel (8 fills it); 9 and 16: 2
     for (const int64_t rows : {2, 3, 4, 5, 8, 9, 16}) {
       const both x = up(make(LARCH_F16, {rows, k}, 5));
@@ -707,8 +707,8 @@ static void attn_decode_splits() {
 }
 
 // Flash prefill (backend.mm attend): 32-row tiles across sequences, cached prefixes, mid-block starts, an empty
-// chunk, GQA 7, head_dim 64, 96 (inside the 128 tile) and 128, q rows 2-byte aligned, 2-3 rows per sequence.
-// Then the head_dims that keep vv_attn: 6 and 256.
+// chunk, GQA 7, head_dim 64, 96 (inside the 128 tile), 128 and 256, q rows 2-byte aligned, 2-3 rows per sequence,
+// and a few hundred positions; head_dim 6 keeps vv_attn.
 static void attn_prefill_flash() {
   struct shape {
     uint32_t kv_heads, hd;
@@ -719,8 +719,10 @@ static void attn_prefill_flash() {
       {2, 64, 14, 8, {{0, 70}, {37, 45}, {5, 0}, {130, 33}}}, {2, 128, 8, 8, {{0, 70}, {37, 45}, {5, 0}, {130, 33}}},
       {1, 96, 4, 0, {{3, 40}}},  {1, 256, 2, 0, {{0, 40}}}, {1, 6, 2, 0, {{17, 40}}}, {2, 64, 4, 3, {{0, 40}}},
       {2, 64, 4, 8, {{9, 2}, {0, 3}, {40, 2}}}, {1, 80, 4, 0, {{3, 40}}}, {1, 40, 4, 0, {{3, 40}}},
+      // vv_attn_paged_nax: several 64-row (32 at 256) tiles over many 32-position steps, from a mid-block start
+      {2, 128, 8, 0, {{90, 300}, {0, 17}}}, {2, 256, 16, 0, {{7, 260}}},
   };
-  constexpr uint32_t blocks = 16;
+  constexpr uint32_t blocks = 32;
   for (const shape& c : shapes) {
     std::vector<int32_t> start, len, table;
     int64_t rows = 0, width = 0;
