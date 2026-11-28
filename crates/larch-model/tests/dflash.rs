@@ -84,7 +84,7 @@ fn rounds(name: &str, positions: u32) -> (DflashDrafter, larch_model::DraftCache
             .unwrap();
         let n = key("guesses");
         let (ids, conf) = drafter
-            .propose(&s, &cache, &embed, &head, key("anchor"), n)
+            .propose(&s, &cache, &embed, &head, key("anchor"), &[], n)
             .unwrap();
         // A chance for each guess, of its own candidate's softmax.
         assert_eq!(conf.len(), ids.len(), "{name} round {i}");
@@ -214,7 +214,9 @@ fn a_q4_k_drafter_proposes() {
 
     let mut cache = drafter.cache(&dev, &s, 64).unwrap();
     drafter.observe(&s, &mut cache, &taps, 0..4).unwrap();
-    let (ids, conf) = drafter.propose(&s, &cache, &embed, &embed, 5, 7).unwrap();
+    let (ids, conf) = drafter
+        .propose(&s, &cache, &embed, &embed, 5, &[], 7)
+        .unwrap();
     assert_eq!((ids.len(), conf.len()), (7, 7));
     assert!(conf.iter().all(|&p| p > 0.0 && p <= 1.0), "{conf:?}");
     assert!(ids.iter().all(|&t| t < vocab as u32));

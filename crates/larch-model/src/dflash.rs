@@ -812,8 +812,10 @@ impl DflashDrafter {
 
     /// Up to `n` greedy guesses for the tokens after `anchor`, the token at position `c.len()`, and
     /// the draft's softmax chance of each: one block of `n + 1` rows (`n < block`), embedded and
-    /// projected with the target's `embed` and `head` ([`crate::Model::embed_and_head`]). Leaves
-    /// `c`'s positions as they were.
+    /// projected with the target's `embed` and `head` ([`crate::Model::embed_and_head`]). `before`,
+    /// the sequence's tokens before `anchor` (only its last 63 are read), picks the head's rows
+    /// ([`draft_vocab`]). Leaves `c`'s positions as they were.
+    #[allow(clippy::too_many_arguments)]
     pub fn propose(
         &self,
         s: &Stream,
@@ -821,6 +823,7 @@ impl DflashDrafter {
         embed: &Tensor,
         head: &Tensor,
         anchor: u32,
+        before: &[u32],
         n: u32,
     ) -> Result<(Vec<u32>, Vec<f32>), KError> {
         let (d, hd, eps) = (self.sh.d, self.sh.head_dim, self.sh.eps);
@@ -942,7 +945,7 @@ impl DflashDrafter {
         ops::rmsnorm(s, &x.rows(1, n)?, &w(self.sh.out_norm)?, eps, &hn)?;
         // The head's first `nv` rows only: BPE ids run roughly by merge order, so the low ids hold the common
         // tokens (FR-Spec's frequency-ranked draft vocabulary, as a prefix). A guess past it misses its check.
-        let nv = draft_vocab(self.sh.vocab);
+        let nv = draft_vocab(self.sh.vocab, anchor, before);
         let logits = Tensor::new(&sc.logits, 0, DType::F32, &[n, nv])?;
         mm(&head.rows(0, nv)?, &hn, &logits)?;
         let p = SampleParams {
@@ -986,7 +989,8 @@ impl DflashDrafter {
             .unzip())
     }
 
-    /// The f32 logits of the last [`DflashDrafter::propose`]'s guesses, `[n, vocab]` (tests).
+    /// The f32 logits of the last [`DflashDrafter::propose`]'s guesses, `[n, vocab]`, where it ran
+    /// on the whole vocabulary (tests).
     pub fn last_logits(&self, s: &Stream, n: u32) -> Result<Vec<f32>, KError> {
         let mut v = vec![0f32; (i64::from(n) * self.sh.vocab) as usize];
         s.download(&self.sc.logits, 0, &mut v)?;
@@ -994,12 +998,33 @@ impl DflashDrafter {
     }
 }
 
-/// LARCH_DRAFT_VOCAB=N: the draft head scores ids below N only (default: the whole vocabulary).
-// ponytail: an id prefix, not a corpus-ranked set; rank by counts if the prefix costs non-English text its guesses.
-fn draft_vocab(vocab: i64) -> i64 {
+/// Qwen 3.5 and 3.6's 248,320-token vocabulary, the ids below [`QWEN35_DRAFT_VOCAB`] a draft head
+/// scores while the text stays inside them, and the specials from [`QWEN35_SPECIALS`] on: Splash's
+/// measured subset for these targets (its `kQwenDraftVocabulary`), 40% fewer head rows a round.
+const QWEN35_VOCAB: i64 = 248_320;
+const QWEN35_DRAFT_VOCAB: i64 = 148_288;
+const QWEN35_SPECIALS: i64 = 248_000;
+
+/// How many of the head's first rows a round scores (the rest of the vocabulary is never guessed,
+/// and a guess its check would keep past them misses): LARCH_DRAFT_VOCAB=N gives the first N always.
+/// Otherwise, for a Qwen 3.5 or 3.6 vocabulary, the first [`QWEN35_DRAFT_VOCAB`] while `anchor` and
+/// the last 63 tokens `before` it each lie below it or among the specials, as Splash keeps its subset
+/// (Splash: French text, a tenth of whose tokens lie past it, kept 0.2% fewer tokens a round through
+/// this window than over the whole vocabulary), else the whole vocabulary.
+// ponytail: one prefix view, so unlike Splash's subset head the specials are not scored and a turn's
+// end or `</think>` is never guessed; score their 320 rows too if a bench shows it costs kept tokens.
+fn draft_vocab(vocab: i64, anchor: u32, before: &[u32]) -> i64 {
     static N: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new();
     let n = N.get_or_init(|| std::env::var("LARCH_DRAFT_VOCAB").ok()?.parse().ok());
-    n.map_or(vocab, |n| n.clamp(64, vocab))
+    if let Some(n) = *n {
+        return n.clamp(64, vocab);
+    }
+    let inside = |&t: &u32| !(QWEN35_DRAFT_VOCAB..QWEN35_SPECIALS).contains(&i64::from(t));
+    let window = &before[before.len().saturating_sub(63)..];
+    match vocab == QWEN35_VOCAB && inside(&anchor) && window.iter().all(inside) {
+        true => QWEN35_DRAFT_VOCAB,
+        false => vocab,
+    }
 }
 
 fn draft_tile() -> bool {
@@ -1057,4 +1082,30 @@ fn select(
         prev = id;
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The subset holds while the anchor and the 63 tokens before it lie below it or among the
+    /// specials; one token between, in that window, gives the whole vocabulary back.
+    #[test]
+    fn the_draft_vocabulary_follows_the_window() {
+        if std::env::var_os("LARCH_DRAFT_VOCAB").is_some() {
+            return;
+        }
+        let (v, sub) = (QWEN35_VOCAB, QWEN35_DRAFT_VOCAB);
+        let (past, special) = (sub as u32, QWEN35_SPECIALS as u32 + 46);
+        let mut text = vec![past; 1];
+        text.extend([7u32; 63]);
+        assert_eq!(draft_vocab(v, 9, &text), sub, "past the window");
+        assert_eq!(draft_vocab(v, 9, &text[..0]), sub, "nothing before");
+        assert_eq!(draft_vocab(v, past, &text), v, "the anchor");
+        text[1] = past;
+        assert_eq!(draft_vocab(v, 9, &text), v, "the window's first");
+        text[1] = special;
+        assert_eq!(draft_vocab(v, special, &text), sub, "specials");
+        assert_eq!(draft_vocab(1000, 9, &text[1..]), 1000, "another vocabulary");
+    }
 }
