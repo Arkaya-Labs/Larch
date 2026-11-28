@@ -765,11 +765,17 @@ bytes repack_q3_k(const bytes& w, uint64_t rows, uint64_t nb, uint64_t rs) {
   return out;
 }
 
+bytes repack_nq3(const bytes& w, uint64_t rows, uint64_t nb, uint64_t rs);  // below, with the affine prototype
+
 // metal_perf repack-id: run_mmvq_id's shapes and expert choice on Q3_K, larch_mmvq_id on the GGUF blocks against
 // vv_mmvq_id_rq3 on the same blocks repacked, f32 out. Prints both times and the largest difference relative to
 // the output's peak; exits 1 past 1e-3.
 void run_repack_id(const arguments& parsed) {
-  require_only(parsed, {"--device", "--experts", "--rows", "--slots", "--n", "--k", "--weighted", "--iterations"});
+  require_only(parsed, {"--device", "--experts", "--rows", "--slots", "--n", "--k", "--weighted", "--iterations",
+                        "--layout"});
+  const auto layout_arg = parsed.values.find("--layout");
+  const bool nq3 = layout_arg != parsed.values.end() && layout_arg->second == "nq3";
+  if (layout_arg != parsed.values.end() && !nq3 && layout_arg->second != "rq3") fail("--layout must be rq3 or nq3");
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
   const uint64_t experts = bounded(parsed, "--experts", 1, 512);
   const uint64_t rows = bounded(parsed, "--rows", 1, 64);
@@ -779,10 +785,11 @@ void run_repack_id(const arguments& parsed) {
   const bool weighted = bounded(parsed, "--weighted", 0, 1) == 1;
   const uint64_t iterations = bounded(parsed, "--iterations", 1, kMaxIterations);
   if (k % 512) fail("--k must be a multiple of 512");
-  const uint64_t nb = k / 256, rs = (nb * 110 + 15) / 16 * 16, pairs = rows * slots;
+  const uint64_t nb = k / 256, pairs = rows * slots;
+  const uint64_t rs = nq3 ? (k * 3 / 8 + k / 16 + nb * 2 + 15) / 16 * 16 : (nb * 110 + 15) / 16 * 16;
   rng g(41);
   const bytes w = quant(LARCH_Q3_K, int64_t(experts * n), int64_t(k), g);
-  const bytes wr = repack_q3_k(w, experts * n, nb, rs);
+  const bytes wr = nq3 ? repack_nq3(w, experts * n, nb, rs) : repack_q3_k(w, experts * n, nb, rs);
   const bytes x = halves(size_t((weighted ? pairs : rows) * k), g);
   std::vector<int32_t> ids(static_cast<size_t>(pairs));
   for (uint64_t p = 0; p < pairs; ++p) ids[size_t(p)] = int32_t(p % experts);
@@ -822,7 +829,8 @@ void run_repack_id(const arguments& parsed) {
   run.sync("repack-id reference timing");
 
   id<MTLDevice> device = direct_device(ordinal);
-  id<MTLComputePipelineState> pipe = metal_pipeline(device, "vv_mmvq_id_rq3");
+  id<MTLComputePipelineState> pipe =
+      metal_pipeline(device, !nq3 ? "vv_mmvq_id_rq3" : k % 1024 ? "vv_mmvq_id_nq3n" : "vv_mmvq_id_nq3");
   id<MTLCommandQueue> queue = [device newCommandQueue];
   id<MTLBuffer> w_buf = [device newBufferWithBytes:wr.data() length:wr.size() options:MTLResourceStorageModeShared];
   id<MTLBuffer> x_buf = [device newBufferWithBytes:x.data() length:x.size() options:MTLResourceStorageModeShared];
@@ -880,9 +888,9 @@ void run_repack_id(const arguments& parsed) {
   wait_for(cb, "repack-id timing");
   const double rq_ns = (cb.GPUEndTime - cb.GPUStartTime) * 1e9;
   const uint64_t read = std::min(pairs, experts) * n * nb * 110;
-  std::printf("mode=repack-id experts=%llu rows=%llu slots=%llu n=%llu k=%llu weighted=%d iterations=%llu "
+  std::printf("mode=repack-id layout=%s experts=%llu rows=%llu slots=%llu n=%llu k=%llu weighted=%d iterations=%llu "
               "ref_us=%.3f repacked_us=%.3f ref_gbps=%.3f repacked_gbps=%.3f max_rel=%.3g %s\n",
-              static_cast<unsigned long long>(experts), static_cast<unsigned long long>(rows),
+              nq3 ? "nq3" : "rq3", static_cast<unsigned long long>(experts), static_cast<unsigned long long>(rows),
               static_cast<unsigned long long>(slots), static_cast<unsigned long long>(n),
               static_cast<unsigned long long>(k), int(weighted), static_cast<unsigned long long>(iterations),
               double(ref_ns) / 1e3 / double(iterations), rq_ns / 1e3 / double(iterations),

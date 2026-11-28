@@ -897,6 +897,90 @@ kernel void vv_mmvq1_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], dev
   }
 }
 
+// Prototype for metal_perf repack-id --layout nq3 only (no backend path): vv_mmvq_id_rq3's grid and expert walk on
+// Q3_K experts in vv_mmvq_nax_nq3's layout, each lane decoding as vv_mmvq1_nq3 does. FH fragments a lane: 8 (a
+// step of 1024 inputs, lane l item l % 4 of unit l / 4) or 4 (512 inputs, lane l fragments 4 (l % 2) .. + 3 of item
+// l / 2 % 4 of unit l / 8, all 32 lanes busy at k 512). x is read with packed loads (larch.h promises 2-byte
+// alignment only).
+template <short FH>
+kernel void mmvq_id_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in ids [[buffer(2)]],
+                        bytes_in bias [[buffer(3)]], bytes_in wt [[buffer(4)]], device uchar* out [[buffer(5)]],
+                        constant id_args& a [[buffer(6)]], uint2 tg [[threadgroup_position_in_grid]],
+                        ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+  constexpr short RS = 4, LPU = 4 * (8 / FH), UPS = 32 / LPU;  // lanes a unit, units a step
+  const uint n0 = (tg.x * 2 + sg) * RS;
+  if (n0 >= a.n) return;  // the whole simdgroup
+  const uint r = a.weighted ? tg.y : tg.y / a.slots, first = a.weighted ? 0 : tg.y % a.slots;
+  const uint last = a.weighted ? a.slots : first + 1;
+  const uint units = a.k / 128, code_bytes = a.k * 3 / 8, d_at = code_bytes + a.k / 16;
+  const uint j = (lane % LPU) / (8 / FH), f0 = FH == 8 ? 0 : 4 * (lane % 2);
+  float acc[RS] = {};
+  for (uint s = first; s < last; ++s) {
+    const uint e = uint(at<int>(ids + r * a.ids_rs, 4, s));
+    bytes_in we = w + u64(e) * a.n * a.w_rs;
+    device const half* xr = (device const half*)(x + r * a.x_rs + s * a.x_slot_rs);
+    bytes_in wr[RS];
+#pragma clang loop unroll(full)
+    for (short c = 0; c < RS; ++c) wr[c] = we + u64(min(n0 + c, a.n - 1)) * a.w_rs;  // a ragged tail recomputes n - 1
+    float sum[RS] = {};
+    for (uint u = lane / LPU; u < units; u += UPS) {
+      float4 xs[FH];
+#pragma clang loop unroll(full)
+      for (short f = 0; f < FH; ++f)
+        xs[f] = float4(half4(*(device const packed_half4*)(xr + u * 128 + 16 * (f0 + f) + 4 * j)));
+#pragma clang loop unroll(full)
+      for (short c = 0; c < RS; ++c) {
+        device const uint* cp = (device const uint*)(wr[c] + (u * 4 + j) * 12);
+        const uint cw[3] = {cp[0], cp[1], cp[2]};
+        const uint sc = *(device const uint*)(wr[c] + code_bytes + u * 8 + f0);
+        const uint sc1 = FH == 8 ? *(device const uint*)(wr[c] + code_bytes + u * 8 + 4) : 0u;
+        float unit = 0.0f;
+#pragma clang loop unroll(full)
+        for (short f = 0; f < FH; ++f) {
+          float g = 0.0f;
+#pragma clang loop unroll(full)
+          for (short p = 0; p < 2; ++p) {
+            const uint P = 2 * (f0 + f) + p;
+            const uint v = P < 15 ? cw[P / 5] >> (3 * (P % 5)) & 0x00070007u
+                                  : (cw[0] >> 15 & 0x00010001u) | (cw[1] >> 14 & 0x00020002u) |
+                                        (cw[2] >> 13 & 0x00040004u);
+            const float2 q = float2(as_type<half2>(v | 0x64006400u) - half2(1028.0h));
+            g = fma(q.x, xs[f][2 * p], g);
+            g = fma(q.y, xs[f][2 * p + 1], g);
+          }
+          unit = fma(float(as_type<char4>(f < 4 ? sc : sc1)[f % 4]), g, unit);
+        }
+        sum[c] = fma(h16(wr[c] + d_at + u / 2 * 2), unit, sum[c]);
+      }
+    }
+#pragma clang loop unroll(full)
+    for (short c = 0; c < RS; ++c) {
+      const uint n = min(n0 + c, a.n - 1);
+      float v = simd_sum(sum[c]);
+      if (a.has_bias) v += at<float>(bias, a.bias_rs, e * a.n + n);
+      if (a.weighted) {
+        acc[c] += at<float>(wt + r * a.wt_rs, 4, s) * v;
+      } else if (!lane && n0 + c < a.n) {
+        device uchar* o = out + r * a.out_rs + s * a.out_slot_rs;
+        if (a.out_f32)
+          ((device float*)o)[n] = v;
+        else
+          ((device half*)o)[n] = half(v);
+      }
+    }
+  }
+  for (short c = 0; a.weighted && !lane && c < RS && n0 + c < a.n; ++c) {
+    device uchar* o = out + r * a.out_rs;
+    if (a.out_f32)
+      ((device float*)o)[n0 + c] = acc[c];
+    else
+      ((device half*)o)[n0 + c] = half(acc[c]);
+  }
+}
+typedef decltype(mmvq_id_nq3<8>) mmvq_id_nq3_t;
+template [[host_name("vv_mmvq_id_nq3")]] kernel mmvq_id_nq3_t mmvq_id_nq3<8>;
+template [[host_name("vv_mmvq_id_nq3n")]] kernel mmvq_id_nq3_t mmvq_id_nq3<4>;
+
 // Prototype for metal_perf affine-q3 only (no backend path): dense mmvq on Q3_K rewritten exactly into an MLX-style
 // affine 3-bit layout, on MLX's qmv_fast plan (quantized.h qmv_fast_impl and qdot<3>: 2 simdgroups of 4 columns, 16
 // weights a lane, 512 of k a step, x pre-divided by powers of 2 so each code is masked, never shifted). A row
