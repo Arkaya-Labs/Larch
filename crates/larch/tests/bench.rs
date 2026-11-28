@@ -14,7 +14,7 @@ use std::{
 use larch_engine::{EngineEvent, EngineHandle, Request, start_with};
 use larch_kernels::{KError, KvPool, Stream, Tensor};
 use larch_model::{
-    FakeModel, Model, ModelConfig, StepBatch,
+    Arch, FakeModel, Model, ModelConfig, StepBatch,
     gguf::{Gguf, Value as Kv, write},
     tiny,
 };
@@ -1548,4 +1548,74 @@ fn http_terminal_output_count_above_cap_fails_without_completed_tokens() {
             .unwrap()
             .contains("exceeds requested cap")
     }));
+}
+
+/// The tiny hybrid (Qwen 3.5 shape) GGUF with a byte vocabulary and `template`, at `dir`.
+fn tiny_hybrid_file(dir: &Temp, template: &str) -> PathBuf {
+    let bytes = tiny::gguf(Arch::Qwen35, 3);
+    let g = Gguf::parse(&bytes).unwrap();
+    let tensors: Vec<_> = (g.tensors.iter())
+        .map(|t| {
+            let at = (g.data_offset + t.offset) as usize;
+            let data = bytes[at..at + t.bytes as usize].to_vec();
+            (t.name.clone(), t.dims.clone(), t.ggml_type, data)
+        })
+        .collect();
+    let mut kv: Vec<_> = (g.kv.into_iter())
+        .filter(|(k, _)| !k.starts_with("tokenizer."))
+        .collect();
+    let byte = |b: u32| Kv::Str(format!("<0x{b:02X}>"));
+    kv.extend([
+        ("tokenizer.ggml.model".into(), Kv::Str("llama".into())),
+        (
+            "tokenizer.ggml.tokens".into(),
+            Kv::Arr((0..256).map(byte).collect()),
+        ),
+        (
+            "tokenizer.ggml.token_type".into(),
+            Kv::Arr(vec![Kv::I32(6); 256]),
+        ),
+        ("tokenizer.ggml.bos_token_id".into(), Kv::U32(97)),
+        ("tokenizer.ggml.eos_token_id".into(), Kv::U32(255)),
+        ("tokenizer.ggml.add_bos_token".into(), Kv::Bool(false)),
+        ("tokenizer.ggml.add_space_prefix".into(), Kv::Bool(false)),
+        ("tokenizer.chat_template".into(), Kv::Str(template.into())),
+    ]);
+    let path = dir.0.join("tiny-hybrid.gguf");
+    fs::write(&path, write(&kv, &tensors)).unwrap();
+    path
+}
+
+/// Scripted replay on a hybrid model reuses each turn's whole history: the turn parks its state
+/// at its history end, as the app's sessions do, so the next prompt, which carries the scripted
+/// answer, not larch's, runs on from there instead of reading the last turn again.
+#[test]
+fn scripted_replay_on_a_hybrid_reuses_the_whole_history() {
+    // A past reply renders unlike its generation prompt, as Qwen 3.5's template does.
+    let template = "{% for m in messages %}{% if m.role == 'assistant' %}{{ bos_token }}{% endif %}{{ m.content }}{% endfor %}{% if add_generation_prompt %}{{ bos_token }}>{% endif %}";
+    let dir = Temp::new();
+    let mut opts = options(&dir, Workload::Chat, CONVS);
+    opts.model = tiny_hybrid_file(&dir, template);
+    let g = Gguf::parse(&fs::read(&opts.model).unwrap()).unwrap();
+    bench::run(opts.clone(), &mut Vec::new()).unwrap();
+    let v: Value =
+        serde_json::from_str(&fs::read_to_string(opts.json.as_ref().unwrap()).unwrap()).unwrap();
+    let w = bench::load_workload(opts.prompts.as_ref().unwrap()).unwrap();
+    let (tok, tmpl) = bench::vocab_of(&g).unwrap();
+    let reqs = requests(&v);
+    assert_eq!(reqs.len(), 6);
+    for r in reqs {
+        let conv = w.convs.iter().find(|c| c.id == r["conv"]).unwrap();
+        let k = r["turn"].as_u64().unwrap() as usize;
+        let cached = r["cached_tokens"].as_u64().unwrap();
+        if k == 0 {
+            assert_eq!(cached, 0, "{r}");
+            continue;
+        }
+        let last = &conv.messages[..conv.turns[k - 1].n_msgs];
+        let (_, prompt) = bench::render(&tok, &tmpl, last).unwrap();
+        let end = bench::history_end(&tok, &tmpl, last, &prompt).unwrap();
+        assert!(end > 0 && (end as usize) < prompt.len(), "{end}");
+        assert_eq!(cached, u64::from(end), "{r}");
+    }
 }

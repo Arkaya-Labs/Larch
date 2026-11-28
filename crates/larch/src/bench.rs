@@ -312,6 +312,27 @@ pub fn render(
     Ok((text, tokens))
 }
 
+/// The length of `prompt`, [`render`]ed from `messages`, without its generation prompt: the chat
+/// history the conversation's next scripted prompt repeats, which a kept hybrid session parks its
+/// state at (`Request::history_end`), as the app's and `larch serve`'s sessions do. 0 when the
+/// template does not end the prompt with the generation prompt alone.
+pub fn history_end(
+    tok: &Tokenizer,
+    tmpl: &ChatTemplate,
+    messages: &[Message],
+    prompt: &[u32],
+) -> Result<u32> {
+    let full = tmpl.render(messages, true).context("chat template")?;
+    let history = tmpl.render(messages, false).context("chat template")?;
+    let Some(suffix) = full.strip_prefix(history.as_str()) else {
+        return Ok(0);
+    };
+    let suffix = tok.encode(suffix, false);
+    Ok(prompt
+        .strip_suffix(&suffix[..])
+        .map_or(0, |h| h.len() as u32))
+}
+
 /// `prompt_sha256`: sha256 of the token IDs as consecutive little-endian int32 (bench/README.md).
 pub fn prompt_sha256(tokens: &[u32]) -> String {
     let bytes: Vec<u8> = tokens.iter().flat_map(|t| t.to_le_bytes()).collect();
@@ -1026,7 +1047,8 @@ struct OpenAi {
     warmup: Value,
 }
 
-type Prompts = Vec<Vec<(String, Vec<u32>)>>;
+/// Per conversation and turn: the rendered text, its tokens and its [`history_end`].
+type Prompts = Vec<Vec<(String, Vec<u32>, u32)>>;
 
 struct Bench<'a> {
     opts: &'a Options,
@@ -1218,7 +1240,12 @@ impl Bench<'_> {
                 conv.turns
                     .iter()
                     .filter(|_| scripted)
-                    .map(|t| render(self.tok, self.tmpl, &conv.messages[..t.n_msgs]))
+                    .map(|t| {
+                        let messages = &conv.messages[..t.n_msgs];
+                        let (text, tokens) = render(self.tok, self.tmpl, messages)?;
+                        let end = history_end(self.tok, self.tmpl, messages, &tokens)?;
+                        Ok((text, tokens, end))
+                    })
                     .collect::<Result<_>>()
             })
             .collect()
@@ -1501,19 +1528,19 @@ impl Bench<'_> {
                         self.session_turn(clock, s, &mut r, &conv.messages[turn.n_msgs - 1].content)
                     }
                     (Target::Larch { engine, .. }, None) => {
-                        let prompt = &clock.prompts[ci][k].1;
+                        let (_, prompt, end) = &clock.prompts[ci][k];
                         engine_turn(
                             clock,
                             engine,
                             self.tok,
                             &mut r,
                             prompt,
-                            reuse.then_some(id),
+                            reuse.then_some((id, *end)),
                             !self.opts.natural_eos,
                         )
                     }
                     (Target::Ollama(o), None) => {
-                        let (text, prompt) = &clock.prompts[ci][k];
+                        let (text, prompt, _) = &clock.prompts[ci][k];
                         if o.larch {
                             r.session_end = Some(k + 1 == conv.turns.len());
                         }
@@ -1857,15 +1884,17 @@ fn run_all(e: &EngineHandle, reqs: impl Iterator<Item = Request>) -> Result<Vec<
 }
 
 /// Scripted replay and W4 to W5 on larch: the prompt the other engines get, greedy, EOS ignored
-/// (`Request::ignore_eos` is bench's; `GenParams` has none, 10.1). With reuse, the conversation
-/// parks under `session` and its next turn keeps the common prefix.
+/// (`Request::ignore_eos` is bench's; `GenParams` has none, 10.1). With reuse, `session` is the
+/// conversation and its prompt's [`history_end`]: the turn parks there and its next turn keeps the
+/// common prefix. A hybrid's state parked at the turn's end would match none of the next prompt,
+/// whose history carries the scripted answer, not larch's.
 fn engine_turn(
     clock: &Clock,
     e: &EngineHandle,
     tok: &Tokenizer,
     r: &mut Req,
     prompt: &[u32],
-    session: Option<u64>,
+    session: Option<(u64, u32)>,
     ignore_eos: bool,
 ) {
     r.prompt_tokens = prompt.len() as u32;
@@ -1875,8 +1904,9 @@ fn engine_turn(
     let req = Request {
         stop_tokens: tok.eog().to_vec(),
         ignore_eos,
-        session: session.unwrap_or(0),
+        session: session.map_or(0, |s| s.0),
         keep_kv: session.is_some(),
+        history_end: session.map_or(0, |s| s.1),
         ..Request::new(prompt.to_vec(), r.max_tokens)
     };
     r.t_submit_ms = clock.ms();
