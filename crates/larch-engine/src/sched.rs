@@ -228,6 +228,8 @@ struct Fit {
     /// `Req::save_at` and `Req::save_by` from this start.
     save_at: usize,
     save_by: usize,
+    /// `Req::cut_save` from this start.
+    cut_save: bool,
     /// A hybrid's pin read: it cuts and saves at every this many tokens, else 0.
     marks: usize,
     /// The tokens of the prompt's cached chain, checkpointed or not (S03's `available`).
@@ -350,6 +352,13 @@ pub(crate) struct Req {
     // document's read does: `fit`); cut for it too if the agent bench shows other sessions
     // prefilling its history again.
     save_by: usize,
+    /// A kept hybrid turn that found no free state slot for its snapshot at `history_end`: it cuts
+    /// a chunk at `save_by` too, the last block boundary before its history end, and keeps the
+    /// state there as a checkpoint in host memory, which the next turn loads should no slot hold
+    /// the snapshot. Its snapshot then takes only a free slot, never another session's parked one.
+    // ponytail: decided at the turn's start from the free slots then; decide at the snapshot if a
+    // bench shows turns that started short of slots finding one free by their history end.
+    cut_save: bool,
     /// `Request::progress`: report each prefill chunk.
     progress: bool,
     /// A background request whose prompt is a pin's: a pinned document's read, which the pacing
@@ -424,9 +433,10 @@ impl Req {
         )
     }
 
-    /// `save_by` where a chunk is cut for it: a request that parks nothing; else 0.
+    /// `save_by` where a chunk is cut for it: a request that parks nothing, or one short of a
+    /// snapshot slot (`cut_save`); else 0.
     fn cut_by(&self) -> usize {
-        if self.parks_as() == 0 {
+        if self.parks_as() == 0 || self.cut_save {
             self.save_by
         } else {
             0
@@ -558,6 +568,7 @@ impl Req {
             snap: None,
             save_at: 0,
             save_by: 0,
+            cut_save: false,
             progress: r.progress,
             reads_pin: false,
             pin_mark: 0,
@@ -1751,7 +1762,12 @@ impl Scheduler {
             .map(|(id, _)| id)
             .collect();
         for id in due {
-            let slot = self.take_slot(&mut plan.n_reclaimed);
+            // One that saved a checkpoint by its history end takes no other session's slot.
+            let slot = if self.reqs[&id].cut_save && self.free_slots.is_empty() {
+                None
+            } else {
+                self.take_slot(&mut plan.n_reclaimed)
+            };
             let r = self.reqs.get_mut(&id).expect("request");
             match slot {
                 Some(slot) => {
@@ -2329,6 +2345,7 @@ impl Scheduler {
             len,
             save_at,
             save_by,
+            cut_save,
             marks,
             indexed,
         } = loop {
@@ -2386,6 +2403,7 @@ impl Scheduler {
         }
         r.save_at = save_at;
         r.save_by = save_by;
+        r.cut_save = cut_save;
         r.pin_mark = marks;
         let session = r.session;
         if turn.is_some() {
@@ -2490,7 +2508,15 @@ impl Scheduler {
             }),
             false => [0; 2],
         };
-        let cut_by = if r.parks_as() == 0 { save_by } else { 0 };
+        // A kept turn whose snapshot may find no free slot, once its own start has taken one, saves
+        // a checkpoint by its history end.
+        let cut_save =
+            r.parks_as() != 0 && r.history_end > 0 && save_by > 0 && self.free_slots.len() < 2;
+        let cut_by = if r.parks_as() == 0 || cut_save {
+            save_by
+        } else {
+            0
+        };
         // Alone, a request reads its images in whole chunks (fewer, larger steps); beside running
         // requests, a chunk ends where a tile does, so they wait for one tile (`image_chunk`).
         let len = (prompt.len() - reuse).min(budget).min(to_stop(
@@ -2540,6 +2566,7 @@ impl Scheduler {
             len,
             save_at,
             save_by,
+            cut_save,
             marks,
             indexed,
         })
@@ -3319,6 +3346,44 @@ mod tests {
         };
         assert_eq!(ask(&mut s, 1), (0, 0));
         assert_eq!(ask(&mut s, 2), (48, 1), "the first repeat");
+    }
+
+    /// A kept hybrid turn short of a free slot for its snapshot cuts a chunk at the last block
+    /// before its history end and checkpoints the state there, taking no other session's slot;
+    /// its next turn, whose history carries another answer, loads that checkpoint. With a slot
+    /// free it snapshots at the history end itself, where its chunk ends.
+    #[test]
+    fn a_kept_hybrid_turn_short_of_slots_checkpoints_by_its_history_end() {
+        let limits = lim(Policy::DecodeFirst, 1, 512, 0.95);
+        for (slots, first, cached_next) in [(1, 32, 32), (2, 40, 40)] {
+            let mut s = Scheduler::new(128);
+            s.set_state_slots(slots);
+            s.configure_prefix_cache(24);
+            let mut t = 0;
+            let history: Vec<u32> = (0..40).collect();
+            let turn = |s: &mut Scheduler, t: &mut u64, id, tail: &[u32]| {
+                let (tx, rx) = channel();
+                let r = Request {
+                    stop_tokens: vec![STOP],
+                    session: 7,
+                    keep_kv: true,
+                    history_end: (history.len() + tail.len()) as u32,
+                    ..Request::new([&history[..], tail, &[90, 91, 92]].concat(), 4)
+                };
+                s.admit(Req::new(id, r, tx, Arc::new(AtomicBool::new(false)), 1));
+                let chunk = step(s, &limits, &[90], t).prefill[0].2;
+                run_all(s, &limits, &[90], t);
+                (chunk, cached(&rx))
+            };
+            assert_eq!(turn(&mut s, &mut t, 1, &[]), (first, 0), "{slots} slots");
+            // The scripted answer and a new question: the parked reply is not its history.
+            assert_eq!(
+                turn(&mut s, &mut t, 2, &[80; 5]).1,
+                cached_next,
+                "{slots} slots"
+            );
+            s.check();
+        }
     }
 
     /// Identical prompts prefilled in one step publish onto one block and save it once: the
