@@ -1309,14 +1309,25 @@ const GRAPH_DEFAULT_ARCHES: [u32; 3] = [86, 89, 120];
 const GROW_RETRY_STEPS: u64 = 256;
 
 /// The most recurrent state slots a hybrid model gets for `seats` seats, on every device; the load
-/// gives as many as fit up to it, a live grow adds more up to it.
+/// gives as many as fit up to it, a live grow adds more up to it. A hand-set `max_batch_seqs` may
+/// plan past it ([`hybrid_cap`]).
 // ponytail: 8 is the agent's widest fan-out, also on a 24/32 GB card with no host layers, which is
 // held to 8 seats. Size it from the fit when a bench on such a card shows the ceiling.
 pub(crate) fn hybrid_slots(seats: u32) -> u32 {
     seats.min(8)
 }
 
-/// Whether a hand-set `max_batch_seqs` (`want` slots, [`hybrid_slots`]) re-plans a load of a
+/// The state slots a hybrid's load plans and a live grow adds up to: [`hybrid_slots`], or every
+/// seat a person set by hand (`asked`). The plan's floor stays at [`hybrid_slots`] of the asked
+/// seats, so the slots past it take KV room down to one full context but never a host layer.
+// ponytail: past 8 only on a hand-set max_batch_seqs (24 GB M5, q36: 8 f16 slots hold 28,192 KV
+// tokens at 8k, and each slot past them costs ~3k); make it the default once a 16-64 chat bench
+// on a 24 GB Mac shows which seat count wins with q8_0 KV.
+pub(crate) fn hybrid_cap(seats: u32, asked: bool) -> u32 {
+    if asked { seats } else { hybrid_slots(seats) }
+}
+
+/// Whether a hand-set `max_batch_seqs` (`want` slots, [`hybrid_cap`]) re-plans a load of a
 /// hybrid (`slots` state slots) whose experts partly sit in host memory (`in_ram`), planned for
 /// `planned` slots: when it asks for more slots than the load holds, or for fewer than its host
 /// layers pay for. Elsewhere the slots grow live from free memory ([`Engine::grow_seats`]) or cost
@@ -1588,9 +1599,13 @@ impl Loaded {
         if let Some(w) = &weights {
             *w.budget.lock().expect("load budget") = (opts.max_context, opts.kv_pool_fraction);
             // A hybrid's state slot costs 64 MB on the hybrid MoE target; 16 of them keep it off a 24 GB Mac's
-            // GPU and cost a 16 GB card more host layers. The loader gives what fits up to this cap;
-            // requests past the slots wait (`limits`) or grow them live (`grow_seats`).
-            w.seqs.store(hybrid_slots(startup_seqs), Ordering::Relaxed);
+            // GPU and cost a 16 GB card more host layers. The loader gives what fits up to this cap
+            // (past 8 only for seats set by hand, at the floor's host layers); requests past the slots
+            // wait (`limits`) or grow them live (`grow_seats`).
+            w.seqs.store(
+                hybrid_cap(startup_seqs, partial.seats_asked),
+                Ordering::Relaxed,
+            );
             let asked = match partial.seats_asked {
                 true => startup_seqs,
                 false => partial.seats_auto.max(1),
@@ -3864,13 +3879,14 @@ impl Engine {
     }
 
     /// A hybrid whose every state slot runs while a request waits grows its state toward
-    /// `max_batch_seqs` (at most [`hybrid_slots`]) from what is free beside the headroom, the
+    /// `max_batch_seqs` (at most [`hybrid_cap`]) from what is free beside the headroom, the
     /// capture arena and the graph quota not yet captured; the request waits while there is no
     /// room, and the next try is [`GROW_RETRY_STEPS`] later.
     fn grow_seats(&mut self) -> Result<(), KError> {
         let loaded = self.loaded.as_mut().expect("loaded engine");
         let slots = loaded.model.state_slots();
-        let want = hybrid_slots(self.cfg.values[knob_id::MAX_BATCH_SEQS as usize] as u32);
+        let seats = self.cfg.values[knob_id::MAX_BATCH_SEQS as usize] as u32;
+        let want = hybrid_cap(seats, self.partial.seats_asked);
         if slots == 0
             || slots >= want
             || self.sched.n_waiting() == 0
@@ -3907,7 +3923,10 @@ impl Engine {
     /// it asks ([`replan_due`]). A reload drains like [`EngineHandle::reload`]: requests submitted
     /// while it loads are refused NotReady, and parked sessions carry across ([`Self::carry_out`]).
     fn replan_seats(&mut self) {
-        let want = hybrid_slots(self.value(knob_id::MAX_BATCH_SEQS) as u32);
+        let want = hybrid_cap(
+            self.value(knob_id::MAX_BATCH_SEQS) as u32,
+            self.partial.seats_asked,
+        );
         if self.replan_due(want) {
             // A person's seats: the reload's own events report it.
             self.queue_replan();
@@ -9599,20 +9618,26 @@ mod tests {
         assert_eq!((n, loaded.model.state_slots()), (2, 8));
     }
 
-    /// A hybrid's real loader gives `max_batch_seqs` 16 only 8 state slots on any device; the
-    /// requests past the slots wait for a seat and all finish, none refused.
-    #[test]
-    fn a_hybrid_serves_sixteen_seats_on_eight_state_slots() {
-        let path = std::env::temp_dir().join(format!("larch-eight-{}.gguf", std::process::id()));
+    /// 12 requests on a hybrid's real loader with `max_batch_seqs` at `seats` (None: the knob's
+    /// default, 16): the state slots the load gave, and whether requests waited past them, all
+    /// finishing with none refused.
+    fn hybrid_seats(seats: Option<u32>) -> (u32, usize, bool) {
+        let path = std::env::temp_dir().join(format!(
+            "larch-seats-{seats:?}-{:?}-{}.gguf",
+            std::thread::current().id(),
+            std::process::id()
+        ));
         std::fs::write(&path, tiny::gguf(Arch::Qwen35, 3)).unwrap();
         let mut opts = EngineOptions::new(path.clone(), CPU);
         opts.max_context = 512;
-        opts.knob_overrides = vec![(knob_id::MAX_BATCH_SEQS, 16.0)];
+        opts.knob_overrides = seats
+            .map(|s| vec![(knob_id::MAX_BATCH_SEQS, f64::from(s))])
+            .unwrap_or_default();
         let (load, weights) = crate::model_loader(&opts).unwrap();
         let (mut e, h) = Engine::init(opts, load, weights).unwrap();
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(e.loaded.as_ref().unwrap().model.state_slots(), 8);
-        assert_eq!(e.limits().max_batch_seqs, 8);
+        let slots = e.loaded.as_ref().unwrap().model.state_slots();
+        let seats = e.limits().max_batch_seqs;
         let n = 12u32;
         let hs: Vec<_> = (0..n)
             .map(|i| h.submit(Request::new(vec![i + 1; 3], 4)).unwrap())
@@ -9621,12 +9646,30 @@ mod tests {
         let (mut open, mut queued) = (hs.len(), false);
         while open > 0 {
             assert!(e.turn().unwrap());
-            assert!(e.sched.n_running() <= 8);
-            queued |= e.sched.n_running() == 8 && e.sched.n_waiting() > 0;
+            assert!(e.sched.n_running() <= slots as usize);
+            queued |= e.sched.n_running() == slots as usize && e.sched.n_waiting() > 0;
             open -= drain(&hs, &mut out);
         }
-        assert!(queued, "requests past the slots waited");
         assert!(out.iter().all(|o| o.len() == 4), "{out:?}");
+        (slots, seats, queued)
+    }
+
+    /// A hybrid's real loader gives the default `max_batch_seqs` (16) only 8 state slots on any
+    /// device; the requests past the slots wait for a seat and all finish, none refused.
+    #[test]
+    fn a_hybrid_serves_sixteen_seats_on_eight_state_slots() {
+        assert_eq!(hybrid_seats(None), (8, 8, true));
+    }
+
+    /// Seats set by hand past 8 get their state slots where they fit (the CPU reference holds
+    /// them), so 12 requests run at once and none waits; 8 by hand stays at 8.
+    #[test]
+    fn hand_set_seats_past_eight_get_their_state_slots() {
+        assert_eq!(hybrid_seats(Some(12)), (12, 12, false));
+        assert_eq!(hybrid_seats(Some(8)), (8, 8, true));
+        assert_eq!(super::hybrid_cap(16, false), 8);
+        assert_eq!(super::hybrid_cap(16, true), 16);
+        assert_eq!(super::hybrid_cap(4, true), 4);
     }
 
     /// Greedy tokens of 6 hybrid requests on `slots` state slots at `max_batch_seqs` `seats`, and

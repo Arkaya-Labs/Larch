@@ -1460,7 +1460,8 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                 guess,
             )
         };
-        // `cap` is the startup max_batch_seqs, capped at 8 (above DRAFT_SEATS): the engine's seats.
+        // `cap` is the startup max_batch_seqs, capped at 8 unless set by hand (above DRAFT_SEATS):
+        // the engine's seats.
         // A cell, so a drafter's smaller attempts below re-plan through the same closures.
         let t = std::cell::Cell::new(terms(rows, guess::draft_seats(cap), true)?);
         let graph_seats = graph_seats.load(Ordering::Relaxed);
