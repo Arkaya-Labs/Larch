@@ -1603,6 +1603,19 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
         let small = (!chunk_set).then_some(seqs_cap + engine::PREFILL_CHUNK_SCRATCH as u32);
         let tries =
             || fit::draft_fits(drafting, first.rows, small, first.draft_seats).filter(|_| planned);
+        // The attempts in the order the loops below take them, each the first at no host layer:
+        // those that keep the most state slots there first ([`fit::most_slots_first`]).
+        let ranked = |swing: u64| {
+            let ranked = fit::most_slots_first(tries(), |rows, seats| {
+                t.set(terms(rows, seats as usize, true)?);
+                Ok(match (c.arch.hybrid(), layers_for(floor, swing)) {
+                    (true, 0) => slots_for(0, swing),
+                    _ => 0,
+                })
+            });
+            t.set(first);
+            ranked
+        };
         // An automatic drafter: the whole-layer plans with it (its first attempt at no host layer,
         // as the load below takes it) and without it, before any load. One that would cost a chat
         // refuses, and the plain loader loads (`model_loader`).
@@ -1641,7 +1654,7 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                 }
             };
             let mut with = first;
-            for (rows, draft_seats) in tries() {
+            for (rows, draft_seats) in ranked(swing)? {
                 t.set(terms(rows, draft_seats as usize, true)?);
                 if layers_for(floor, swing) == 0 {
                     with = t.get();
@@ -1805,10 +1818,10 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
             Ok(m)
         };
         // A host layer costs a drafter its speed-up, so its smaller attempts come first, each at no
-        // host layer and through the check after its load. The startup terms' refusal stands for
-        // their first load in the fallback, which plans with them again.
+        // host layer and through the check after its load, the most state slots first. The startup
+        // terms' refusal stands for their first load in the fallback, which plans with them again.
         let mut refused = None;
-        for (rows, draft_seats) in tries() {
+        for (rows, draft_seats) in ranked(swing)? {
             t.set(terms(rows, draft_seats as usize, true)?);
             if layers_for(floor, swing) > 0 {
                 continue;
