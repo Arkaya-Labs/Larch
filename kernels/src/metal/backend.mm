@@ -1135,11 +1135,11 @@ void mmvq_rows(larch_stream* vs, const view& w, const view& x, const view& b, co
            32 * MMVQ1_SG);
     return;
   }
-  // The K-quants from 3 rows (Q3_K and Q5_K from 2): the few-row MMA kernel beat the others at every m1 shape and
-  // row count (M5, 10 Oct: 8 rows of 14336 x 4096 Q4_K 473 to 318 us, llama.cpp 319). At 2 rows the shared-x
-  // kernel won for Q4_K and Q6_K, but on Q3_K it took 4.8x one row's time (M5, 27 Nov: 12288 x 2048, 75 to 361 us).
-  const bool low_bits = w.dtype == LARCH_Q3_K || w.dtype == LARCH_Q5_K;
-  if (x.rows >= (low_bits ? 2 : 3) && ks(vs).mmvq_mma[x.rows > 8][w.dtype]) {
+  // The K-quants from 3 rows (Q3_K from 2): the few-row MMA kernel beat the others at every m1 shape and row count
+  // (M5, 10 Oct: 8 rows of 14336 x 4096 Q4_K 473 to 318 us, llama.cpp 319). At 2 rows the shared-x kernel won
+  // for Q4_K, Q5_K and Q6_K (Q5_K 12288 x 2048: 140 vs 168 us), but on Q3_K it took 361 us to the MMA kernel's 138
+  // (M5, 27 Nov; 8 rows 467 to 139).
+  if (x.rows >= (w.dtype == LARCH_Q3_K ? 2 : 3) && ks(vs).mmvq_mma[x.rows > 8][w.dtype]) {
     const int64_t cols = 8 * MMVQ_MMA_NT;
     groups(stream, ks(vs).mmvq_mma[x.rows > 8][w.dtype], {input(w), input(x), input_or(b, at(w)), at(o)}, a,
            (w.rows + cols - 1) / cols, 32 * MMVQ_MMA_SG);

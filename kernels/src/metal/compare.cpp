@@ -559,7 +559,7 @@ static void mmvq_tiles() {
   for (const auto& [q, format] : formats) {
     const int64_t k = block_of(q) == 256 ? 768 : 96;
     const both w = up(make(q, {n, k}, 2)), bias = up(make(LARCH_F32, {n}, 3));
-    // The K-quants from 3 rows (Q3_K and Q5_K from 2): mmvq_mma. The others at 2-4: the shared-x kernel (4 its widest one-tile case);
+    // The K-quants from 3 rows (Q3_K from 2): mmvq_mma. The others at 2-4: the shared-x kernel (4 its widest one-tile case);
     // 5 and 8: the 1-tile kernel (8 fills it); 9 and 16: 2
     for (const int64_t rows : {2, 3, 4, 5, 8, 9, 16}) {
       const both x = up(make(LARCH_F16, {rows, k}, 5));

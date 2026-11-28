@@ -221,7 +221,7 @@ kernel void dequant(bytes_in w [[buffer(0)]], device uchar* out [[buffer(1)]], c
 // mmvq: one simdgroup per output column n. Lane l decodes sub-blocks l, l + 32, ... of w's row n once
 // and multiplies each into every x row (rows <= 16). a = x, b = w, c = out.
 // Each column reads all of x again, so backend.mm sends 1 row to vv_mmvq1_*, 2-16 rows of the K-quants to
-// mmvq_mma (Q4_K and Q6_K from 3), and the other rows and formats to mmvq_ext and mmvq_mm below.
+// mmvq_mma (Q4_K, Q5_K and Q6_K from 3), and the other rows and formats to mmvq_ext and mmvq_mm below.
 // ponytail: mmvq_mma decodes the K-quants only. Q8_0, Q4_0 and Q5_0 keep mmvq_ext and mmvq_mm (Q8_0
 // 14336 x 4096 at 8 rows: 548 us, llama.cpp 541, M5, 10 Oct). Give mmvq_mma a 16-weight decoder for a format
 // when a model with it shows mmvq in W2 (Q3_K and Q5_K: the 35B's 8-chat decode, 27 Nov).
