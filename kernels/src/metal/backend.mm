@@ -80,16 +80,13 @@ struct kernels {
 //   at a time on simdgroup matrices (MLX's chunked delta rule); 0 keeps vv_gdn's row-by-row walk, for A/B timing.
 // LARCH_METAL_MOE_NARROW (default 1): mmvq_id at decode and check row counts on experts under 1024 wide takes
 //   vv_mmvq_id1n, which keeps all 32 lanes busy; 0 keeps vv_mmvq_id1, for A/B timing.
-// LARCH_METAL_MOE_SPLIT (default 1): weighted mmvq_id at decode and check row counts runs each (row, slot) pair in
-//   its own threadgroups into f32 partials, then vv_moe_reduce, as MLX's gather_qmv and its separate sum do; 0 keeps
-//   one threadgroup walking a row's slots in turn, for A/B timing. Both sum the slots in the same order.
 // LARCH_METAL_ATTN_NAX (default 1): flash prefill at head_dim 64, 128 or 256 takes vv_attn_paged_nax (MLX's NAX
 //   attention over the paged pool, macOS 26.2 and the tensor API); 0 keeps vv_attn_flash, for A/B timing.
 // LARCH_METAL_ATTN_NAX_HM (default 0): 1 launches vv_attn_paged_nax with the q head as grid x (the _hm kernels),
 //   for A/B timing at long contexts.
 struct feed {
   bool concurrent = true, commit = true, profile = false, simd_kernels = true, moe_prefetch = true, gdn_wide = true,
-       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false, moe_split = true;
+       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false;
 };
 static constexpr uint32_t first_commit = 32, commit_every = 128;
 struct mtl_device : larch_device {
@@ -170,8 +167,7 @@ static larch_status read_feed(feed* f) {
                                  std::pair{"LARCH_METAL_MOE_NARROW", &f->moe_narrow},
                                  std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk},
                                  std::pair{"LARCH_METAL_ATTN_NAX", &f->attn_nax},
-                                 std::pair{"LARCH_METAL_ATTN_NAX_HM", &f->attn_nax_hm},
-                                 std::pair{"LARCH_METAL_MOE_SPLIT", &f->moe_split}}) {
+                                 std::pair{"LARCH_METAL_ATTN_NAX_HM", &f->attn_nax_hm}}) {
     const char* c = std::getenv(name);
     if (c && std::strcmp(c, "0") && std::strcmp(c, "1"))
       return vv_fail(LARCH_ERR_INVALID_ARG, std::string(name) + " must be 0 or 1");
@@ -1289,26 +1285,7 @@ larch_status mmvq_id(larch_stream* vs, const larch_tensor* w_quant, const larch_
     if (s->check || pairs < MOE_GROUP_PAIRS * experts || experts > MOE_ROUTE_MAX || w.cols > 1024 * MOE_GROUP_T) {
       id<MTLComputePipelineState> narrow = w.cols < 1024 ? ks(vs).mmvq_id1n[w.dtype] : nil;
       const int64_t cols = MMVQ1_SG * (narrow ? MMVQ1N_C : MMVQ1_NR);
-      id<MTLComputePipelineState> one = narrow ? narrow : ks(vs).mmvq_id1[w.dtype];
-      const uint64_t parts = uint64_t(pairs * n) * 4;
-      if (one && weighted && s->dev->fed.moe_split && parts <= MOE_PARTIAL_BYTES) {
-        // A pair's sum to f32 partial (row, slot), then each row's slots summed in ascending order by their weights.
-        if (s->moe_scratch.length < parts) {  // work queued with the old one keeps it alive
-          s->moe_scratch = [s->dev->dev newBufferWithLength:parts options:MTLResourceStorageModePrivate];
-          if (!s->moe_scratch) throw std::bad_alloc();
-        }
-        const arg part{s->moe_scratch, 0, parts};
-        id_args ap = a;
-        ap.weighted = 0;
-        ap.out_f32 = 1;
-        ap.out_rs = uint64_t(slots * n) * 4;
-        ap.out_slot_rs = uint64_t(n) * 4;
-        groups(s, one, {input(w), input(x), input(ids), input_or(b, at(w)), input(wt), part}, ap, (n + cols - 1) / cols,
-               32 * MMVQ1_SG, pairs);
-        each(s, ks(vs).moe_reduce, {input(part), input(wt), at(o)}, a, n, x.rows);
-        return;
-      }
-      if (one)
+      if (id<MTLComputePipelineState> one = narrow ? narrow : ks(vs).mmvq_id1[w.dtype])
         groups(s, one, {input(w), input(x), input(ids), input_or(b, at(w)), input_or(wt, at(w)), at(o)}, a, (n + cols - 1) / cols,
                32 * MMVQ1_SG, weighted ? x.rows : pairs);
       else
