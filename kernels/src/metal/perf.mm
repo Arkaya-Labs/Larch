@@ -1115,10 +1115,16 @@ void run_affine_q3(const arguments& parsed) {
     [e setComputePipelineState:pipe];
     [e setBuffer:w_buf offset:0 atIndex:0];
     [e setBuffer:x_buf offset:0 atIndex:1];
-    [e setBuffer:out_buf offset:0 atIndex:2];
-    [e setBytes:&a length:sizeof a atIndex:3];
+    // The nq3 kernels take mmvq's bindings (w, x, bias, out, args; no bias here), vv_mmvq_aq3 (w, x, out, args).
+    const NSUInteger o = nax ? 3 : 2;
+    if (nax) [e setBuffer:w_buf offset:0 atIndex:2];
+    [e setBuffer:out_buf offset:0 atIndex:o];
+    [e setBytes:&a length:sizeof a atIndex:o + 1];
     if (nax && !nax1)
       [e dispatchThreadgroups:MTLSizeMake(NSUInteger((n + 31) / 32), 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    else if (nax1)
+      [e dispatchThreadgroups:MTLSizeMake(NSUInteger((n + 7) / 8), NSUInteger(rows), 1)
+          threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
     else
       [e dispatchThreadgroups:MTLSizeMake(NSUInteger(rows), NSUInteger((n + 7) / 8), 1)
           threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];

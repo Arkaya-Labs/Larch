@@ -110,6 +110,23 @@ void deq_q3_k(bytes_in b, int c, thread float* y) {
   }
 }
 
+// Sub-block c (0..15) of an nq3 pair of Q3_K blocks (args.h, nq3.h): inputs 32 c .. + 31 are unit u = c / 4's
+// f = 2 (c % 4) and f + 1, every item j and e; Q3_K's value bit for bit, deq_q3_k's f32 expression (d times the
+// scale, times code - 4). The fast kernels read it in place; this serves the others (embed, dequant, prefill).
+void deq_nq3(bytes_in b, int c, thread float* y) {
+  const uint u = uint(c) / 4, m = uint(c) % 4, h = u % 2;
+  const uint2 sc = nq3_scales(b + nq3_scales_at(u), h);
+  const float d = h16(b + nq3_d_at(u / 2));
+  for (uint t = 0; t < 32; ++t) {
+    const uint f = 2 * m + t / 16, j = t % 16 / 4, e = t % 4, P = 2 * f + e / 2, hi = 16 * (e % 2);
+    device const uint* cw = (device const uint*)(b + nq3_codes_at(u, j));
+    const uint code = P < 15 ? cw[P / 5] >> (3 * (P % 5) + hi) & 7
+                             : (cw[0] >> (15 + hi) & 1) | (cw[1] >> (15 + hi) & 1) << 1 | (cw[2] >> (15 + hi) & 1) << 2;
+    const float dl = d * float(int(as_type<uchar4>(f < 4 ? sc.x : sc.y)[f % 4]) - 32);
+    y[t] = dl * float(int(code) - 4);
+  }
+}
+
 // Half h (16 elements) of deq_q3_k's sub-block c, for kernels that give each thread 16 elements.
 static void deq16_q3_k(bytes_in b, int c, int h, thread float* y) {
   const int n = c / 4, u = c % 4, i = 8 * n + 2 * u + h;
@@ -848,24 +865,25 @@ kernel void vv_mmvq_id_rq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], b
   }
 }
 
-// Prototype for metal_perf affine-q3 --layout nax1 only (no backend path): one row of x on attn_full_nax.metal's
-// vv_mmvq_nax_nq3 layout, on MLX's qmv_fast plan (2 simdgroups of 4 columns, x loaded once for the 4). A step is
+// mmvq at 1 row on nq3 (larch.h LARCH_NQ3; metal_perf affine-q3 --layout nax1 times it): one row of x on
+// attn_full_nax.metal's vv_mmvq_nax_nq3 layout, on MLX's qmv_fast plan (2 simdgroups of 4 columns, x loaded once for the 4). A step is
 // 1024 inputs: lane l takes item j = l % 4 of unit u = l / 4, its three code words, the unit's 8 scales (nq3.h) and its
 // block's d; its inputs are 16 f + 4 j + e of the unit. A pair of weights is one shift, one mask and one or into
 // half2 1024 + code, minus 1028: code - 4, exact. Each group's f32 dot takes its scale, each unit's sum its d.
-// Grid (rows, ceil(n / 8)), out f32; the host sends k a multiple of 512 and x rows 8-byte aligned.
-kernel void vv_mmvq1_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], device uchar* out [[buffer(2)]],
-                         constant mm_args& a [[buffer(3)]], uint2 tg [[threadgroup_position_in_grid]],
-                         ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+// Grid (ceil(n / 8), rows); the host sends k a multiple of 512 and x rows 8-byte aligned.
+kernel void vv_mmvq1_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in bias [[buffer(2)]],
+                         device uchar* out [[buffer(3)]], constant mm_args& a [[buffer(4)]],
+                         uint2 tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]],
+                         ushort lane [[thread_index_in_simdgroup]]) {
   constexpr short RS = 4;
-  const uint n0 = (tg.y * 2 + sg) * RS;
+  const uint n0 = (tg.x * 2 + sg) * RS;
   if (n0 >= a.n) return;  // the whole simdgroup
   const uint units = a.k / 128, j = lane % 4;
   bytes_in wr[RS];
   for (short i = 0; i < RS; ++i) wr[i] = w + u64(min(n0 + i, a.n - 1)) * a.b_rs;
   float res[RS] = {};
   for (uint u = lane / 4; u < units; u += 8) {
-    device const half* xu = (device const half*)(x + tg.x * a.a_rs) + u * 128 + 4 * j;
+    device const half* xu = (device const half*)(x + tg.y * a.a_rs) + u * 128 + 4 * j;
     float4 xs[8];
 #pragma unroll
     for (short f = 0; f < 8; ++f) xs[f] = float4(*(device const half4*)(xu + 16 * f));
@@ -893,13 +911,19 @@ kernel void vv_mmvq1_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], dev
     }
   }
   for (short r = 0; r < RS; ++r) {
-    const float v = simd_sum(res[r]);
-    if (!lane && n0 + r < a.n) ((device float*)(out + tg.x * a.c_rs))[n0 + r] = v;
+    float v = simd_sum(res[r]);
+    if (lane || n0 + r >= a.n) continue;
+    if (a.has_bias) v += at<float>(bias, a.bias_rs, n0 + r);
+    device uchar* o = out + tg.y * a.c_rs;
+    if (a.c_f32)
+      ((device float*)o)[n0 + r] = v;
+    else
+      ((device half*)o)[n0 + r] = half(v);
   }
 }
 
-// Prototype for metal_perf repack-id --layout nq3 only (no backend path): vv_mmvq_id_rq3's grid and expert walk on
-// Q3_K experts in vv_mmvq_nax_nq3's layout, each lane decoding as vv_mmvq1_nq3 does. FH fragments a lane: 8 (a
+// mmvq_id on nq3 experts (larch.h LARCH_NQ3; metal_perf repack-id --layout nq3 times it): vv_mmvq_id_rq3's grid
+// and expert walk on Q3_K experts in vv_mmvq_nax_nq3's layout, each lane decoding as vv_mmvq1_nq3 does. FH fragments a lane: 8 (a
 // step of 1024 inputs, lane l item l % 4 of unit l / 4) or 4 (512 inputs, lane l fragments 4 (l % 2) .. + 3 of item
 // l / 2 % 4 of unit l / 8, all 32 lanes busy at k 512). x is read with packed loads (larch.h promises 2-byte
 // alignment only).
@@ -1271,6 +1295,7 @@ typedef decltype(mmvq_id_grouped<32, 34, deq_q8_0>) mmvq_id_grouped_t;
   template [[host_name("vv_mmvq_id_" #name)]] kernel mmvq_id_t mmvq_id<qk, bytes, deq_##name>;          \
   template [[host_name("vv_mmvq_id_grouped_" #name)]] kernel mmvq_id_grouped_t mmvq_id_grouped<qk, bytes, deq_##name>;
 QUANT(q3_k, 256, 110)
+QUANT(nq3, 512, 220)
 QUANT(q4_k, 256, 144)
 QUANT(q5_k, 256, 176)
 QUANT(q6_k, 256, 210)
@@ -1702,6 +1727,7 @@ typedef decltype(gemm_q<32, 34, deq_q8_0, GEMM_Q_M_SMALL, GEMM_Q_N>) gemm_q_t;
   GEMM_Q1("vv_gemm_q_small_narrow_", name, qk, bytes, GEMM_Q_M_SMALL, GEMM_Q_N / 2) \
   GEMM_Q1("vv_gemm_q_narrow_", name, qk, bytes, GEMM_Q_M, GEMM_Q_N / 2)
 GEMM_Q(q3_k, 256, 110)
+GEMM_Q(nq3, 512, 220)
 GEMM_Q(q4_k, 256, 144)
 GEMM_Q(q5_k, 256, 176)
 GEMM_Q(q6_k, 256, 210)
@@ -1845,6 +1871,7 @@ typedef decltype(mmvq_id_mm_sg<32, 34, deq_q8_0>) mmvq_id_mm_sg_t;
   template [[host_name("vv_gemm_qs_" #name)]] kernel gemm_qs_t gemm_qs<qk, bytes, deq_##name>;      \
   template [[host_name("vv_mmvq_id_mm_sg_" #name)]] kernel mmvq_id_mm_sg_t mmvq_id_mm_sg<qk, bytes, deq_##name>;
 GEMM_QS(q3_k, 256, 110)
+GEMM_QS(nq3, 512, 220)
 GEMM_QS(q4_k, 256, 144)
 GEMM_QS(q5_k, 256, 176)
 GEMM_QS(q6_k, 256, 210)

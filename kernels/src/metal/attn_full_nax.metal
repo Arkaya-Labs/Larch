@@ -344,7 +344,8 @@ typedef decltype(mmvq_nax_q3_k<false>) mmvq_nax_q3_k_t;
 template [[host_name("vv_mmvq_nax_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_nax_q3_k<false>;
 template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_nax_q3_k<true>;
 
-// Prototype for metal_perf affine-q3 --layout nax only (no backend path): vv_mmvq_nax_q3_k's plan on Q3_K rewritten
+// mmvq at 2-16 rows on nq3 (larch.h LARCH_NQ3; metal_perf affine-q3 --layout nax times it): vv_mmvq_nax_q3_k's
+// plan on Q3_K rewritten
 // exactly into a layout built for NAX fragments, so the decode is masks: (code - 4) sc is a small integer, exact in
 // f16, and d multiplies each block's f32 sum after the matmuls (Splash's epilogue scale). Fragment f of unit u (128
 // inputs) is scale group 8 u + f, lane (fm, fn) holding inputs 16 f + fn .. + 3. A row (a.b_rs apart) is args.h's
@@ -352,10 +353,11 @@ template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_n
 // P = 2 f + e / 2. Pair P < 15 is at bits 3 (P % 5) and 16 + 3 (P % 5) of word P / 5, so (word >> s) & 0x00070007
 // or 0x64006400 is the pair as half2 1024 + code. Pair 15's three bits are bit 15 (e = 2) and 31 (e = 3) of the
 // three words, bit b of the code in word b. Scales as Q3_K has them (nq3.h) and d per block.
-// Simdgroup s takes blocks s, s + WK, ...; the host sends k a multiple of 512 and x rows 8-byte aligned. Out f32.
+// Simdgroup s takes blocks s, s + WK, ...; the host sends k a multiple of 512 and x rows 8-byte aligned. Out and
+// bias as vv_mmvq_nax_q3_k's.
 [[kernel, max_total_threads_per_threadgroup(MMVQ_NAX_WK * 32)]] void vv_mmvq_nax_nq3(
-    const device uchar* w [[buffer(0)]], const device uchar* x [[buffer(1)]], device uchar* out [[buffer(2)]],
-    constant mm_args& a [[buffer(3)]], uint3 tid [[threadgroup_position_in_grid]],
+    const device uchar* w [[buffer(0)]], const device uchar* x [[buffer(1)]], const device uchar* bias [[buffer(2)]],
+    device uchar* out [[buffer(3)]], constant mm_args& a [[buffer(4)]], uint3 tid [[threadgroup_position_in_grid]],
     uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
   using Frag = BaseNAXFrag;
   using afrag = typename Frag::template dtype_frag_t<half>;
@@ -462,7 +464,14 @@ template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_n
     STEEL_PRAGMA_UNROLL
     for (short e = 0; e < E; e++) {
       const uint r = fm + 8 * (e / 4), c = col0 + 16 * t + fn + e % 4;
-      if (r < m && c < n) ((device float*)(out + r * a.c_rs))[c] = acc[t][e];
+      if (r >= m || c >= n) continue;
+      float v = acc[t][e];
+      if (a.has_bias) v += *(const device float*)(bias + c * a.bias_rs);
+      device uchar* o = out + r * a.c_rs;
+      if (a.c_f32)
+        ((device float*)o)[c] = v;
+      else
+        ((device half*)o)[c] = half(v);
     }
   }
 }

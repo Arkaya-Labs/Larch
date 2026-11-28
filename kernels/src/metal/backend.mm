@@ -31,24 +31,30 @@ extern "C" const std::size_t larch_nax_metallib_len;
 
 /// Every kernel of ops.metal as a pipeline, built at open. A per-dtype slot is nil where the op has no
 /// kernel for that dtype; the op's host checks rule those dtypes out first.
+// Per-dtype tables run to LARCH_NQ3; Q2_K's slots stay nil (no_weights refuses it first).
+constexpr int DTYPES = LARCH_NQ3 + 1;
+
 struct kernels {
-  id<MTLComputePipelineState> embed[LARCH_Q3_K + 1], dequant[LARCH_Q3_K + 1], mmvq[LARCH_Q3_K + 1];
-  id<MTLComputePipelineState> mmvq_mm[2][LARCH_Q3_K + 1];  // up to 8 and up to 16 rows
-  id<MTLComputePipelineState> mmvq_ext[2][LARCH_Q3_K + 1];  // up to 4 and up to 8 rows
-  id<MTLComputePipelineState> mmvq1[LARCH_Q3_K + 1];        // 1 row: Q3_K, Q4_K, Q5_K and Q6_K, nil for the others
-  id<MTLComputePipelineState> mmvq_mma[2][LARCH_Q3_K + 1];  // up to 8 and up to 16 rows: the K-quants
+  id<MTLComputePipelineState> embed[DTYPES], dequant[DTYPES], mmvq[DTYPES];
+  id<MTLComputePipelineState> mmvq_mm[2][DTYPES];  // up to 8 and up to 16 rows
+  id<MTLComputePipelineState> mmvq_ext[2][DTYPES];  // up to 4 and up to 8 rows
+  id<MTLComputePipelineState> mmvq1[DTYPES];        // 1 row: Q3_K, Q4_K, Q5_K and Q6_K, nil for the others
+  id<MTLComputePipelineState> mmvq_mma[2][DTYPES];  // up to 8 and up to 16 rows: the K-quants
   id<MTLComputePipelineState> mmvq_nax_q3_k;  // Q3_K at 2-16 rows under LARCH_METAL_MMVQ_NAX (attn_full_nax.metal)
+  // nq3's own kernels: 1 row (ops.metal), 2-16 rows (attn_full_nax.metal; nil without macOS 26.2 and the tensor
+  // API), and per-pair mmvq_id for k from 1024 and under it. Its other ops take the generic decoder's kernels.
+  id<MTLComputePipelineState> mmvq1_nq3, mmvq_nax_nq3, mmvq_id_nq3[2];
   // mmvq_verify's staged tile at 8, 16 and 32 rows (vv_mmvq_st, staged.metal): Q3_K to Q8_0 on Apple GPU family 10,
   // nil elsewhere
-  id<MTLComputePipelineState> mmvq_st[3][LARCH_Q3_K + 1];
-  id<MTLComputePipelineState> gemm_q[2][2][LARCH_Q3_K + 1];  // [rows > GEMM_Q_M_SMALL][k <= n]; nil: none
-  id<MTLComputePipelineState> mmvq_id[LARCH_Q3_K + 1], mmvq_id_grouped[LARCH_Q3_K + 1];
-  id<MTLComputePipelineState> mmvq_id_mm[2][LARCH_Q3_K + 1];  // the tensor path's grouped mmvq_id, [64 x 32 tile]
-  id<MTLComputePipelineState> mmvq_id1[LARCH_Q3_K + 1];  // Q3_K, Q4_K, Q5_K and Q6_K, nil for the others
-  id<MTLComputePipelineState> mmvq_id1n[LARCH_Q3_K + 1];  // the same formats, for experts under 1024 wide
+  id<MTLComputePipelineState> mmvq_st[3][DTYPES];
+  id<MTLComputePipelineState> gemm_q[2][2][DTYPES];  // [rows > GEMM_Q_M_SMALL][k <= n]; nil: none
+  id<MTLComputePipelineState> mmvq_id[DTYPES], mmvq_id_grouped[DTYPES];
+  id<MTLComputePipelineState> mmvq_id_mm[2][DTYPES];  // the tensor path's grouped mmvq_id, [64 x 32 tile]
+  id<MTLComputePipelineState> mmvq_id1[DTYPES];  // Q3_K, Q4_K, Q5_K and Q6_K, nil for the others
+  id<MTLComputePipelineState> mmvq_id1n[DTYPES];  // the same formats, for experts under 1024 wide
   id<MTLComputePipelineState> attn_flash[3];                 // head_dim up to 64, 128 and 256
   // The simdgroup-matrix kernels for GPUs without the tensor API; nil when LARCH_METAL_SIMD_KERNELS=0.
-  id<MTLComputePipelineState> gemm_qs[LARCH_Q3_K + 1], mmvq_id_mm_sg[LARCH_Q3_K + 1];
+  id<MTLComputePipelineState> gemm_qs[DTYPES], mmvq_id_mm_sg[DTYPES];
   id<MTLComputePipelineState> attn_flash_sg[3];  // head_dim up to 64, 128 and 256
   id<MTLComputePipelineState> gemm, gemv, gemm_tensor, gemm_tensor_deep, rmsnorm, qk_norm, rope, silu_mul, add, kv_write, attn, attn_split,
       attn_split_reduce, sp_copy, sp_penalty, sp_part, sp_merge, moe_route, moe_group, moe_gather, moe_reduce,
@@ -270,9 +276,9 @@ static uint32_t gpu_cores(id<MTLDevice> dev) {
 }
 
 // The suffix of a per-dtype kernel's name in ops.metal.
-static const char* const dtype_name[] = {"f32",  "f16",  "bf16", "i32",  "q4_k",     "q5_k",
-                                         "q6_k", "q8_0", "q4_0", "q5_0", "fp8_e4m3", "q3_k"};
-static_assert(std::size(dtype_name) == LARCH_Q3_K + 1, "one name per larch_dtype");
+static const char* const dtype_name[] = {"f32",  "f16",  "bf16", "i32",      "q4_k", "q5_k", "q6_k",
+                                         "q8_0", "q4_0", "q5_0", "fp8_e4m3", "q3_k", "q2_k", "nq3"};
+static_assert(std::size(dtype_name) == DTYPES, "one name per larch_dtype");
 
 // Apple's figures (6.4); the Rust side reports them as Estimated. Unknown chips get 0 (Missing).
 static float peak_gbps(NSString* name, uint32_t cores) {
@@ -407,7 +413,8 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
     };
     kernels k{};
     for (const larch_dtype t :
-         {LARCH_F32, LARCH_F16, LARCH_Q3_K, LARCH_Q4_K, LARCH_Q5_K, LARCH_Q6_K, LARCH_Q8_0, LARCH_Q4_0, LARCH_Q5_0}) {
+         {LARCH_F32, LARCH_F16, LARCH_Q3_K, LARCH_Q4_K, LARCH_Q5_K, LARCH_Q6_K, LARCH_Q8_0, LARCH_Q4_0, LARCH_Q5_0,
+          LARCH_NQ3}) {
       k.embed[t] = pipe(std::string("vv_embed_") + dtype_name[t], 256);  // each
       if (!cpu::is_quant(t)) continue;
       k.dequant[t] = pipe(std::string("vv_dequant_") + dtype_name[t], 256);  // each
@@ -421,7 +428,7 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
       }
       // G1's best step (M5, 14 Nov): 32 inputs for the K-quants, 128 for Q8_0. All three row tiles or none, so a format
       // never changes kernel with the row count.
-      if (tensor_capable && !tensor_off && t != LARCH_Q4_0 && t != LARCH_Q5_0) {
+      if (tensor_capable && !tensor_off && t != LARCH_Q4_0 && t != LARCH_Q5_0 && t != LARCH_NQ3) {
         auto& st_tiles = k.mmvq_st;
         for (int m = 0; m < 3; ++m)
           st_tiles[m][t] = opt(std::string("vv_mmvq_st") + (t == LARCH_Q8_0 ? "128" : "32") + "_m" +
@@ -442,6 +449,9 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
         k.mmvq_id_mm_sg[t] = opt(std::string("vv_mmvq_id_mm_sg_") + dtype_name[t], GEMM_QS_SG * 32);
       }
     }
+    k.mmvq1_nq3 = pipe("vv_mmvq1_nq3", 64);
+    k.mmvq_id_nq3[0] = pipe("vv_mmvq_id_nq3", 64);
+    k.mmvq_id_nq3[1] = pipe("vv_mmvq_id_nq3n", 64);
     k.gemm = pipe("vv_gemm", 128);
     k.gemv = pipe("vv_gemv", 32 * GEMV_SG);
     if (tensor_forced || tensor_timed) {  // timed and nil: simdgroup GEMM without a race
@@ -492,6 +502,7 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
           k.attn_paged_nax[wide] = opt("vv_attn_paged_nax" + std::to_string(64 << wide) + (fed.attn_nax_hm ? "_hm" : ""),
                                        wide == 2 ? 256 : 128);
         if (fed.mmvq_nax) k.mmvq_nax_q3_k = opt(fed.mmvq_nax_raw ? "vv_mmvq_nax_raw_q3_k" : "vv_mmvq_nax_q3_k", 256);
+        k.mmvq_nax_nq3 = opt("vv_mmvq_nax_nq3", 256);
         from = lib;
       }
     }
@@ -535,7 +546,7 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
     if (d->tensor_gemm) {  // only for the tensor path: nil keeps the shallow tile, and the deferred dequant
       d->k.gemm_tensor_deep = opt("vv_gemm_tensor_deep", 32 * GEMM_TENSOR_DEEP_SG);
       for (const larch_dtype t :
-           {LARCH_Q3_K, LARCH_Q4_K, LARCH_Q5_K, LARCH_Q6_K, LARCH_Q8_0, LARCH_Q4_0, LARCH_Q5_0})
+           {LARCH_Q3_K, LARCH_Q4_K, LARCH_Q5_K, LARCH_Q6_K, LARCH_Q8_0, LARCH_Q4_0, LARCH_Q5_0, LARCH_NQ3})
         for (int v = 0; v < 4; ++v) {
           const int big = v / 2, narrow = v % 2;
           d->k.gemm_q[big][narrow][t] = opt(
@@ -543,7 +554,7 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
               GEMM_Q_SG * 32);
         }
       for (const larch_dtype t :
-           {LARCH_Q3_K, LARCH_Q4_K, LARCH_Q5_K, LARCH_Q6_K, LARCH_Q8_0, LARCH_Q4_0, LARCH_Q5_0})
+           {LARCH_Q3_K, LARCH_Q4_K, LARCH_Q5_K, LARCH_Q6_K, LARCH_Q8_0, LARCH_Q4_0, LARCH_Q5_0, LARCH_NQ3})
         for (int tall = 0; tall < 2; ++tall)
           d->k.mmvq_id_mm[tall][t] =
               opt(std::string(tall ? "vv_mmvq_id_mm64x32_" : "vv_mmvq_id_mm_") + dtype_name[t], MOE_MM_SG * 32);
@@ -1142,6 +1153,16 @@ void mmvq_rows(larch_stream* vs, const view& w, const view& x, const view& b, co
   const mm_args a{x.rs, w.rs, o.rs, b.rs, u32(x.rows), u32(w.rows), u32(w.cols), b.b ? 1u : 0u,
                   o.dtype == LARCH_F32 ? 1u : 0u, 1.0f, 0.0f, 0};
   auto* stream = static_cast<mtl_stream*>(vs);
+  // nq3 (k a multiple of 512, rows 4-aligned, larch.h): its own kernels where x's rows are 8- and 16-byte aligned,
+  // else the generic decoder's below.
+  if (w.dtype == LARCH_NQ3 && x.rows == 1 && !(x.off % 8)) {
+    groups(stream, ks(vs).mmvq1_nq3, {input(w), input(x), input_or(b, at(w)), at(o)}, a, (w.rows + 7) / 8, 64, 1);
+    return;
+  }
+  if (w.dtype == LARCH_NQ3 && x.rows >= 2 && x.rows <= 16 && ks(vs).mmvq_nax_nq3 && !(x.off % 16) && !(x.rs % 16)) {
+    groups(stream, ks(vs).mmvq_nax_nq3, {input(w), input(x), input_or(b, at(w)), at(o)}, a, (w.rows + 31) / 32, 256);
+    return;
+  }
   if (x.rows == 1 && ks(vs).mmvq1[w.dtype]) {  // m1 decode 24.6 to 26.0 tok/s (M5, 10 Oct)
     const int64_t cols = MMVQ1_SG * MMVQ1_NR;
     groups(stream, ks(vs).mmvq1[w.dtype], {input(w), input(x), input_or(b, at(w)), at(o)}, a, (w.rows + cols - 1) / cols,
@@ -1295,6 +1316,12 @@ larch_status mmvq_id(larch_stream* vs, const larch_tensor* w_quant, const larch_
     // Drafter mode runs per pair at any row count, 1-row decode included, so a row's bits never depend on the rows
     // beside it (the engine's check steps send up to 32 rows a call).
     if (s->check || pairs < MOE_GROUP_PAIRS * experts || experts > MOE_ROUTE_MAX || w.cols > 1024 * MOE_GROUP_T) {
+      if (w.dtype == LARCH_NQ3) {  // 2 simdgroups of 4 columns; under 1024 wide, 4 lanes a unit's item instead of 8
+        groups(s, ks(vs).mmvq_id_nq3[w.cols < 1024],
+               {input(w), input(x), input(ids), input_or(b, at(w)), input_or(wt, at(w)), at(o)}, a, (n + 7) / 8, 64,
+               weighted ? x.rows : pairs);
+        return;
+      }
       id<MTLComputePipelineState> narrow = w.cols < 1024 ? ks(vs).mmvq_id1n[w.dtype] : nil;
       const int64_t cols = MMVQ1_SG * (narrow ? MMVQ1N_C : MMVQ1_NR);
       if (id<MTLComputePipelineState> one = narrow ? narrow : ks(vs).mmvq_id1[w.dtype])
@@ -1869,7 +1896,7 @@ static const vv_ops table = {
     .qk_norm = qk_norm,
     .sample_prep = sample_prep,
     // ponytail: no Q2_K kernels; add them to the per-dtype kernels when a mixed-expert file must run on Metal.
-    .no_weights = 1u << LARCH_Q2_K | 1u << LARCH_NQ3,
+    .no_weights = 1u << LARCH_Q2_K,
     .mmvq_verify = mmvq_verify,
     .mmvq_id = mmvq_id,
     .sigmoid_mul = sigmoid_mul,

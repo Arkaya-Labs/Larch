@@ -1963,6 +1963,45 @@ static int mixed_bytes(const side& x) {
   return wrong;
 }
 
+// nq3 (Q3_K rewritten for Metal, larch.h LARCH_NQ3) on every op the engine sends it: mmvq at each row count (Metal's
+// 1-row and 2-16 row kernels, an x off their alignment for the generic ones), embed, dequant, and mmvq_id at decode
+// and prefill on the hybrid MoE target's expert shapes, k 512 (under 1024: the narrow kernel) and 2048.
+static void nq3() {
+  constexpr larch_dtype q = LARCH_NQ3;
+  rng wg = seeded("nq3 [2048, 2048] weight");
+  const auto w = std::make_shared<const bytes>(quant(q, 2048, 2048, wg));
+  for (int64_t rows = 1; rows <= 16; ++rows) {
+    mmvq_case(q, rows, 2048, 2048, rows % 3 ? LARCH_F16 : LARCH_F32, rows % 2, 0, 0, false, w);
+    mmvq_case(q, rows, 67, 1536, LARCH_F16, rows % 2 == 0);
+  }
+  for (const int64_t rows : {1, 9}) mmvq_case(q, rows, 67, 1024, LARCH_F16, true, 0, 2);
+  for (const int64_t rows : {1, 16}) mmvq_case(q, rows, 67, 5120, LARCH_F32, true, 0, 0, true);
+  for (const auto& [vocab, rows] : {std::pair<int64_t, int64_t>{37, 19}, {5, 1}}) embed_case(q, vocab, rows, 1024);
+  for (const auto& [n, k] : {std::pair<int64_t, int64_t>{1, 512}, {33, 1536}, {512, 2048}, {2048, 512}}) {
+    dequant_case(q, n, k);
+    dequant_case(q, n, k, 0, true);
+  }
+  mmvq_id_case(q, 4, 1, 2, 67, 1024, false, false, false, LARCH_F16);
+  mmvq_id_case(q, 4, 5, 2, 33, 512, true, true, false, LARCH_F32);
+  mmvq_id_case(q, 8, 3, 8, 67, 1024, false, false, true, LARCH_F32, true);
+  mmvq_id_case(q, 8, 2, 3, 33, 512, true, true, true, LARCH_F16, true);
+  mmvq_id_case(q, 4, 19, 2, 67, 1024, false, false, true, LARCH_F32);
+  mmvq_id_case(q, 4, 130, 2, 33, 512, true, true, true, LARCH_F16);
+  rng eg = seeded("nq3 hybrid experts");
+  const auto up = std::make_shared<const bytes>(quant(q, 256 * 512, 2048, eg));
+  const auto down = std::make_shared<const bytes>(quant(q, 256 * 2048, 512, eg));
+  for (const int64_t rows : {1, 8, 32, 64, 512}) {
+    mmvq_id_case(q, 256, rows, 8, 512, 2048, false, false, false, LARCH_F16, false, up);
+    mmvq_id_case(q, 256, rows, 8, 2048, 512, true, true, false, LARCH_F32, false, down);
+  }
+}
+
+// nq3's mmvq_verify: one-row mmvq row by row on Metal.
+static void nq3_verify() {
+  for (const int64_t rows : {2, 8, 17, 32})
+    mmvq_case(LARCH_NQ3, rows, 67, 2048, rows % 2 ? LARCH_F32 : LARCH_F16, rows == 8, 0, 0, false, nullptr, VERIFY);
+}
+
 // A valid one-block Q2_K dequant answers UNSUPPORTED on this device: no Q2_K kernels (vv_ops::no_weights).
 static bool lacks_q2(const side& dut) {
   larch_buffer *w = nullptr, *o = nullptr;
@@ -1999,7 +2038,7 @@ int main() {
   // HIP has no entry; Metal has it with the staged tile, Apple GPU family 10 (MTLGPUFamilyApple10, arch_code 1010).
   if (props.backend == LARCH_BACKEND_CUDA || props.backend == LARCH_BACKEND_CPU ||
       (props.backend == LARCH_BACKEND_METAL && props.arch_code >= 1010))
-    mmvq_verify();
+    mmvq_verify(), nq3_verify();
   else
     std::printf("ops: mmvq_verify not on this backend (%s): NOT RUN\n", props.name);
   dequant();
@@ -2010,6 +2049,7 @@ int main() {
   attention();
   sample_prep();
   mmvq_id();
+  nq3();
   mmvq_id_mixed();
   moe_route();
   layernorm();
@@ -2045,6 +2085,16 @@ int main() {
       return c.want == LARCH_OK && std::any_of(c.args.begin(), c.args.end(), [](const arg& a) { return a.t == LARCH_Q2_K; });
     });
     std::printf("ops: no q2_k on this device: %zu cases NOT RUN\n", all - tests.size());
+  }
+  // nq3 is Metal's alone (and the CPU reference's): elsewhere its valid calls answer UNSUPPORTED and are dropped.
+  // Metal refusing them is a failure.
+  if (lacks_kernels(dut.dev, dut.s, LARCH_NQ3)) {
+    if (props.backend == LARCH_BACKEND_METAL) return std::fputs("ops: Metal refused a valid nq3 mmvq\n", stderr), 1;
+    const size_t all = tests.size();
+    std::erase_if(tests, [](const test& c) {
+      return c.want == LARCH_OK && std::any_of(c.args.begin(), c.args.end(), [](const arg& a) { return a.t == LARCH_NQ3; });
+    });
+    std::printf("ops: no nq3 on this device: %zu cases NOT RUN\n", all - tests.size());
   }
   int wrong = 0;
   for (const test& c : tests) wrong += check(ref, dut, c);

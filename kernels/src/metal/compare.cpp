@@ -53,12 +53,13 @@ static float from_h(uint16_t u) {
 static float uniform(float lo, float hi) { return std::uniform_real_distribution<float>(lo, hi)(rng); }
 
 static int64_t block_of(larch_dtype t) {
-  return t == LARCH_Q3_K || t == LARCH_Q4_K || t == LARCH_Q5_K || t == LARCH_Q6_K ? 256
+  return t == LARCH_NQ3 ? 512
+         : t == LARCH_Q3_K || t == LARCH_Q4_K || t == LARCH_Q5_K || t == LARCH_Q6_K ? 256
          : t >= LARCH_Q8_0 && t <= LARCH_Q5_0                                         ? 32
                                                                                         : 1;
 }
 static int64_t bytes_of(larch_dtype t) {  // per block, or per element for plain types
-  static const int64_t b[] = {4, 2, 2, 4, 144, 176, 210, 34, 18, 22, 1, 110};
+  static const int64_t b[] = {4, 2, 2, 4, 144, 176, 210, 34, 18, 22, 1, 110, 84, 220};
   return b[t];
 }
 
@@ -96,6 +97,7 @@ static host make(larch_dtype t, std::vector<int64_t> shape, int64_t pad = 0, flo
         for (int64_t j = 0; j < bytes_of(t); ++j) e[j] = uint8_t(rng());
         if (t == LARCH_Q6_K) put(e + 208, uniform(-0.01f, 0.01f));
         else if (t == LARCH_Q3_K) put(e + 108, uniform(-0.01f, 0.01f));  // d follows hmask, qs and scales
+        else if (t == LARCH_NQ3) put(e + 216, uniform(-0.01f, 0.01f)), put(e + 218, uniform(-0.01f, 0.01f));
         else if (t == LARCH_Q4_K || t == LARCH_Q5_K) put(e, uniform(0, 0.01f)), put(e + 2, uniform(0, 0.01f));
         else put(e, uniform(-0.05f, 0.05f));
     }
@@ -347,10 +349,12 @@ static void deferred_dequant() {
       return st ? st : larch_gemm(sides[i].s, &a.t[i], &dq[i], bias ? &bias->t[i] : nullptr, &c.t[i], 0.75f, -0.25f);
     };
   };
-  for (const larch_dtype q : {LARCH_Q3_K, LARCH_Q4_K, LARCH_Q5_K, LARCH_Q6_K, LARCH_Q8_0, LARCH_Q4_0, LARCH_Q5_0})
+  for (const larch_dtype q :
+       {LARCH_Q3_K, LARCH_Q4_K, LARCH_Q5_K, LARCH_Q6_K, LARCH_Q8_0, LARCH_Q4_0, LARCH_Q5_0, LARCH_NQ3})
     for (const auto& [m, n, k] : {std::tuple<int64_t, int64_t, int64_t>{17, 67, 512}, {130, 67, 512}, {40, 300, 256},
                                   {130, 300, 256}}) {
-      const int64_t kq = block_of(q) == 256 ? k : k / 2;  // 256 or 128 for the 32-element formats
+      // 256 or 128 for the 32-element formats; nq3 512 and 1024
+      const int64_t kq = q == LARCH_NQ3 ? 2 * k : block_of(q) == 256 ? k : k / 2;
       const larch_dtype ot = m == 17 ? LARCH_F16 : LARCH_F32;
       const both w = up(make(q, {n, kq}, 1)), dq = up(make(LARCH_F16, {n, kq}, 3));
       const both a = up(make(LARCH_F16, {m, kq}, 5)), bias = up(make(LARCH_F32, {n})), c = up(make(ot, {m, n}, 2));
