@@ -993,11 +993,17 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         let (d_model, rows, ctx) = (m8b().d_model, 64, 8192);
         let cache = (shape.cache_bytes_per_position() + 4) * u64::from(shape.cache_positions(ctx));
-        let bytes = |n| super::drafter_bytes(&shape, d_model, rows, ctx, draft_seats(n));
+        let bytes = |n| super::drafter_bytes(&shape, d_model, rows, ctx, draft_seats(n, 8));
         assert!(cache > 0);
         assert_eq!(bytes(4) - bytes(1), 3 * cache);
-        assert_eq!(draft_seats(0), 1);
-        assert_eq!(draft_seats(16), DRAFT_SEATS);
+        assert_eq!(draft_seats(0, 8), 1);
+        assert_eq!(draft_seats(16, 8), DRAFT_SEATS);
+        // One seat a chat that may check: at the default one chat, one cache whatever the seats.
+        let one_chat = super::drafter_bytes(&shape, d_model, rows, ctx, draft_seats(8, 1));
+        assert_eq!(one_chat, bytes(1));
+        assert_eq!(draft_seats(16, 1), 1);
+        assert_eq!(draft_seats(16, 2), 2);
+        assert_eq!(draft_seats(0, 0), 1);
     }
 
     /// serving_need is exactly what the fit after a load needs free: one byte less refuses.

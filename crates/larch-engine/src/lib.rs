@@ -734,7 +734,8 @@ pub struct EngineOptions {
     /// A DFlash drafter GGUF (`scripts/dflash_convert.py`) for this model: loading one turns
     /// guessing on, its block length bounding the guesses (15 for a block of 16), whatever
     /// `guesses` says; suffix drafts then serve only sequences the drafter has no context for.
-    /// The drafter's weights, its caches for four sequences at `max_context` and its
+    /// The drafter's weights, its caches for [`Self::guess_chats`] sequences (at most four) at
+    /// `max_context` and its
     /// taps count in the fit. `mtp`, or the model's own path, picks the model's built-in
     /// multi-token-prediction block instead (Qwen 3.5's nextn; a model without one refuses the
     /// load). LARCH_DRAFTER initializes it.
@@ -750,6 +751,16 @@ pub struct EngineOptions {
     /// LARCH_DRAFTER_GUESSES initializes it; default 4, the MTP block's too (0 asks for its 3):
     /// on the M5 a full block kept ~2.4 guesses a round and ran at 0.5x, a block of 4 ran at ~1.1-1.45x.
     pub drafter_guesses: u32,
+    /// The most decoding sequences a step checks guesses beside: past them every sequence decodes
+    /// one row a step on the plain decode kernels. A guessing load holds one spare state and one
+    /// drafter cache for each (within [`larch_model::Transformer::CHECK_SLOTS`] and four), so a
+    /// full batch keeps nearly the memory it has without guessing. 0 counts as 1.
+    /// LARCH_GUESS_CHATS initializes it; default 1: on the M5 (27 Nov, 35B hybrid MoE with a
+    /// DFlash drafter) checks paid at one chat (+20%) and lost at 4 and 8 (each checked row ~4 ms
+    /// of its own experts against a plain step's shared ones).
+    // ponytail: one count for every backend; raise it per backend if a bench shows checks paying
+    // at several chats there.
+    pub guess_chats: u32,
     /// Tests only: the host memory a reload's carry may copy, in place of what the host has free.
     #[doc(hidden)]
     pub carry_bytes: Option<usize>,
@@ -811,6 +822,11 @@ impl EngineOptions {
     /// Whether a load with these options may check guesses.
     pub(crate) fn guessing(&self) -> bool {
         self.guesses > 0 || self.drafter.is_some()
+    }
+
+    /// [`Self::guess_chats`], 0 counting as 1.
+    pub(crate) fn guess_seqs(&self) -> u32 {
+        self.guess_chats.max(1)
     }
 
     /// Whether the drafter is the model's own MTP block (see `drafter`).
@@ -883,6 +899,10 @@ impl EngineOptions {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(4),
+            guess_chats: std::env::var("LARCH_GUESS_CHATS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1),
         }
     }
 }
@@ -1375,6 +1395,7 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
     );
     let asked = weights.asked.clone();
     let forced = opts.cpu_expert_layers;
+    let guess_seqs = opts.guess_seqs();
     // `start` reads the header before it sets an MoE's startup chunk, so only a chunk set by hand
     // is here; a reload's options carry the startup one, and its load keeps that.
     let chunk_set = (opts.knob_overrides.iter()).any(|&(k, _)| k == knob_id::PREFILL_CHUNK_TOKENS);
@@ -1389,7 +1410,7 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
     // What `Loaded::load` takes after this loader, which the plan must leave room for, and the
     // check-step graph slots beside the decode buckets.
     let checks = engine::check_spares(opts, drafter.as_ref().map(larch_model::DraftShape::block));
-    let spares_of = |n| match n {
+    let spares_of = |n| match engine::state_spares(opts, n) {
         0 => Ok(0),
         n => Transformer::check_bytes(&header, &c, n),
     };
@@ -1449,7 +1470,7 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
         };
         // `cap` is the startup max_batch_seqs, capped at 8 (above DRAFT_SEATS): the engine's seats.
         // A cell, so a drafter's smaller attempts below re-plan through the same closures.
-        let t = std::cell::Cell::new(terms(rows, guess::draft_seats(cap), true)?);
+        let t = std::cell::Cell::new(terms(rows, guess::draft_seats(cap, guess_seqs), true)?);
         let graph_seats = graph_seats.load(Ordering::Relaxed);
         // The fewest state slots the plan keeps: more host layers before fewer of them. Only a
         // hybrid's seats cost state; another model's KV floor stays at one seat's.
@@ -2054,7 +2075,7 @@ impl DocTerms {
             ..opts.clone()
         };
         let checks = engine::check_spares(&plain, None);
-        let spares = match checks {
+        let spares = match engine::state_spares(&plain, checks) {
             0 => 0,
             n => Transformer::check_bytes(&header, &c, n)?,
         };
@@ -2096,7 +2117,8 @@ fn document_plan(
     let (moe, maps) = (*moe, *maps);
     let guess = (None, None, *checks, *spares);
     let terms = |ctx, slots| {
-        let draft_seats = guess::draft_seats(slots);
+        // No drafter: the seats price nothing.
+        let draft_seats = guess::draft_seats(slots, 1);
         row_terms(
             header,
             c,

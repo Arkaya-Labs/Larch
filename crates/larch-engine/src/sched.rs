@@ -814,6 +814,11 @@ pub(crate) struct Scheduler {
     draft_conf: Vec<f32>,
     /// The most guesses a sequence's check step tries; 0 turns guessing off.
     pub(crate) guess_max: usize,
+    /// The most decoding sequences a step checks beside ([`crate::EngineOptions::guess_chats`]):
+    /// past them a step decodes plainly.
+    pub(crate) guess_chats: usize,
+    /// Every sequence's check rounds of this load, whose acceptance a new request starts from.
+    accept: Hits,
     /// Whether the model takes checks (`Model::begin_check`): None until it first answers. A
     /// model that refuses its first one never guesses again; one that took a check before may
     /// refuse one for want of room (its spare state slots) and guesses on.
@@ -936,6 +941,8 @@ impl Scheduler {
             draft: Vec::new(),
             draft_conf: Vec::new(),
             guess_max: 0,
+            guess_chats: CHECK_ROWS,
+            accept: Hits::default(),
             checkable: None,
             check_spares: None,
             costs: Costs::default(),
@@ -963,6 +970,7 @@ impl Scheduler {
         self.free_slots = (0..n).rev().collect();
         self.checkable = None;
         self.costs = Costs::default();
+        self.accept = Hits::default();
     }
 
     /// The model grew its state to `n` slots live: the new ones are free, the held ones unchanged.
@@ -1469,6 +1477,7 @@ impl Scheduler {
         r.reads_pin =
             r.class == Class::Background && self.prefix.is_pin(r.namespace, &r.seq.tokens);
         r.completion.lock().unwrap_or_else(|e| e.into_inner()).arm = self.arm;
+        r.hits = Hits::from_prior(self.accept.acceptance());
         self.waiting.push_back(r.id);
         self.reqs.insert(r.id, r);
     }
@@ -1944,8 +1953,9 @@ impl Scheduler {
     /// teacher-forced run observes (its rows take the spare logits rows), or while a prompt has
     /// rows to feed (`used` tokens planned, a chunk to continue, a request that could start): a
     /// check step holds only decode rows and checks, which the model computes as decode rows
-    /// (`StepBatch::check`), so prompts never wait on guesses. Else the room left up to
-    /// [`CHECK_ROWS`] beside one row a decoding sequence, within the logits rows past one a seat.
+    /// (`StepBatch::check`), so prompts never wait on guesses, or past [`Self::guess_chats`]
+    /// decoding sequences. Else the room left up to [`CHECK_ROWS`] beside one row a decoding
+    /// sequence, within the logits rows past one a seat.
     fn guess_room(&self, lim: &Limits, used: usize, decoding: usize) -> usize {
         let prompts = used > 0
             || (!self.waiting.is_empty() && self.running.len() < lim.max_batch_seqs)
@@ -1955,6 +1965,7 @@ impl Scheduler {
             });
         if prompts
             || self.guess_max == 0
+            || decoding > self.guess_chats
             || self.checkable == Some(false)
             || self.reqs.values().any(|r| r.observe)
             || guess_off()
@@ -2682,6 +2693,7 @@ impl Scheduler {
                 .count();
             r.hits.round(r.guesses as u32, kept as u32);
             r.hits.scored(&r.conf[..r.conf.len().min(kept + 1)]);
+            self.accept.round(r.guesses as u32, kept as u32);
             self.tot.guess_rounds += 1;
             self.tot.guesses_tried += r.guesses as u64;
             self.tot.guesses_kept += kept as u64;
@@ -6266,6 +6278,89 @@ mod tests {
     fn no_probe_where_it_could_never_flip_the_pick() {
         let (s, checks, _) = eight_chats(|_, g| if g == 0 { 1.0 } else { 1.45 }, 9 * EXPLORE);
         assert_eq!(checks, 0, "{:?}", s.tot.guess_k);
+    }
+
+    /// Past [`Scheduler::guess_chats`] decoding sequences a step checks nothing: two chats at a
+    /// limit of one decode plainly, at a limit of two the step checks.
+    #[test]
+    fn no_check_past_the_guessing_chats() {
+        for (chats, guessed) in [(1, 0), (2, 4)] {
+            let (mut s, limits, _rx) = guessing(64, &[(1, 3), (2, 3)]);
+            s.guess_chats = chats;
+            let plan = s.schedule(&limits, 1);
+            s.complete(&plan, [token(1), token(2)], 1);
+            let plan = s.schedule(&limits, 2);
+            assert_eq!((plan.guessed, plan.decoding), (guessed, 2), "{chats}");
+        }
+    }
+
+    /// Proposes `max` guesses of the token [`token`] samples, for every request: a check keeps
+    /// them all when each of its rows samples it.
+    struct GuessRight;
+
+    impl Drafter for GuessRight {
+        fn propose(&mut self, _: u64, _: Namespace, _: &[u32], max: usize, out: &mut Vec<u32>) {
+            out.extend(std::iter::repeat_n(1, max));
+        }
+    }
+
+    /// Completes `plan` with a sampled token for each row it feeds a request: a check's last
+    /// token and guesses, a prompt chunk's one, a decode row's one.
+    fn complete_right(s: &mut Scheduler, plan: &StepPlan, t: u64) {
+        let checked = |id: u64| s.reqs[&id].guesses + 1;
+        let rows: Vec<_> = (plan.decode.iter().map(|&id| (id, 1)))
+            .chain(plan.prefill.iter().map(|p| match s.reqs[&p.0].guesses {
+                0 => (p.0, 1),
+                _ => (p.0, checked(p.0)),
+            }))
+            .collect();
+        let sampled: Vec<_> = (rows.into_iter())
+            .flat_map(|(id, n)| std::iter::repeat_n(token(id), n))
+            .collect();
+        s.complete(plan, sampled, t);
+    }
+
+    /// A new request starts at the load's acceptance, not a fixed 1/2: on the fast Metal checks'
+    /// one-chat costs (27 Nov, draft included), where a check pays only above about 0.6, a request
+    /// after well-kept rounds checks at its first decode step instead of decoding plainly until
+    /// a probe.
+    #[test]
+    fn a_new_request_starts_at_the_loads_acceptance() {
+        let ns = |_, g| match g {
+            0 => 18.5,
+            1 => 29.9,
+            2 => 34.2,
+            4 => 42.3,
+            _ => 58.3,
+        };
+        let mut s = Scheduler::new(256);
+        (s.guess_max, s.drafter) = (4, Box::new(GuessRight));
+        s.costs = Costs::fixed(ns);
+        let limits = lim(Policy::DecodeFirst, 8, 64, 0.95);
+        // A fresh load's first request starts at 1/2, which the costs leave plain.
+        let (r, _rx1, _) = req(1, vec![5; 3], 40, 0);
+        s.admit(r);
+        assert_eq!(s.reqs[&1].hits.acceptance(), 0.5);
+        assert_eq!(s.costs.pick(1, 0, 0.0, 0.5, 4, false), 0);
+        let mut t = 1;
+        while s.reqs.contains_key(&1) {
+            let plan = s.schedule(&limits, t);
+            complete_right(&mut s, &plan, t);
+            t += 1;
+        }
+        assert!(s.tot.guess_rounds > 0 && s.tot.guesses_kept == s.tot.guesses_tried);
+        let a = s.accept.acceptance();
+        assert!(a > 0.8, "{a}");
+        let (r, _rx2, _) = req(2, vec![5; 3], 40, 0);
+        s.admit(r);
+        assert_eq!(s.reqs[&2].hits.acceptance(), a);
+        let plan = s.schedule(&limits, t);
+        complete_right(&mut s, &plan, t);
+        t += 1;
+        // Its first decode step, not an exploring one, checks all four guesses.
+        let plan = s.schedule(&limits, t);
+        assert!(!plan.explore);
+        assert_eq!(plan.guessed, 4);
     }
 
     /// Samples count a check's sequence as decoding and its rows as no prompt tokens.

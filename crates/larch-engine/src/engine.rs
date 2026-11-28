@@ -67,16 +67,22 @@ pub(crate) fn guess_count(opts: &EngineOptions, drafted: Option<u32>, recurrent:
     n.min(MAX_GUESSES).min(spares)
 }
 
-/// The check-step graph slots a load with `opts` reserves ([`guess_count`] and one) and the check
-/// spares it asks for (a recurrent model holds at most [`Transformer::CHECK_SLOTS`] of them), its
-/// drafter DFlash with `block` rows or else the MTP block or plain guesses; 0 when it does not
-/// guess.
+/// The check-step graph slots a load with `opts` reserves ([`guess_count`] and one), its drafter
+/// DFlash with `block` rows or else the MTP block or plain guesses; 0 when it does not guess.
+/// [`state_spares`] of it are the spare states a recurrent model asks for.
 pub(crate) fn check_spares(opts: &EngineOptions, block: Option<u32>) -> u32 {
     if !opts.guessing() {
         return 0;
     }
     let drafted = (block.is_some() || opts.mtp()).then(|| drafted(opts.drafter_guesses, block));
     (guess_count(opts, drafted, true) + 1).min(Transformer::CHECK_ROWS)
+}
+
+/// The spare states a recurrent load with `opts` and `checks` [`check_spares`] asks for: one for
+/// each sequence a step may check ([`EngineOptions::guess_chats`]), as a check snapshots into one
+/// whatever its rows; the model holds at most [`Transformer::CHECK_SLOTS`].
+pub(crate) fn state_spares(opts: &EngineOptions, checks: u32) -> u32 {
+    checks.min(opts.guess_seqs())
 }
 
 /// [`guess_count`] for a loaded model.
@@ -1554,7 +1560,7 @@ impl Loaded {
         let seqs_cap = knob_spec(knob_id::MAX_BATCH_SEQS).expect("registered").max as usize;
         let rows = seqs_cap + chunk_cap;
         let startup_seqs = cfg.values[knob_id::MAX_BATCH_SEQS as usize] as u32;
-        let draft_seats = crate::guess::draft_seats(startup_seqs);
+        let draft_seats = crate::guess::draft_seats(startup_seqs, opts.guess_seqs());
         if let Some(w) = &weights {
             *w.budget.lock().expect("load budget") = (opts.max_context, opts.kv_pool_fraction);
             // A hybrid's state slot costs 64 MB on the hybrid MoE target; 16 of them keep it off a 24 GB Mac's
@@ -1668,7 +1674,7 @@ impl Loaded {
         let checks = check_spares(opts, drafter.as_ref().map(DflashDrafter::block));
         if checks > 0 {
             let model = partial.model.as_mut().expect("loaded model");
-            model.alloc_checks(s, checks)?;
+            model.alloc_checks(s, state_spares(opts, checks))?;
         }
         if vision
             .as_ref()
@@ -2213,6 +2219,7 @@ impl Engine {
         e.sched.pace_decode(backend == Backend::Metal);
         e.sched.pin_mark = e.opts.pin_mark.unwrap_or(crate::sched::PIN_MARK);
         e.sched.guess_max = guess_max(&e.opts, e.loaded.as_ref().expect("loaded engine"));
+        e.sched.guess_chats = e.opts.guess_seqs() as usize;
         e.sched.configure_prefix_cache(if cache_compatible {
             e.opts.prefix_cache_blocks
         } else {
@@ -3599,6 +3606,7 @@ impl Engine {
             self.sched.reset_pool(loaded.info.deployment.kv_pool_blocks);
             self.sched.set_state_slots(loaded.model.state_slots());
             self.sched.guess_max = guess_max(&opts, &loaded);
+            self.sched.guess_chats = opts.guess_seqs() as usize;
             self.sched.configure_prefix_cache(if cache_compatible {
                 opts.prefix_cache_blocks
             } else {
@@ -9820,9 +9828,36 @@ mod tests {
             engine_on(CPU, arch, guesses, drafter, prefix_blocks, refuse, draft)
         }
 
-        /// [`try_engine`] on `device`.
+        /// [`try_engine`] on `device`, every chat checking.
         fn engine_on(
             device: i32,
+            arch: Arch,
+            guesses: u32,
+            drafter: Box<dyn Drafter + Send>,
+            prefix_blocks: usize,
+            refuse: bool,
+            draft: Option<Drafted>,
+        ) -> Result<(Engine, EngineHandle), LoadError> {
+            // Every chat may check, so a few requests exercise checks sharing a step; the default
+            // of one has its own tests.
+            let chats = 8;
+            engine_chats(
+                device,
+                chats,
+                arch,
+                guesses,
+                drafter,
+                prefix_blocks,
+                refuse,
+                draft,
+            )
+        }
+
+        /// [`engine_on`] with `chats` [`EngineOptions::guess_chats`].
+        #[allow(clippy::too_many_arguments)]
+        fn engine_chats(
+            device: i32,
+            chats: u32,
             arch: Arch,
             guesses: u32,
             drafter: Box<dyn Drafter + Send>,
@@ -9857,6 +9892,7 @@ mod tests {
             opts.max_context = 512;
             opts.knob_overrides = vec![(knob_id::MAX_BATCH_SEQS, 8.0)];
             opts.guesses = guesses;
+            opts.guess_chats = chats;
             opts.prefix_cache_blocks = prefix_blocks;
             opts.prefix_cache_custom_compatible = true;
             let dflash =
@@ -11493,6 +11529,56 @@ mod tests {
             }
         }
 
+        /// At the default of one guessing chat a recurrent load holds one spare state and a
+        /// drafter load one draft cache, the requests check one at a time (only while one
+        /// decodes), and the output is unchanged.
+        #[test]
+        fn one_guessing_chat_holds_one_spare_and_checks_alone() {
+            let chats = EngineOptions::new(PathBuf::new(), CPU).guess_chats;
+            assert!(
+                chats == 1 || std::env::var_os("LARCH_GUESS_CHATS").is_some(),
+                "{chats}"
+            );
+            for seed in 0..2 {
+                let reqs = prompts(seed);
+                let (plain, _) = run(Arch::Qwen35, false, 0, Box::new(PromptLookup), &reqs);
+                let refs = refs(&reqs, &plain);
+                let (mut e, h) = engine_chats(
+                    CPU,
+                    1,
+                    Arch::Qwen35,
+                    8,
+                    Box::new(Oracle(refs, seed)),
+                    0,
+                    false,
+                    None,
+                )
+                .unwrap();
+                let model = &e.loaded.as_ref().unwrap().model;
+                assert_eq!(model.check_spares_free(), Some(1));
+                let hs: Vec<_> = reqs.iter().map(|r| h.submit(r.clone()).unwrap()).collect();
+                let outs = drive(&mut e, &hs);
+                same(&outs, &plain);
+                let stats = h.guess_stats();
+                assert!(stats.kept > 0, "{stats:?}");
+                assert_eq!(e.sched.most_checks, 1);
+            }
+            let draft = Some(Drafted::Dflash(0));
+            let (e, _h) = engine_chats(
+                CPU,
+                1,
+                Arch::Qwen35,
+                0,
+                Box::new(PromptLookup),
+                0,
+                false,
+                draft,
+            )
+            .unwrap();
+            let draft = e.loaded.as_ref().unwrap().draft.as_ref().unwrap();
+            assert_eq!(draft.seats(), 1);
+        }
+
         /// A slow drafter: `Right`'s guess of token 7, after a device forward's wait.
         struct Slow;
 
@@ -12158,8 +12244,9 @@ mod tests {
             }
         }
 
-        /// A guessing hybrid holds a spare state slot for each row its checks try past the first,
-        /// never more than [`Transformer::CHECK_SLOTS`], and a check takes one whatever its rows,
+        /// A guessing hybrid where every chat checks holds a spare state slot for each row its
+        /// checks try past the first, never more than [`Transformer::CHECK_SLOTS`] (one a guessing
+        /// chat, see [`state_spares`]), and a check takes one whatever its rows,
         /// up to [`Transformer::CHECK_ROWS`]: 3 guesses hold 4 spares, 8 hold the most.
         #[test]
         fn a_guessing_hybrid_check_takes_one_spare() {

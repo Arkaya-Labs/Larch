@@ -83,10 +83,16 @@ impl Drafter for PromptLookup {
 // drafter shows in a bench.
 pub(crate) const DRAFT_SEATS: usize = 4;
 
-/// The draft seats a load allocates and its fit reserves for a startup `max_batch_seqs`: a live
-/// raise leaves the extra sequences to the scheduler's drafter, so one chat pays for one cache.
-pub(crate) fn draft_seats(max_batch_seqs: u32) -> usize {
-    (max_batch_seqs as usize).clamp(1, DRAFT_SEATS)
+/// The draft seats a load allocates and its fit reserves for a startup `max_batch_seqs` and
+/// [`crate::EngineOptions::guess_chats`] `chats`: only that many sequences check in a step, so a
+/// cache past them would hold context no check reads. A live raise leaves the extra sequences to
+/// the scheduler's drafter, so one chat pays for one cache.
+// ponytail: a seat goes to the first sequence that starts while one is free (or takes the oldest
+// parked one), so of several chats only the first guesses with the drafter when it later decodes
+// alone; hand the seat to the sole decoder (its cache refilled from the prompt) if a bench shows
+// that case.
+pub(crate) fn draft_seats(max_batch_seqs: u32, chats: u32) -> usize {
+    (max_batch_seqs.min(chats) as usize).clamp(1, DRAFT_SEATS)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -346,6 +352,12 @@ impl Draft {
         }
     }
 
+    /// The seats it holds a cache for (tests).
+    #[cfg(test)]
+    pub(crate) fn seats(&self) -> usize {
+        self.seats.len()
+    }
+
     /// Each seated request and the positions its cache holds (tests).
     #[cfg(test)]
     pub(crate) fn live(&self) -> Vec<(u64, u32)> {
@@ -482,8 +494,8 @@ const MAX_BACKOFF: u32 = 1024;
 /// What a sequence's acceptance evidence keeps a round: about its last 10 rounds count. A step
 /// without a check leaves it alone; a sequence the pick leaves plain retries by probing.
 const ACCEPT_DECAY: f64 = 0.9;
-/// The highest acceptance one-guess probes can show, every one kept: a probe runs only where
-/// this would flip the pick (11/12 at this decay).
+/// The highest acceptance one-guess probes can show from the default prior, every one kept: a
+/// probe runs only where this would flip the pick (11/12 at this decay).
 pub(crate) const PROBE_TOP: f64 = {
     let kept = 1.0 / (1.0 - ACCEPT_DECAY);
     (kept + 1.0) / (kept + 2.0)
@@ -507,6 +519,8 @@ pub(crate) struct Hits {
     conf: f64,
     judged: f64,
     scored: u32,
+    /// The acceptance before any round ([`Hits::acceptance`]).
+    prior: f64,
 }
 
 impl Default for Hits {
@@ -521,11 +535,24 @@ impl Default for Hits {
             conf: 0.0,
             judged: 0.0,
             scored: 0,
+            prior: 0.5,
         }
     }
 }
 
 impl Hits {
+    /// A record whose acceptance starts at `prior`, the load's so far (the scheduler's record of
+    /// every sequence's rounds): a fixed 1/2 sits below where a check pays once plain steps are
+    /// cheap (the fast Metal checks, 27 Nov), so each new chat decoded plainly until a one-guess
+    /// probe, up to [`EXPLORE`] steps in (22 of 38 steps of a copy-back answer whose checks keep
+    /// 6 of 7 guesses).
+    pub(crate) fn from_prior(prior: f64) -> Hits {
+        Hits {
+            prior,
+            ..Hits::default()
+        }
+    }
+
     /// Whether this decode step may guess; counts a skipped step.
     pub(crate) fn may_guess(&mut self) -> bool {
         if self.skip > 0 {
@@ -564,9 +591,10 @@ impl Hits {
     }
 
     /// The chance its next guess is kept: each round keeps guesses until its first miss, so
-    /// kept / (kept + misses), from a prior of one of each (1/2).
+    /// kept / (kept + misses), from a prior worth two guesses at [`Hits::from_prior`]'s rate (one
+    /// of each by default, 1/2).
     pub(crate) fn acceptance(&self) -> f64 {
-        (self.accepted + 1.0) / (self.accepted + self.missed + 2.0)
+        (self.accepted + 2.0 * self.prior) / (self.accepted + self.missed + 2.0)
     }
 
     /// Records the draft's chance of each guess a round judged (up to its first miss, as
