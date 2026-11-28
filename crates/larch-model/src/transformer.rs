@@ -117,12 +117,18 @@ fn quant_gemm_device(backend: Backend, arch_code: u32, profiled: bool) -> bool {
     backend == Backend::Cuda && (arch_code == 120 || profiled)
 }
 
-/// Where the fused entries' defaults ([`FUSED`]) apply with `LARCH_FUSED` unset: where they were measured.
-// ponytail: sm_120 only, like quant_gemm_device: on sm_86/89 the H2 decoder refuses fused_moe_in and the shared
-// fused_moe_down, so those MoE steps would run fallback placements no GPU run has covered. Add 86 and 89 when the
-// 3050 and 4060 pass the fused ctest, `larch parity --mode all` and a fused-on vs off bench there.
+/// The CUDA archs where the fused entries' defaults ([`FUSED`]) apply with `LARCH_FUSED` unset.
+// ponytail: measured on sm_120 (5070 Ti, 15 and 28 Nov 2026). sm_86 and sm_89 by judgment, 28 Nov 2026, not run: the
+// same 32-lane kernels, and llama.cpp b12723 fuses its own MoE gate/up mmvq on every CUDA arch (ggml-cuda.cu's
+// ggml_cuda_should_fuse_mul_mat has no arch check). There the H2 decoder makes the entries with an mmvq projection
+// inside refuse at one row (Transformer::refuse_h2_fused): those run as their ops, gate_up and attn_in stay fused.
+// Drop an arch if the fused ctest or `larch parity --mode all` fails on the 3050 or 4060, or LARCH_FUSED=0 is faster
+// there in a W4@1 or W4@4 A-B (LARCH_FUSED=0 is the rollback with no rebuild).
+const FUSED_DEFAULT_ARCHES: [u32; 3] = [86, 89, 120];
+
+/// Where the fused entries' defaults ([`FUSED`]) apply with `LARCH_FUSED` unset.
 fn fused_defaults(backend: Backend, arch_code: u32) -> bool {
-    backend == Backend::Cuda && arch_code == 120
+    backend == Backend::Cuda && FUSED_DEFAULT_ARCHES.contains(&arch_code)
 }
 
 /// The CUDA archs where activation INT8 defaults on: its parity passed and serving gained there.
@@ -1042,6 +1048,8 @@ pub struct Transformer {
     fused: Option<bool>,
     /// [`Transformer::refuse_fused`]: every fused entry answers UNSUPPORTED without running.
     refuse_fused: bool,
+    /// [`Transformer::refuse_h2_fused`]: the entries CUDA's H2 route refuses answer UNSUPPORTED.
+    refuse_h2: bool,
 }
 
 /// Apple silicon's 16 KiB pages; a multiple of every smaller page, which wrap_host checks.
@@ -2515,6 +2523,7 @@ impl Transformer {
             ))
             .then_some(false)),
             refuse_fused: false,
+            refuse_h2: false,
         };
         t.refuse_unsupported(dev, s)?;
         Ok(t)
@@ -2598,9 +2607,22 @@ impl Transformer {
         self.refuse_fused = refuse;
     }
 
-    /// A fused entry's `call`, or UNSUPPORTED without it under [`Transformer::refuse_fused`].
-    fn fused_call(&self, call: impl FnOnce() -> Result<(), KError>) -> Result<(), KError> {
-        if self.refuse_fused {
+    /// Makes the fused entries that sm_86/89's H2 route refuses at one row (those with an mmvq projection inside:
+    /// `fused_proj_add`, `fused_moe_in`, `fused_gdn_in`, `fused_moe_down`) answer UNSUPPORTED, the others run: the
+    /// mix a fused-on step takes there.
+    #[doc(hidden)]
+    pub fn refuse_h2_fused(&mut self, refuse: bool) {
+        self.refuse_h2 = refuse;
+    }
+
+    /// A fused entry's `call`, or UNSUPPORTED without it under [`Transformer::refuse_fused`], or under
+    /// [`Transformer::refuse_h2_fused`] where the entry has an mmvq projection inside (`h2`).
+    fn fused_call(
+        &self,
+        h2: bool,
+        call: impl FnOnce() -> Result<(), KError>,
+    ) -> Result<(), KError> {
+        if self.refuse_fused || (h2 && self.refuse_h2) {
             Err(KError::Unsupported)
         } else {
             call()
@@ -2873,7 +2895,7 @@ impl Transformer {
             return Ok(false);
         }
         let w = self.t(w)?;
-        match self.fused_call(|| ops::fused_proj_add(s, &w, input, gate, x)) {
+        match self.fused_call(true, || ops::fused_proj_add(s, &w, input, gate, x)) {
             Err(KError::Unsupported) => Ok(false),
             r => r.map(|()| true),
         }
@@ -3120,7 +3142,9 @@ impl Transformer {
             .map(|(_, act, sg, [g, u, i])| [g, u, act, i, sg]);
         let out = [&logits, &ids, &weights];
         let eps = self.cfg.rms_eps;
-        match self.fused_call(|| ops::fused_moe_in(s, x, &norm, eps, h, &router_t, out, five)) {
+        match self.fused_call(true, || {
+            ops::fused_moe_in(s, x, &norm, eps, h, &router_t, out, five)
+        }) {
             Err(KError::Unsupported) => {
                 ops::rmsnorm(s, x, &norm, self.cfg.rms_eps, h)?;
                 self.route(s, layer, router, host, h)?;
@@ -3209,7 +3233,9 @@ impl Transformer {
         let [gate, up, down] = experts.map(|w| self.t(w));
         let (gate, up, down) = (gate?, up?, down?);
         let act = Tensor::new(&self.sc.act, 0, DType::F16, &[rows, k, ef])?;
-        match self.fused_call(|| ops::fused_moe_gate_up(s, &gate, &up, h, &ids, &act)) {
+        match self.fused_call(false, || {
+            ops::fused_moe_gate_up(s, &gate, &up, h, &ids, &act)
+        }) {
             Err(KError::Unsupported) => {
                 let sc = [&self.sc.gate, &self.sc.up, &self.sc.act];
                 routed_act(
@@ -3230,7 +3256,9 @@ impl Transformer {
             None => None,
         };
         let three = sd.as_ref().map(|(w, a, g)| [w, *a, *g]);
-        match self.fused_call(|| ops::fused_moe_down(s, &down, &act, &ids, &weights, three, x)) {
+        match self.fused_call(true, || {
+            ops::fused_moe_down(s, &down, &act, &ids, &weights, three, x)
+        }) {
             Err(KError::Unsupported) => {
                 if let Some(sh) = &sh {
                     self.shared_down_add(s, sh, x)?;
@@ -4259,7 +4287,7 @@ impl Transformer {
             let n = norms.as_ref().map(|[a, b]| [a, b]);
             let qi = pairs.as_ref().unwrap_or(q);
             let pool = (kv, layer);
-            match self.fused_call(|| {
+            match self.fused_call(false, || {
                 ops::fused_attn_in(
                     s,
                     qi,
@@ -4858,6 +4886,21 @@ mod tests {
             shape,
             ndim: 2,
             side: false,
+        }
+    }
+
+    /// The fused entries default on for CUDA's sm_86, sm_89 and sm_120 only, and on no other backend.
+    #[test]
+    fn fused_defaults_take_sm86_sm89_sm120() {
+        for arch in [75, 80, 86, 87, 89, 90, 100, 120, 121] {
+            assert_eq!(
+                fused_defaults(Backend::Cuda, arch),
+                [86, 89, 120].contains(&arch),
+                "sm_{arch}"
+            );
+        }
+        for backend in [Backend::Cpu, Backend::Hip, Backend::Metal] {
+            assert!(!fused_defaults(backend, 120), "{backend:?}");
         }
     }
 

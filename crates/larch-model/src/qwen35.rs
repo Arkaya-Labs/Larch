@@ -768,8 +768,9 @@ impl Transformer {
                     self.t(l.beta)?,
                 ];
                 let outs = projs.map(|p| p.1);
-                let r =
-                    self.fused_call(|| ops::fused_gdn_in(s, x, &nw, eps, h, ws.each_ref(), outs));
+                let r = self.fused_call(true, || {
+                    ops::fused_gdn_in(s, x, &nw, eps, h, ws.each_ref(), outs)
+                });
                 if matches!(r, Err(KError::Unsupported)) {
                     ops::rmsnorm(s, x, &nw, eps, h)?;
                     false
@@ -813,7 +814,7 @@ impl Transformer {
         if self.fusing(FUSED.gdn) {
             let st = (&gs, l.layer);
             let (cw, nw) = (w(l.conv)?, w(l.norm)?);
-            let r = self.fused_call(|| {
+            let r = self.fused_call(false, || {
                 ops::fused_gdn(
                     s,
                     &qkv,

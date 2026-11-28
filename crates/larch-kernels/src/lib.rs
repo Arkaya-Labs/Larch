@@ -29,8 +29,8 @@ pub struct Routes {
     pub prefill_stream_rows: Option<u32>,
     /// `LARCH_FUSED`: the fused layer entries (larch.h ABI 4), chosen by larch-model at load. `0` keeps every
     /// layer on its unfused ops, `1` takes every entry, including those off by default; `None` takes the entries
-    /// on by default (larch-model's `FUSED`, on CUDA sm_120 only), where a gemm-replacing entry is on only once it
-    /// gives the unfused path's bytes or passes parity against it.
+    /// on by default (larch-model's `FUSED`, on CUDA sm_86, sm_89 and sm_120), where a gemm-replacing entry is on
+    /// only once it gives the unfused path's bytes or passes parity against it.
     pub fused: Option<bool>,
 }
 

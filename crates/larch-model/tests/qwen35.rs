@@ -325,7 +325,8 @@ fn same(a: &[Vec<f32>], b: &[Vec<f32>], what: &str) {
 /// The fused layer entries (larch.h ABI 4) give the unfused ops' logits bit for bit on both CPU devices: every
 /// arch's generated model over a prefill, decode steps and a step of two decode rows, all fused against none, and
 /// the MoE models again with their first layer's experts in host memory. Every entry refused
-/// ([`Transformer::refuse_fused`]) gives them too: the fallbacks a refusing backend (the CUDA H2 route) takes.
+/// ([`Transformer::refuse_fused`]) gives them too, and so does the mix sm_86/89's H2 route leaves
+/// ([`Transformer::refuse_h2_fused`]: gate_up and attn_in fused, the entries with an mmvq projection refused).
 #[test]
 fn fused_entries_give_the_unfused_logits() {
     let archs = [
@@ -347,11 +348,12 @@ fn fused_entries_give_the_unfused_logits() {
                 cpu_expert_layers: host,
                 ..Placement::default()
             };
-            let logits = |fused, refuse| {
+            let logits = |fused, refuse, h2| {
                 let s = Stream::new(&dev).unwrap();
                 let mut model = Transformer::load_placed(&path, &dev, &s, ROWS, place).unwrap();
                 model.set_fused(Some(fused));
                 model.refuse_fused(refuse);
+                model.refuse_h2_fused(h2);
                 let mut run = Run::on(s, model, &dev, 2);
                 let toks = tokens(6, 3);
                 let mut out = run.sequence(0, &toks[..3], 3);
@@ -362,12 +364,17 @@ fn fused_entries_give_the_unfused_logits() {
                 out
             };
             let what = format!("{arch:?} on {ordinal}, {host} host layers");
-            let unfused = logits(false, false);
-            same(&logits(true, false), &unfused, &what);
+            let unfused = logits(false, false, false);
+            same(&logits(true, false, false), &unfused, &what);
             same(
-                &logits(true, true),
+                &logits(true, true, false),
                 &unfused,
                 &format!("{what}, every entry refused"),
+            );
+            same(
+                &logits(true, false, true),
+                &unfused,
+                &format!("{what}, the H2 route's refusals"),
             );
         }
         std::fs::remove_file(path).unwrap();
