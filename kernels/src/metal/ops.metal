@@ -679,6 +679,74 @@ kernel void mmvq_mma(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
   }
 }
 
+// mmvq for Q3_K at 2-8 rows, Splash's register-tile arithmetic (runtime/metal/kernels/decode/linear_gguf_sgmatrix.metal)
+// on mmvq_mma's grid: a weight enters the MMA as its code alone (lo - 4 without its high bit, exact in half), each
+// 16-input scale group is one MMA chain of its own, and the fp32 epilogue adds d sc times the chain, so no weight is
+// multiplied by its scale. MMA (P, h) of a 64-wide step takes inputs 16 P + 8 h + j: A row fm is column fm's codes
+// there, B row j is x's at that input for rows fn, fn + 1. The 4 lanes of a column decode one group scale each
+// (piece fn / 2, as mmvq_mma's lane holds it) and share them by shuffle.
+kernel void vv_mmvq_mmc8_q3_k(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in bias [[buffer(2)]],
+                              device uchar* out [[buffer(3)]], constant mm_args& a [[buffer(4)]],
+                              uint tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]],
+                              ushort lane [[thread_index_in_simdgroup]]) {
+  constexpr int NT = MMVQ_MMA_NT;
+  threadgroup float red[MMVQ_MMA_SG * NT * 64];
+  const ushort fm = mma_fm(lane), fn = mma_fn(lane), sp = fn / 2;
+  const uint n0 = tg * 8 * NT;
+  bytes_in wr[NT];
+#pragma clang loop unroll(full)
+  for (int t = 0; t < NT; ++t) wr[t] = w + u64(min(n0 + 8 * t + fm, a.n - 1)) * a.b_rs;  // past n: ignored
+  device const half* x0 = (device const half*)(x + u64(min(uint(fn), a.m - 1)) * a.a_rs);
+  device const half* x1 = (device const half*)(x + u64(min(uint(fn + 1), a.m - 1)) * a.a_rs);
+  float2 c[NT];
+#pragma clang loop unroll(full)
+  for (int t = 0; t < NT; ++t) c[t] = 0.0f;
+  for (uint g = sg; g < a.k / 64; g += MMVQ_MMA_SG) {
+    half2 bx[8];
+#pragma clang loop unroll(full)
+    for (int q = 0; q < 8; ++q) {
+      const uint kk = 64 * g + 8 * q + fm;
+      bx[q] = half2(x0[kk], x1[kk]);
+    }
+    const int pb = 4 * int(g % 4);  // the step's first piece of its block
+#pragma clang loop unroll(full)
+    for (int t = 0; t < NT; ++t) {
+      bytes_in b = wr[t] + g / 4 * 110;
+      bytes_in sc = b + 96;
+      const int pi = pb + sp;
+      const int s6 = int((sc[pi % 8] >> (4 * (pi / 8)) & 0xF) | (sc[8 + pi % 4] >> (2 * (pi / 4)) & 3) << 4) - 32;
+      const float mine = h16(b + 108) * float(s6);
+#pragma clang loop unroll(full)
+      for (int P = 0; P < 4; ++P) {
+        const float scale = simd_shuffle(mine, ushort((lane & ~9u) | uint(P >> 1) << 3 | uint(P & 1)));
+        float2 chain = 0.0f;
+#pragma clang loop unroll(full)
+        for (int h = 0; h < 2; ++h) {
+          const int i = 16 * (pb + P) + 8 * h + fn, cc = i / 32, nn = cc / 4, u = cc % 4, l = i % 32;
+          const ushort q2 = *(device const ushort*)(b + 32 + 32 * nn + l), m2 = *(device const ushort*)(b + l);
+          const int v0 = int((q2 >> (2 * u)) & 3) - ((m2 >> (4 * nn + u)) & 1 ? 0 : 4);
+          const int v1 = int((q2 >> (8 + 2 * u)) & 3) - ((m2 >> (8 + 4 * nn + u)) & 1 ? 0 : 4);
+          mma_acc<half>(chain, half2(half(v0), half(v1)), bx[2 * P + h]);
+        }
+        c[t] += scale * chain;
+      }
+    }
+  }
+#pragma clang loop unroll(full)
+  for (int t = 0; t < NT; ++t)
+#pragma clang loop unroll(full)
+    for (int e = 0; e < 2; ++e) red[(sg * NT + t) * 64 + 2 * lane + e] = c[t][e];
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint i = sg * 32 + lane; i < NT * 64; i += MMVQ_MMA_SG * 32) {
+    float v = 0;
+#pragma clang loop unroll(full)
+    for (int s = 0; s < MMVQ_MMA_SG; ++s) v += red[s * NT * 64 + i];
+    const ushort l = i % 64 / 2;
+    const uint n = n0 + 8 * (i / 64 % NT) + mma_fm(l), r = mma_fn(l) + i % 2;
+    if (n < a.n && r < a.m) store_c(out, a, bias, r, n, v);
+  }
+}
+
 // mmvq_id: one simdgroup per column n of w's experts, for one (row, slot) pair or, weighted, for one row
 // over its slots in ascending order (the CPU reference's sum, in f32). Each lane decodes sub-blocks lane,
 // lane + 32, ... of the chosen expert's row, as mmvq's one-column kernel does.
