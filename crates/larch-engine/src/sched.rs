@@ -352,10 +352,12 @@ pub(crate) struct Req {
     // document's read does: `fit`); cut for it too if the agent bench shows other sessions
     // prefilling its history again.
     save_by: usize,
-    /// A kept hybrid turn that found no free state slot for its snapshot at `history_end`: it cuts
-    /// a chunk at `save_by` too, the last block boundary before its history end, and keeps the
-    /// state there as a checkpoint in host memory, which the next turn loads should no slot hold
-    /// the snapshot. Its snapshot then takes only a free slot, never another session's parked one.
+    /// A kept hybrid turn that started short of a free state slot for its snapshot at
+    /// `history_end`: it takes no snapshot (which would take another session's parked state and
+    /// KV) and cuts a chunk at `save_by` instead, the last block boundary before its history end,
+    /// keeping the state there as a checkpoint in host memory, as Splash keeps a turn's state at
+    /// the last whole page before its generation prompt. Its next turn loads it and reads at most
+    /// a block's tokens of history again; the turn itself runs one chunk cut, as with a snapshot.
     // ponytail: decided at the turn's start from the free slots then; decide at the snapshot if a
     // bench shows turns that started short of slots finding one free by their history end.
     cut_save: bool,
@@ -1762,12 +1764,7 @@ impl Scheduler {
             .map(|(id, _)| id)
             .collect();
         for id in due {
-            // One that saved a checkpoint by its history end takes no other session's slot.
-            let slot = if self.reqs[&id].cut_save && self.free_slots.is_empty() {
-                None
-            } else {
-                self.take_slot(&mut plan.n_reclaimed)
-            };
+            let slot = self.take_slot(&mut plan.n_reclaimed);
             let r = self.reqs.get_mut(&id).expect("request");
             match slot {
                 Some(slot) => {
@@ -2404,6 +2401,10 @@ impl Scheduler {
         r.save_at = save_at;
         r.save_by = save_by;
         r.cut_save = cut_save;
+        if cut_save {
+            // It parks the state at its turn's end: no snapshot, no chunk cut at the history end.
+            r.history_end = 0;
+        }
         r.pin_mark = marks;
         let session = r.session;
         if turn.is_some() {
@@ -2520,7 +2521,12 @@ impl Scheduler {
         // Alone, a request reads its images in whole chunks (fewer, larger steps); beside running
         // requests, a chunk ends where a tile does, so they wait for one tile (`image_chunk`).
         let len = (prompt.len() - reuse).min(budget).min(to_stop(
-            [save_at, cut_by, r.history_end, next_mark(marks, reuse)],
+            [
+                save_at,
+                cut_by,
+                if cut_save { 0 } else { r.history_end },
+                next_mark(marks, reuse),
+            ],
             reuse,
         ));
         let len = self.image_chunk(id, reuse, len);
@@ -3348,10 +3354,10 @@ mod tests {
         assert_eq!(ask(&mut s, 2), (48, 1), "the first repeat");
     }
 
-    /// A kept hybrid turn short of a free slot for its snapshot cuts a chunk at the last block
-    /// before its history end and checkpoints the state there, taking no other session's slot;
-    /// its next turn, whose history carries another answer, loads that checkpoint. With a slot
-    /// free it snapshots at the history end itself, where its chunk ends.
+    /// A kept hybrid turn short of a free slot for its snapshot cuts its chunk at the last block
+    /// before its history end, not at the history end, and checkpoints the state there, taking
+    /// no other session's slot; its next turn, whose history carries another answer, loads that
+    /// checkpoint. With a slot free it snapshots at the history end itself, where its chunk ends.
     #[test]
     fn a_kept_hybrid_turn_short_of_slots_checkpoints_by_its_history_end() {
         let limits = lim(Policy::DecodeFirst, 1, 512, 0.95);
