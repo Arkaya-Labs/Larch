@@ -235,6 +235,29 @@ __device__ __forceinline__ uint4 ld16(const uint8_t* p, bool a16) {
   return {lo.x, lo.y, hi.x, hi.y};
 }
 
+// 16 bytes at a 2-byte aligned p from the two aligned 16-byte words around it (one where p is aligned): two requests
+// in place of eight 2-byte loads, for a row read over the bus. Reads up to 14 bytes past p + 16, which the caller keeps
+// inside its block.
+__device__ __forceinline__ uint4 ld16_win(const uint8_t* p) {
+  const unsigned a = unsigned(uintptr_t(p)) & 15;
+  const uint4* q = reinterpret_cast<const uint4*>(p - a);
+  const uint4 lo = __ldg(q);
+  if (!a) return lo;
+  const uint4 hi = __ldg(q + 1);
+  const uint32_t v[8] = {lo.x, lo.y, lo.z, lo.w, hi.x, hi.y, hi.z, hi.w};
+  const unsigned wi = a / 4, sh = 8 * (a % 4);
+  uint32_t o[4];
+#pragma unroll
+  for (int i = 0; i < 4; ++i) {
+    uint32_t l = 0, h = 0;
+#pragma unroll
+    for (int j = 0; j < 4; ++j)  // v[wi + i] and the next: selects, not an indexed local array
+      if (unsigned(j) == wi) l = v[i + j], h = v[i + j + 1];
+    o[i] = __funnelshift_r(l, h, sh);
+  }
+  return {o[0], o[1], o[2], o[3]};
+}
+
 // Word i of a 16-byte load: a register pick, as every caller's i is constant once its loop unrolls.
 __device__ __forceinline__ uint32_t word(const uint4& v, int i) {
   return i == 0 ? v.x : i == 1 ? v.y : i == 2 ? v.z : v.w;
@@ -402,10 +425,25 @@ struct unit<LARCH_Q3_K> {
   // Scale i of run r: 8n + 4t + 2r + h.
   __device__ static int sc_i(int u, int r) { return u % 8 / 4 * 8 + u % 4 / 2 * 4 + 2 * r + u % 2; }
   __device__ static int k(int u) { return u / 8 * 256 + u % 8 / 4 * 128 + u % 4 / 2 * 64 + u % 2 * 16; }
-  __device__ void load(const uint8_t* row, int u, bool) {  // 110-byte blocks: only ever 2-byte aligned
+  // 110-byte blocks: only ever 2-byte aligned. wide (pair_dot's): each 16 bytes of hmask (bytes 0-31) and qs (32-95)
+  // by ld16_win, whose reads end by byte 109, inside the block; and, but in a row's last block (tail), the scales and d
+  // (96-109) by one ld16_win at byte 96, whose reads end inside the next block.
+  __device__ void load(const uint8_t* row, int u, bool, bool wide = false, bool tail = true) {
     const uint8_t* b = row + int64_t(u / 8) * 110;
-    q = ld16(b + 32 + 32 * (u % 8 / 4) + 16 * (u % 2), false);
-    hm = ld16(b + 16 * (u % 2), false);
+    q = wide ? ld16_win(b + 32 + 32 * (u % 8 / 4) + 16 * (u % 2)) : ld16(b + 32 + 32 * (u % 8 / 4) + 16 * (u % 2), false);
+    hm = wide ? ld16_win(b + 16 * (u % 2)) : ld16(b + 16 * (u % 2), false);
+    if (wide && !tail) {
+      const uint4 v = ld16_win(b + 96);
+      const auto byte = [&](int e) { return uint8_t(word(v, e / 4) >> 8 * (e % 4)); };
+#pragma unroll
+      for (int r = 0; r < 2; ++r) {
+        lo[r] = byte(sc_i(u, r) % 8);
+        hi[r] = byte(8 + sc_i(u, r) % 4);
+      }
+      const uint16_t bits = uint16_t(v.w);  // bytes 108-109
+      memcpy(&d, &bits, 2);
+      return;
+    }
 #pragma unroll
     for (int r = 0; r < 2; ++r) {
       lo[r] = b[96 + sc_i(u, r) % 8];
@@ -1072,13 +1110,11 @@ static void mmvq_launch(const stream& s, const view& w, const view& x, const vie
 
 constexpr int ID_THREADS = 128;  // mmvq_id_k's block: 4 warps of 32 (2 of 64)
 
-// mmvq_id_k's dot of expert row wr with x row xr: lane l takes pieces of 8 weights from 8 l on, warpSize pieces apart,
-// then the warp's sum, which every lane holds. The fused entries' kernels call it too, for mmvq_id's bytes, with U
-// pieces unrolled so their loads are in flight together (the sum's order is the same).
-template <int T, int U = 1>
+// mmvq_id_k's dot of expert row wr with x row xr where pair_dot has no decoder (Q2_K, HIP): lane l takes pieces of 8
+// weights from 8 l on, warpSize pieces apart, then the warp's sum, which every lane holds.
+template <int T>
 __device__ __forceinline__ float id_dot(const uint8_t* wr, bool w8, const __half* xr, int64_t k, int lane) {
   float acc = 0;
-#pragma unroll U
   for (int64_t c = 8 * int64_t(lane); c < k; c += 8 * int64_t(warpSize)) {
     float v[8];
     decode8<T>(wr, c, 8, w8, v);
@@ -1088,22 +1124,105 @@ __device__ __forceinline__ float id_dot(const uint8_t* wr, bool w8, const __half
   return vv_warp_reduce_sum(acc);
 }
 
-// mmvq_id: one warp per column of the chosen expert, for one (row, slot) pair (blockIdx.x) or, weighted, for one
-// row over its slots in ascending order (the CPU reference's sum, in f32). Lanes take pieces of 8 weights.
+// The dtypes with a fast<T> decoder, whose (row, slot) pairs take pair_dot on CUDA; the others (Q2_K) and HIP id_dot.
+template <int T>
+constexpr bool PAIR_DOT =
+#if defined(__HIP_PLATFORM_AMD__)
+    false;
+#else
+    T == LARCH_Q4_K || T == LARCH_Q5_K || T == LARCH_Q6_K || T == LARCH_Q3_K || T == LARCH_Q8_0 || T == LARCH_Q4_0 ||
+    T == LARCH_Q5_0;
+#endif
+
+// A (row, slot) pair's dot of expert row w with x row x by a group of G lanes (gl: the lane's place in it), on
+// mmvq_k's unit loads: lane gl sums units gl + G j in j order, the next unit's loads in flight while one decodes,
+// pieces in order, two FMAs a weight pair on fast<T>'s values (mmvq_col's), then the group's butterfly; every lane of
+// the group holds the result. w16: Q4_K's and Q5_K's rows are 16-byte aligned (the other formats' blocks never are);
+// x16: x's row is. BUS: w is read over the bus (a cold expert in place), where Q3_K's scales take one load a block too
+// (on the device that costs the hot decode about 7 %, fused_bench 28 Nov).
+template <int T, int G, bool BUS = false>
+__device__ __forceinline__ float pair_dot(const uint8_t* w, int units, bool w16, const __half* x, bool x16, int gl) {
+  const bool a16 = (T == LARCH_Q4_K || T == LARCH_Q5_K) && w16;
+  const auto load = [&](unit<T>& un, int u) {
+    if constexpr (T == LARCH_Q3_K)
+      un.load(w, u, false, true, !BUS || u / 8 == units / 8 - 1);  // ld16_win
+    else
+      un.load(w, u, a16);
+  };
+  float acc = 0;
+  unit<T> next;
+  if (gl < units) load(next, gl);
+  for (int u = gl; u < units; u += G) {
+    fast<T> f;
+    f.set(next, u);  // copies what it decodes, so next reloads below
+    if (u + G < units) load(next, u + G);
+#pragma unroll
+    for (int p = 0; p < unit<T>::P; ++p) {
+      float wv[8];
+      f.quad(p, 0, wv);
+      f.quad(p, 1, wv + 4);
+      const __half* xp = x + unit<T>::k(u) + 8 * (p & 1) + unit<T>::HI * (p >> 1);
+      const uint4 xv = ld16(reinterpret_cast<const uint8_t*>(xp), x16);
+#pragma unroll
+      for (int e = 0; e < 8; e += 2) {
+        const float2 xf = h2f(word(xv, e / 2));
+        acc = fmaf(wv[e + 1], xf.y, fmaf(wv[e], xf.x, acc));
+      }
+    }
+  }
+#pragma unroll
+  for (int o = G / 2; o > 0; o /= 2) acc += __shfl_xor_sync(0xffffffffu, acc, o);
+  return acc;
+}
+
+// mmvq_id's dot of one pair at dtype T: pair_dot (G lanes a column) where PAIR_DOT, else id_dot (a warp, G 32). al:
+// id_aligned's flag for the row's tensor.
+template <int T, int G, bool BUS = false>
+__device__ __forceinline__ float id_pair(const uint8_t* row, bool al, const __half* xr, bool x16, int64_t k, int lane) {
+  if constexpr (PAIR_DOT<T>)
+    return pair_dot<T, G, BUS>(row, int(k / (8 * unit<T>::P)), al, xr, x16, lane % G);
+  else
+    return id_dot<T>(row, al, xr, k, lane);
+}
+
+// Columns a warp of mmvq_id's kernels takes at T: warpSize / G on pair_dot, one on id_dot.
+template <int T, int G>
+__device__ __forceinline__ int id_cols() {
+  return PAIR_DOT<T> ? warpSize / G : 1;
+}
+
+// id_pair's al for rows at p, rb bytes apart: 16-byte rows for pair_dot, an 8-byte p for id_dot (Q4_K's and Q5_K's).
+template <int T>
+static bool id_aligned(const void* p, int64_t rb) {
+  return PAIR_DOT<T> ? (uintptr_t(p) | uint64_t(rb)) % 16 == 0 : uintptr_t(p) % 8 == 0;
+}
+
+// Lanes a column (G) for mmvq_id at T (cold experts TC) over k: 16 where both take pair_dot and a row has under 32
+// units (the hybrid MoE target's down, k 512: no lane idles), else 32. Measured on sm_120 (fused_bench, cold experts).
+// ponytail: measured on sm_120 only; re-measure on the 3050 and 4060.
+template <int T, int TC = T>
+static int id_group(const stream& s, int64_t k) {
+  return PAIR_DOT<T> && PAIR_DOT<TC> && s.warp == 32 && k / (8 * unit<T>::P) < 32 ? 16 : 32;
+}
+
+// mmvq_id: a group of G lanes (id_group) per column of the chosen expert, for one (row, slot) pair (blockIdx.x) or, weighted, for one
+// row over its slots in ascending order (the CPU reference's sum, in f32), each pair by id_pair.
 // From MOE_GROUPED_ROWS rows mmvq_id_grouped takes the call instead.
 // mmvq_id_mixed (table set): expert e's rows are slot table[e] of w (dtype T) when it is >= 0, else slot -1 - table[e]
-// of wc (dtype TC), each pair decoding only its own expert's rows, with id_dot's arithmetic at its dtype.
-// ponytail: each warp decodes its own expert row and there is no load pipelining; reuse mmvq_k's unit decoders when
-// decode or verify (below MOE_GROUPED_ROWS) shows mmvq_id_k in the hybrid MoE target's decode profile.
-template <int T, int TC = T>
-__global__ void mmvq_id_k(const uint8_t* w, int64_t w_rb, bool w8, const uint8_t* wc, int64_t wc_rb,
-                          const int32_t* table, const __half* x, int64_t x_ld, int64_t x_slot, const int32_t* ids,
-                          int64_t ids_ld, const float* bias, int64_t bias_ld, const float* wt, int64_t wt_ld,
-                          uint8_t* out, int64_t out_ld, int64_t out_slot, bool out32, int n, int64_t k, int slots,
-                          bool weighted) {
-  const int lane = int(threadIdx.x) % warpSize;
-  const int col = int(blockIdx.y) * (int(blockDim.x) / warpSize) + int(threadIdx.x) / warpSize;
-  if (col >= n) return;  // the whole warp
+// of wc (dtype TC), each pair decoding only its own expert's rows, with id_pair's arithmetic at its dtype (so a cold
+// expert at T gives mmvq_id's bytes, wherever its rows lie). w_al, wc_al: id_aligned's.
+template <int T, int TC, int G>
+__global__ void mmvq_id_k(const uint8_t* w, int64_t w_rb, bool w_al, const uint8_t* wc, int64_t wc_rb, bool wc_al,
+                          const int32_t* table, const __half* x, int64_t x_ld, int64_t x_slot, bool x16,
+                          const int32_t* ids, int64_t ids_ld, const float* bias, int64_t bias_ld, const float* wt,
+                          int64_t wt_ld, uint8_t* out, int64_t out_ld, int64_t out_slot, bool out32, int n, int64_t k,
+                          int slots, bool weighted) {
+  const int lane = int(threadIdx.x) % warpSize, per = id_cols<T, G>();
+  const int first_col = (int(blockIdx.y) * (int(blockDim.x) / warpSize) + int(threadIdx.x) / warpSize) * per;
+  if (first_col >= n) return;  // the whole warp
+  const int c = first_col + lane / (warpSize / per);
+  const bool live = c < n, head = live && lane % (warpSize / per) == 0;
+  const int col = live ? c : n - 1;  // past n: computed with the group's shuffles, not stored
   const int64_t r = weighted ? blockIdx.x : blockIdx.x / slots;
   const int first = weighted ? 0 : int(blockIdx.x % slots), last = weighted ? slots : first + 1;
   float sum = 0;
@@ -1112,19 +1231,19 @@ __global__ void mmvq_id_k(const uint8_t* w, int64_t w_rb, bool w8, const uint8_t
     const int64_t row = int64_t(e) * n + col;
     const __half* xr = x + r * x_ld + j * x_slot;
     const int32_t s = table ? table[e] : 0;
-    float y = !table  ? id_dot<T>(w + row * w_rb, w8, xr, k, lane)
-              : s >= 0 ? id_dot<T>(w + (int64_t(s) * n + col) * w_rb, w8, xr, k, lane)
-                       : id_dot<TC>(wc + ((-1 - int64_t(s)) * n + col) * wc_rb, false, xr, k, lane);
+    float y = !table  ? id_pair<T, G>(w + row * w_rb, w_al, xr, x16, k, lane)
+              : s >= 0 ? id_pair<T, G>(w + (int64_t(s) * n + col) * w_rb, w_al, xr, x16, k, lane)
+                       : id_pair<TC, G, true>(wc + ((-1 - int64_t(s)) * n + col) * wc_rb, wc_al, xr, x16, k, lane);
     if (bias) y += bias[row * bias_ld];
     if (weighted) {
       sum += wt[r * wt_ld + j] * y;
-    } else if (!lane) {
+    } else if (head) {
       uint8_t* o = out + (r * out_ld + j * out_slot) * (out32 ? 4 : 2);
       if (out32) reinterpret_cast<float*>(o)[col] = y;
       else reinterpret_cast<__half*>(o)[col] = __float2half(y);
     }
   }
-  if (weighted && !lane) {
+  if (weighted && head) {
     uint8_t* o = out + r * out_ld * (out32 ? 4 : 2);
     if (out32) reinterpret_cast<float*>(o)[col] = sum;
     else reinterpret_cast<__half*>(o)[col] = __float2half(sum);
@@ -1156,11 +1275,18 @@ static void mmvq_id_issue(const stream& s, const view& w, const view& wc, const 
       mmvq_id_grouped<T, TC>(s, w, wc, table, x, ids, b, wt, o))
     return;
 #endif
-  const dim3 grid(unsigned(pairs), unsigned((n + warps - 1) / warps));
-  launch(mmvq_id_k<T, TC>, grid, ID_THREADS, s.s, w.p, w.row_bytes, uintptr_t(w.p) % 8 == 0, wc.p, wc.row_bytes,
-         table.as<int32_t>(), x.as<__half>(), x.ld, x.ndim == 3 ? k : 0, ids.as<int32_t>(), ids.ld, b.as<float>(),
-         b.ld, wt.as<float>(), wt.ld, o.p, o.ld, weighted ? 0 : n, o.dtype == LARCH_F32, int(n), k, int(slots),
-         weighted);
+  const int G = id_group<T, TC>(s, k);
+  const int64_t cols = PAIR_DOT<T> ? warps * (s.warp / G) : warps, x_slot = x.ndim == 3 ? k : 0;
+  const bool x16 = (uintptr_t(x.p) | uint64_t(x.ld) * 2 | uint64_t(x_slot) * 2) % 16 == 0;
+  // A cold expert at T keeps id_aligned's rule; one at another dtype (Q2_K) takes id_dot's 2-byte loads.
+  const bool wc_al = TC == T ? id_aligned<TC>(wc.p, wc.row_bytes) : false;
+  const dim3 grid(unsigned(pairs), unsigned((n + cols - 1) / cols));
+  const auto go = [&](auto kernel) {
+    launch(kernel, grid, ID_THREADS, s.s, w.p, w.row_bytes, id_aligned<T>(w.p, w.row_bytes), wc.p, wc.row_bytes, wc_al,
+           table.as<int32_t>(), x.as<__half>(), x.ld, x_slot, x16, ids.as<int32_t>(), ids.ld, b.as<float>(), b.ld,
+           wt.as<float>(), wt.ld, o.p, o.ld, weighted ? 0 : n, o.dtype == LARCH_F32, int(n), k, int(slots), weighted);
+  };
+  G == 16 ? go(mmvq_id_k<T, TC, 16>) : go(mmvq_id_k<T, TC, 32>);
 }
 
 // The checked mmvq_id or mmvq_id_mixed call on s: a quant w, and for the second cold experts at w's dtype (a split
@@ -2323,25 +2449,24 @@ static int mmvq_row_split(const stream& s, const view& w, int sms) {
   return rows_k ? mmvq_split<T>(s, w, sms) : mmvq_split<T, R>(s, w, sms);
 }
 
-// Pieces a lane of the fused kernels' id_dot keeps in flight.
-constexpr int FUSED_UNROLL = 8;
-
-// larch_fused_moe_gate_up: mmvq_id_k's grid, a warp's column of gate and of up by id_dot, each rounded to f16 as
+// larch_fused_moe_gate_up: mmvq_id_k's grid, a group's column of gate and of up by id_pair, each rounded to f16 as
 // mmvq_id stores it, then silu_mul_k's expression on the two.
-template <int T>
-__global__ void moe_gate_up_k(const uint8_t* gw, bool g8, const uint8_t* uw, bool u8, int64_t w_rb, const __half* x,
-                              int64_t x_ld, int64_t x_slot, const int32_t* ids, int64_t ids_ld, __half* out,
-                              int64_t out_ld, int n, int64_t k, int slots) {
-  const int lane = int(threadIdx.x) % warpSize;
-  const int col = int(blockIdx.y) * (int(blockDim.x) / warpSize) + int(threadIdx.x) / warpSize;
-  if (col >= n) return;
+template <int T, int G>
+__global__ void moe_gate_up_k(const uint8_t* gw, bool g_al, const uint8_t* uw, bool u_al, int64_t w_rb,
+                              const __half* x, int64_t x_ld, int64_t x_slot, bool x16, const int32_t* ids,
+                              int64_t ids_ld, __half* out, int64_t out_ld, int n, int64_t k, int slots) {
+  const int lane = int(threadIdx.x) % warpSize, per = id_cols<T, G>();
+  const int first_col = (int(blockIdx.y) * (int(blockDim.x) / warpSize) + int(threadIdx.x) / warpSize) * per;
+  if (first_col >= n) return;
+  const int c = first_col + lane / (warpSize / per);
+  const int col = c < n ? c : n - 1;
   const int64_t r = blockIdx.x / slots;
   const int j = int(blockIdx.x % slots);
   const int64_t row = int64_t(ids[r * ids_ld + j]) * n + col;
   const __half* xr = x + r * x_ld + j * x_slot;
-  const float g = __half2float(__float2half(id_dot<T, FUSED_UNROLL>(gw + row * w_rb, g8, xr, k, lane)));
-  const float u = __half2float(__float2half(id_dot<T, FUSED_UNROLL>(uw + row * w_rb, u8, xr, k, lane)));
-  if (!lane) store(out + r * out_ld + j * int64_t(n) + col, g / (1.0f + expf(-g)) * u);
+  const float g = __half2float(__float2half(id_pair<T, G>(gw + row * w_rb, g_al, xr, x16, k, lane)));
+  const float u = __half2float(__float2half(id_pair<T, G>(uw + row * w_rb, u_al, xr, x16, k, lane)));
+  if (c < n && lane % (warpSize / per) == 0) store(out + r * out_ld + j * int64_t(n) + col, g / (1.0f + expf(-g)) * u);
 }
 
 
@@ -2357,13 +2482,21 @@ larch_status fused_moe_gate_up(larch_stream* vs, const larch_tensor* gate_w, con
     if (!x.rows) return;
     const int64_t slots = ids.cols, n = o.shape[2], k = gw.cols, warps = ID_THREADS / s.warp;
     if ((n + warps - 1) / warps > 65535) throw failure{LARCH_ERR_UNSUPPORTED, "more than 65535 blocks of columns"};
-    const dim3 grid(unsigned(x.rows * slots), unsigned((n + warps - 1) / warps));
+    const int64_t x_slot = x.ndim == 3 ? k : 0;
+    const bool x16 = (uintptr_t(x.p) | uint64_t(x.ld) * 2 | uint64_t(x_slot) * 2) % 16 == 0;
     with_dtype(gw.dtype, [&](auto t) {
       constexpr int T = decltype(t)::value;
-      if constexpr (T != LARCH_F16 && T != LARCH_F32)
-        launch(moe_gate_up_k<T>, grid, ID_THREADS, s.s, gw.p, uintptr_t(gw.p) % 8 == 0, uw.p,
-               uintptr_t(uw.p) % 8 == 0, gw.row_bytes, x.as<__half>(), x.ld, x.ndim == 3 ? k : 0, ids.as<int32_t>(),
-               ids.ld, o.as<__half>(), o.ld, int(n), k, int(slots));
+      if constexpr (T != LARCH_F16 && T != LARCH_F32) {
+        const int G = id_group<T>(s, k);
+        const int64_t cols = PAIR_DOT<T> ? warps * (s.warp / G) : warps;
+        const dim3 grid(unsigned(x.rows * slots), unsigned((n + cols - 1) / cols));
+        const auto go = [&](auto kernel) {
+          launch(kernel, grid, ID_THREADS, s.s, gw.p, id_aligned<T>(gw.p, gw.row_bytes), uw.p,
+                 id_aligned<T>(uw.p, uw.row_bytes), gw.row_bytes, x.as<__half>(), x.ld, x_slot, x16,
+                 ids.as<int32_t>(), ids.ld, o.as<__half>(), o.ld, int(n), k, int(slots));
+        };
+        G == 16 ? go(moe_gate_up_k<T, 16>) : go(moe_gate_up_k<T, 32>);
+      }
     });
   });
 }
@@ -2378,33 +2511,39 @@ struct shared_down {
   int64_t x_ld, gate_ld;
 };
 
-// larch_fused_moe_down: block (row r, warps of columns). A warp's column: the shared down by mmvq_col (TS, unless it
-// is F32: none), rounded to f16, times sigmoid_mul_k's sigmoid, rounded, onto x as add_k adds; then mmvq_id_k's
-// weighted sum by id_dot, rounded, onto x.
-template <int T, int TS>
-__global__ void moe_down_k(const uint8_t* w, bool w8, int64_t w_rb, const __half* act, int64_t act_ld,
-                           int64_t act_slot, const int32_t* ids, int64_t ids_ld, const float* wt, int64_t wt_ld,
-                           shared_down sh, float* x, int64_t x_ld, int n, int64_t k, int slots) {
-  const int lane = int(threadIdx.x) % warpSize;
-  const int col = int(blockIdx.y) * (int(blockDim.x) / warpSize) + int(threadIdx.x) / warpSize;
-  if (col >= n) return;
+// larch_fused_moe_down: block (row r, warps of columns). A group's column: the shared down by mmvq_col (TS, unless it
+// is F32: none; a warp's sum, so once for each of the warp's columns), rounded to f16, times sigmoid_mul_k's sigmoid,
+// rounded, onto x as add_k adds; then mmvq_id_k's weighted sum by id_pair, rounded, onto x.
+template <int T, int TS, int G>
+__global__ void moe_down_k(const uint8_t* w, bool w_al, int64_t w_rb, const __half* act, int64_t act_ld,
+                           int64_t act_slot, bool x16, const int32_t* ids, int64_t ids_ld, const float* wt,
+                           int64_t wt_ld, shared_down sh, float* x, int64_t x_ld, int n, int64_t k, int slots) {
+  const int lane = int(threadIdx.x) % warpSize, per = id_cols<T, G>();
+  const int first_col = (int(blockIdx.y) * (int(blockDim.x) / warpSize) + int(threadIdx.x) / warpSize) * per;
+  if (first_col >= n) return;
+  const int c = first_col + lane / (warpSize / per);
+  const int col = c < n ? c : n - 1;
   const int64_t r = blockIdx.x;
   float v = x[r * x_ld + col];
   if constexpr (TS != LARCH_F32) {
-    float y[FR];
-    mmvq_col<TS>(sh.w + col * sh.w_rb, sh.units, sh.splits, sh.w16, sh.x + r * sh.x_ld, 0, 1, sh.x16, lane, false, y);
-    const float t = __half2float(__float2half_rn(y[0]));
+    float t = 0;
+    for (int i = 0; i < per; ++i) {
+      const int ci = min(first_col + i, n - 1);
+      float y[FR];
+      mmvq_col<TS>(sh.w + ci * sh.w_rb, sh.units, sh.splits, sh.w16, sh.x + r * sh.x_ld, 0, 1, sh.x16, lane, false, y);
+      if (ci == col) t = __half2float(__float2half_rn(y[0]));
+    }
     const float z = __half2float(sh.gate[r * sh.gate_ld]);
     v = v + __half2float(__float2half_rn(t * (1.0f / (1.0f + expf(-z)))));
   }
   float sum = 0;
-#pragma unroll FUSED_UNROLL
+#pragma unroll 4
   for (int j = 0; j < slots; ++j) {
     const int64_t row = int64_t(ids[r * ids_ld + j]) * n + col;
-    const float y = id_dot<T, FUSED_UNROLL>(w + row * w_rb, w8, act + r * act_ld + j * act_slot, k, lane);
+    const float y = id_pair<T, G>(w + row * w_rb, w_al, act + r * act_ld + j * act_slot, x16, k, lane);
     sum += wt[r * wt_ld + j] * y;
   }
-  if (!lane) x[r * x_ld + col] = v + __half2float(__float2half(sum));
+  if (c < n && lane % (warpSize / per) == 0) x[r * x_ld + col] = v + __half2float(__float2half(sum));
 }
 
 larch_status fused_moe_down(larch_stream* vs, const larch_tensor* down_w, const larch_tensor* act_f16,
@@ -2422,25 +2561,30 @@ larch_status fused_moe_down(larch_stream* vs, const larch_tensor* down_w, const 
     if (sw.p && sw.cols > INT_MAX) throw failure{LARCH_ERR_UNSUPPORTED, "k past 2^31 - 1"};
     const int64_t slots = ids.cols, n = x.cols, k = w.cols, warps = ID_THREADS / s.warp;
     if ((n + warps - 1) / warps > 65535) throw failure{LARCH_ERR_UNSUPPORTED, "more than 65535 blocks of columns"};
-    const dim3 grid(unsigned(x.rows), unsigned((n + warps - 1) / warps));
     shared_down sh{sw.p, sw.row_bytes, 0, 0, uintptr_t(sw.p) % 16 == 0, (uintptr_t(sa.p) | uint64_t(sa.ld) * 2) % 16 == 0,
                    sa.as<__half>(), sg.as<__half>(), sa.ld, sg.ld};
-    const auto go = [&](auto kernel) {
-      launch(kernel, grid, ID_THREADS, s.s, w.p, uintptr_t(w.p) % 8 == 0, w.row_bytes, act.as<__half>(), act.ld,
-             act.ndim == 3 ? k : 0, ids.as<int32_t>(), ids.ld, wt.as<float>(), wt.ld, sh, x.as<float>(), x.ld, int(n),
-             k, int(slots));
-    };
+    const int64_t act_slot = act.ndim == 3 ? k : 0;
+    const bool x16 = (uintptr_t(act.p) | uint64_t(act.ld) * 2 | uint64_t(act_slot) * 2) % 16 == 0;
     with_dtype(w.dtype, [&](auto t) {
       constexpr int T = decltype(t)::value;
       if constexpr (T != LARCH_F16 && T != LARCH_F32) {
-        if (!sw.p) return go(moe_down_k<T, LARCH_F32>);
+        const int G = id_group<T>(s, k);
+        const int64_t cols = PAIR_DOT<T> ? warps * (s.warp / G) : warps;
+        const dim3 grid(unsigned(x.rows), unsigned((n + cols - 1) / cols));
+        const auto go = [&](auto kernel) {
+          launch(kernel, grid, ID_THREADS, s.s, w.p, id_aligned<T>(w.p, w.row_bytes), w.row_bytes, act.as<__half>(),
+                 act.ld, act_slot, x16, ids.as<int32_t>(), ids.ld, wt.as<float>(), wt.ld, sh, x.as<float>(), x.ld,
+                 int(n), k, int(slots));
+        };
+        const auto go_g = [&](auto k16, auto k32) { G == 16 ? go(k16) : go(k32); };
+        if (!sw.p) return go_g(moe_down_k<T, LARCH_F32, 16>, moe_down_k<T, LARCH_F32, 32>);
         with_dtype(sw.dtype, [&](auto ts) {
           constexpr int TS = decltype(ts)::value;
           if constexpr (TS != LARCH_F16 && TS != LARCH_F32) {
             with_rows(int(x.rows), [&](auto r) { sh.splits = mmvq_row_split<TS, decltype(r)::value>(s, sw, s.compute_units); });
             if (!sh.splits) throw failure{LARCH_ERR_UNSUPPORTED, "the shared down takes mmvq's H2 decoder"};
             sh.units = int(sw.cols / (8 * unit<TS>::P));
-            go(moe_down_k<T, TS>);
+            go_g(moe_down_k<T, TS, 16>, moe_down_k<T, TS, 32>);
           }
         });
       }
