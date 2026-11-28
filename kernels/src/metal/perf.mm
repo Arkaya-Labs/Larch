@@ -276,7 +276,7 @@ void wait_for(id<MTLCommandBuffer> command_buffer, const char* operation) {
 
 id<MTLComputePipelineState> metal_pipeline(id<MTLDevice> device, const std::string& name, bool nax = false) {
   static id<MTLLibrary> libraries[2] = {nil, nil};  // loaded once a device: st builds 45 pipelines from it
-  id<MTLLibrary>& library = libraries[nax];
+  __strong id<MTLLibrary>& library = libraries[nax];
   NSError* error = nil;
   if (library.device != device) {
     dispatch_data_t data = nax ? dispatch_data_create(larch_nax_metallib, larch_nax_metallib_len, nullptr, ^{})
