@@ -365,7 +365,7 @@ impl Draft {
             let logits = match &self.kind {
                 Kind::Dflash { d, caches, .. } => {
                     let (embed, head) = model.embed_and_head().expect("a model that embeds");
-                    d.propose(s, &caches[i], &embed, &head, 1, 2).unwrap();
+                    d.propose(s, &caches[i], &embed, &head, 1, &[], 2).unwrap();
                     d.last_logits(s, 2).unwrap()
                 }
                 Kind::Mtp { d, caches } => {
@@ -428,7 +428,8 @@ impl DraftStep<'_> {
                     return;
                 };
                 let n = max.min(d.block() as usize - 1) as u32;
-                d.propose(self.s, &caches[i], &embed, &head, anchor, n)
+                let before = &tokens[..tokens.len() - 1];
+                d.propose(self.s, &caches[i], &embed, &head, anchor, before, n)
             }
             Kind::Mtp { d, caches } => {
                 let Some(t) = self.model.transformer() else {
