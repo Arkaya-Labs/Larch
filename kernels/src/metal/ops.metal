@@ -765,6 +765,77 @@ kernel void mmvq_id1(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
   }
 }
 
+// Prototype for metal_perf repack-id only (no backend path yet): mmvq_id per (row, slot) pair on Q3_K experts that
+// perf.mm's repack_q3_k rearranged losslessly, on MLX's affine_gather_qmv_fast plan (qmv_fast_impl, mlx
+// quantized.h: 2 simdgroups, 4 rows of the expert each, 16 consecutive weights a lane, 512 of k a step).
+// A repacked row of nb blocks holds, at 16-byte-aligned stride a.w_rs: the 2-bit low parts of weights 4 m .. 4 m + 3
+// in byte m (nb x 64 bytes), then their high bits, 8 a byte (nb x 32), then each block's 12 scale bytes and its
+// fp16 d as GGUF has them. So a lane's 16 weights are one 4-byte and one 2-byte load, as in MLX's 3-bit packing,
+// and piece p's scale is sub-scale p of the block. Weighted, one row over its slots in ascending order.
+kernel void vv_mmvq_id_rq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in ids [[buffer(2)]],
+                           bytes_in bias [[buffer(3)]], bytes_in wt [[buffer(4)]], device uchar* out [[buffer(5)]],
+                           constant id_args& a [[buffer(6)]], uint2 tg [[threadgroup_position_in_grid]],
+                           ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+  constexpr short RS = 4;
+  const uint n0 = (tg.x * 2 + sg) * RS;
+  if (n0 >= a.n) return;  // the whole simdgroup
+  const uint r = a.weighted ? tg.y : tg.y / a.slots, first = a.weighted ? 0 : tg.y % a.slots;
+  const uint last = a.weighted ? a.slots : first + 1, nb = a.k / 256;
+  float acc[RS] = {};
+  for (uint j = first; j < last; ++j) {
+    const uint e = uint(at<int>(ids + r * a.ids_rs, 4, j));
+    bytes_in we = w + u64(e) * a.n * a.w_rs;
+    device const half* xr = (device const half*)(x + r * a.x_rs + j * a.x_slot_rs);
+    bytes_in wr[RS];
+#pragma clang loop unroll(full)
+    for (short c = 0; c < RS; ++c) wr[c] = we + u64(min(n0 + c, a.n - 1)) * a.w_rs;  // a ragged tail recomputes n - 1
+    float sum[RS] = {};
+    for (uint k0 = 16 * lane; k0 < a.k; k0 += 512) {
+      float xv[16];
+#pragma clang loop unroll(full)
+      for (short i = 0; i < 4; ++i) {  // packed: larch.h promises x 2-byte alignment only
+        const float4 u = float4(half4(((device const packed_half4*)(xr + k0))[i]));
+#pragma clang loop unroll(full)
+        for (short l = 0; l < 4; ++l) xv[4 * i + l] = u[l];
+      }
+      const uint blk = k0 / 256, p = k0 % 256 / 16;
+#pragma clang loop unroll(full)
+      for (short c = 0; c < RS; ++c) {
+        const uint lo = *(device const uint*)(wr[c] + blk * 64 + 4 * p);
+        const uint hi = *(device const ushort*)(wr[c] + nb * 64 + blk * 32 + 2 * p);
+        bytes_in sc = wr[c] + nb * 96 + blk * 12;
+        const int s = int((p < 8 ? sc[p] & 0xF : sc[p - 8] >> 4) | (sc[8 + p % 4] >> (2 * (p / 4)) & 3) << 4) - 32;
+        float t = 0;
+#pragma clang loop unroll(full)
+        for (short l = 0; l < 16; ++l) t += xv[l] * float(int((lo >> (2 * l)) & 3) - ((hi >> l) & 1 ? 0 : 4));
+        sum[c] += h16(wr[c] + nb * 108 + blk * 2) * float(s) * t;
+      }
+    }
+#pragma clang loop unroll(full)
+    for (short c = 0; c < RS; ++c) {
+      const uint n = min(n0 + c, a.n - 1);
+      float v = simd_sum(sum[c]);
+      if (a.has_bias) v += at<float>(bias, a.bias_rs, e * a.n + n);
+      if (a.weighted) {
+        acc[c] += at<float>(wt + r * a.wt_rs, 4, j) * v;
+      } else if (!lane && n0 + c < a.n) {
+        device uchar* o = out + r * a.out_rs + j * a.out_slot_rs;
+        if (a.out_f32)
+          ((device float*)o)[n] = v;
+        else
+          ((device half*)o)[n] = half(v);
+      }
+    }
+  }
+  for (short c = 0; a.weighted && !lane && c < RS && n0 + c < a.n; ++c) {
+    device uchar* o = out + r * a.out_rs;
+    if (a.out_f32)
+      ((device float*)o)[n0 + c] = acc[c];
+    else
+      ((device half*)o)[n0 + c] = half(acc[c]);
+  }
+}
+
 // mmvq_id1 for experts under 4 blocks wide (k < 1024: MoE down projections of 512 and 768),
 // where mmvq1's lane groups, which each walk every 4th block (every 2nd for Q6_K), leave groups idle (half of
 // them at k = 512). Here a simdgroup owns MMVQ1N_C columns and lane group g takes the (column, block) units
