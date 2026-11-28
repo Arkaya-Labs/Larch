@@ -12,6 +12,7 @@
 #include "mlx/backend/metal/kernels/steel/attn/kernels/steel_attention_nax.h"
 
 #include "args.h"
+#include "nq3.h"
 
 instantiate_kernel("vv_attn_full_nax64", attention_nax, half, 64, 32, 64, 64, 4, 1, float, float)
 
@@ -351,7 +352,7 @@ template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_n
 //   P = 2 f + e / 2. Pair P < 15 is at bits 3 (P % 5) and 16 + 3 (P % 5) of word P / 5, so (word >> s) & 0x00070007
 //   or 0x64006400 is the pair as half2 1024 + code. Pair 15's three bits are bit 15 (e = 2) and 31 (e = 3) of the
 //   three words, bit b of the code in word b. k 3 / 8 bytes.
-// - one int8 scale sc - 32 a group (k / 16), then each block's fp16 d (k / 256 x 2).
+// - Q3_K's 12 scale bytes a block (nq3.h), then each block's fp16 d (k / 256 x 2): as many bytes as Q3_K.
 // Simdgroup s takes blocks s, s + WK, ...; the host sends k a multiple of 256 and x rows 8-byte aligned. Out f32.
 [[kernel, max_total_threads_per_threadgroup(MMVQ_NAX_WK * 32)]] void vv_mmvq_nax_nq3(
     const device uchar* w [[buffer(0)]], const device uchar* x [[buffer(1)]], device uchar* out [[buffer(2)]],
@@ -364,7 +365,7 @@ template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_n
   const short2 coord = Frag::get_coord();
   const uint fm = uint(coord.y), fn = uint(coord.x), j = fn / 4;
   const uint m = a.m, n = a.n, blocks = a.k / 256, col0 = tid.x * 32;
-  const uint code_bytes = a.k * 3 / 8, d_at = code_bytes + a.k / 16;
+  const uint code_bytes = a.k * 3 / 8, d_at = code_bytes + a.k / 256 * 12;
   const device uchar* rows[2][2];
   STEEL_PRAGMA_UNROLL
   for (short t = 0; t < 2; t++) {
@@ -395,7 +396,7 @@ template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_n
           cw[t][r][0] = c[0];
           cw[t][r][1] = c[1];
           cw[t][r][2] = c[2];
-          sc[t][r] = *(const device uint2*)(rows[t][r] + code_bytes + u * 8);
+          sc[t][r] = nq3_scales(rows[t][r] + code_bytes + u / 2 * 12, u % 2);
         }
       }
       STEEL_PRAGMA_UNROLL
@@ -410,7 +411,7 @@ template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_n
         for (short t = 0; t < 2; t++) {
           STEEL_PRAGMA_UNROLL
           for (short r = 0; r < 2; r++) {
-            const half s = half(as_type<char4>(f < 4 ? sc[t][r].x : sc[t][r].y)[f % 4]);
+            const half s = half(float(as_type<uchar4>(f < 4 ? sc[t][r].x : sc[t][r].y)[f % 4]) - 32.0f);
             STEEL_PRAGMA_UNROLL
             for (short p = 0; p < 2; p++) {
               const short P = 2 * f + p;

@@ -786,7 +786,7 @@ void run_repack_id(const arguments& parsed) {
   const uint64_t iterations = bounded(parsed, "--iterations", 1, kMaxIterations);
   if (k % 512) fail("--k must be a multiple of 512");
   const uint64_t nb = k / 256, pairs = rows * slots;
-  const uint64_t rs = nq3 ? (k * 3 / 8 + k / 16 + nb * 2 + 15) / 16 * 16 : (nb * 110 + 15) / 16 * 16;
+  const uint64_t rs = (nb * 110 + 15) / 16 * 16;  // nq3 rows are Q3_K's size
   rng g(41);
   const bytes w = quant(LARCH_Q3_K, int64_t(experts * n), int64_t(k), g);
   const bytes wr = nq3 ? repack_nq3(w, experts * n, nb, rs) : repack_q3_k(w, experts * n, nb, rs);
@@ -977,17 +977,18 @@ bytes repack_aq3(const bytes& w, uint64_t rows, uint64_t nb, uint64_t rs) {
   return out;
 }
 
-// Q3_K rows of nb blocks in vv_mmvq_nax_nq3's layout (attn_full_nax.metal): the same int8 scales and fp16 d as
-// repack_aq3, codes q + 4 in per-lane words. Input 128 u + 16 f + 4 j + e of a row is code 4 f + e of item j of
+// Q3_K rows of nb blocks in vv_mmvq_nax_nq3's layout (attn_full_nax.metal): codes q + 4 in per-lane words, then each
+// block's 12 scale bytes, then each block's fp16 d; as many bytes as the Q3_K blocks. Input 128 u + 16 f + 4 j + e of a row is code 4 f + e of item j of
 // unit u, pair P = 2 f + e / 2.
 bytes repack_nq3(const bytes& w, uint64_t rows, uint64_t nb, uint64_t rs) {
-  bytes out = repack_aq3(w, rows, nb, rs);
+  bytes out(size_t(rows * rs), 0);
   const uint64_t k = nb * 256, code_bytes = k * 3 / 8;
   for (uint64_t r = 0; r < rows; ++r) {
     uint8_t* o = out.data() + r * rs;
-    std::memset(o, 0, code_bytes);
     for (uint64_t b = 0; b < nb; ++b) {
       const uint8_t* q = w.data() + (r * nb + b) * 110;
+      std::memcpy(o + code_bytes + b * 12, q + 96, 12);  // nq3.h: Q3_K's scale bytes as they are
+      std::memcpy(o + code_bytes + nb * 12 + b * 2, q + 108, 2);
       for (int i = 0; i < 256; ++i) {
         const int c = i / 32, n = c / 4, u = c % 4, l = i % 32;
         const uint32_t code = uint32_t(((q[32 + 32 * n + l] >> (2 * u)) & 3) | ((q[l] >> (4 * n + u)) & 1) << 2);
@@ -1041,7 +1042,8 @@ void run_affine_q3(const arguments& parsed) {
   if (k % 512) fail("--k must be a multiple of 512");
   if (nax && !nax1 && rows > 16) fail("--layout nax takes at most 16 rows");
   const uint64_t nb = k / 256, code_bytes = k * 3 / 8, groups = k / 16;
-  const uint64_t rs = (code_bytes + groups + nb * 2 + 15) / 16 * 16;
+  const uint64_t row_bytes = nax ? code_bytes + nb * 14 : code_bytes + groups + nb * 2;
+  const uint64_t rs = (row_bytes + 15) / 16 * 16;
   rng g(43);
   const bytes w = quant(LARCH_Q3_K, int64_t(n), int64_t(k), g);
   const bytes wr = nax ? repack_nq3(w, n, nb, rs) : repack_aq3(w, n, nb, rs);
@@ -1052,12 +1054,20 @@ void run_affine_q3(const arguments& parsed) {
       float ref[256];
       q3_k_block_ref(w.data() + (r * nb + b) * 110, ref);
       uint16_t dh;
-      std::memcpy(&dh, o + code_bytes + groups + b * 2, 2);
+      std::memcpy(&dh, o + (nax ? code_bytes + nb * 12 : code_bytes + groups) + b * 2, 2);
       for (int i = 0; i < 256; ++i) {
         const uint64_t e = b * 256 + i, bit = 3 * e;
         const uint32_t word = uint32_t(o[bit / 8]) | (bit / 8 + 1 < code_bytes ? uint32_t(o[bit / 8 + 1]) << 8 : 0);
         const int code = nax ? nq3_code(o, e) : int(word >> (bit % 8) & 7);
-        const float s = half_to_float(dh) * float(int8_t(o[code_bytes + e / 16]));
+        int sc;
+        if (nax) {  // nq3.h's read of block b's scale bytes
+          const uint8_t* sb = o + code_bytes + b * 12;
+          const int si = i / 16;
+          sc = ((si < 8 ? sb[si] & 0xF : sb[si - 8] >> 4) | ((sb[8 + si % 4] >> (2 * (si / 4))) & 3) << 4) - 32;
+        } else {
+          sc = int8_t(o[code_bytes + e / 16]);
+        }
+        const float s = half_to_float(dh) * float(sc);
         const float mine = s * float(code - 4);
         if (std::memcmp(&mine, &ref[i], 4)) ++mismatched;
       }
@@ -1141,7 +1151,7 @@ void run_affine_q3(const arguments& parsed) {
               nax1 ? "nax1" : nax ? "nax" : "affine", static_cast<unsigned long long>(rows), static_cast<unsigned long long>(n),
               static_cast<unsigned long long>(k), static_cast<unsigned long long>(iterations),
               double(ref_ns) / 1e3 / double(iterations), aq_ns / 1e3 / double(iterations), 110.0 * 8 / 256,
-              double(code_bytes + groups + nb * 2) * 8 / double(k), static_cast<unsigned long long>(mismatched), rel,
+              double(row_bytes) * 8 / double(k), static_cast<unsigned long long>(mismatched), rel,
               !mismatched && rel <= 1e-3 ? "pass" : "FAIL");
   if (mismatched) fail("affine-q3 weights differ from ggml's Q3_K values");
   if (rel > 1e-3) fail("vv_mmvq_aq3 differs from larch_mmvq by more than 1e-3 of the output's peak");

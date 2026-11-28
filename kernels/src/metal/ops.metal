@@ -6,6 +6,7 @@
 #include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
 
 #include "args.h"
+#include "nq3.h"
 
 using namespace metal;
 using namespace mpp::tensor_ops;
@@ -849,7 +850,7 @@ kernel void vv_mmvq_id_rq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], b
 
 // Prototype for metal_perf affine-q3 --layout nax1 only (no backend path): one row of x on attn_full_nax.metal's
 // vv_mmvq_nax_nq3 layout, on MLX's qmv_fast plan (2 simdgroups of 4 columns, x loaded once for the 4). A step is
-// 1024 inputs: lane l takes item j = l % 4 of unit u = l / 4, its three code words, the unit's 8 int8 scales and its
+// 1024 inputs: lane l takes item j = l % 4 of unit u = l / 4, its three code words, the unit's 8 scales (nq3.h) and its
 // block's d; its inputs are 16 f + 4 j + e of the unit. A pair of weights is one shift, one mask and one or into
 // half2 1024 + code, minus 1028: code - 4, exact. Each group's f32 dot takes its scale, each unit's sum its d.
 // Grid (rows, ceil(n / 8)), out f32; the host sends k a multiple of 512 and x rows 8-byte aligned.
@@ -859,7 +860,7 @@ kernel void vv_mmvq1_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], dev
   constexpr short RS = 4;
   const uint n0 = (tg.y * 2 + sg) * RS;
   if (n0 >= a.n) return;  // the whole simdgroup
-  const uint units = a.k / 128, code_bytes = a.k * 3 / 8, d_at = code_bytes + a.k / 16, j = lane % 4;
+  const uint units = a.k / 128, code_bytes = a.k * 3 / 8, d_at = code_bytes + a.k / 256 * 12, j = lane % 4;
   bytes_in wr[RS];
   for (short i = 0; i < RS; ++i) wr[i] = w + u64(min(n0 + i, a.n - 1)) * a.b_rs;
   float res[RS] = {};
@@ -872,7 +873,7 @@ kernel void vv_mmvq1_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], dev
     for (short r = 0; r < RS; ++r) {
       device const uint* c = (device const uint*)(wr[r] + (u * 4 + j) * 12);
       const uint cw[3] = {c[0], c[1], c[2]};
-      const uint2 sc = *(device const uint2*)(wr[r] + code_bytes + u * 8);
+      const uint2 sc = nq3_scales(wr[r] + code_bytes + u / 2 * 12, u % 2);
       float unit = 0.0f;
 #pragma unroll
       for (short f = 0; f < 8; ++f) {
@@ -886,7 +887,7 @@ kernel void vv_mmvq1_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], dev
           g = fma(q.x, xs[f][2 * p], g);
           g = fma(q.y, xs[f][2 * p + 1], g);
         }
-        unit = fma(float(as_type<char4>(f < 4 ? sc.x : sc.y)[f % 4]), g, unit);
+        unit = fma(float(as_type<uchar4>(f < 4 ? sc.x : sc.y)[f % 4]) - 32.0f, g, unit);
       }
       res[r] = fma(float(*(device const half*)(wr[r] + d_at + u / 2 * 2)), unit, res[r]);
     }
@@ -912,7 +913,7 @@ kernel void mmvq_id_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], byte
   if (n0 >= a.n) return;  // the whole simdgroup
   const uint r = a.weighted ? tg.y : tg.y / a.slots, first = a.weighted ? 0 : tg.y % a.slots;
   const uint last = a.weighted ? a.slots : first + 1;
-  const uint units = a.k / 128, code_bytes = a.k * 3 / 8, d_at = code_bytes + a.k / 16;
+  const uint units = a.k / 128, code_bytes = a.k * 3 / 8, d_at = code_bytes + a.k / 256 * 12;
   const uint j = (lane % LPU) / (8 / FH), f0 = FH == 8 ? 0 : 4 * (lane % 2);
   float acc[RS] = {};
   for (uint s = first; s < last; ++s) {
@@ -932,8 +933,8 @@ kernel void mmvq_id_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], byte
       for (short c = 0; c < RS; ++c) {
         device const uint* cp = (device const uint*)(wr[c] + (u * 4 + j) * 12);
         const uint cw[3] = {cp[0], cp[1], cp[2]};
-        const uint sc = *(device const uint*)(wr[c] + code_bytes + u * 8 + f0);
-        const uint sc1 = FH == 8 ? *(device const uint*)(wr[c] + code_bytes + u * 8 + 4) : 0u;
+        const uint2 ss = nq3_scales(wr[c] + code_bytes + u / 2 * 12, u % 2);
+        const uint sc = f0 ? ss.y : ss.x, sc1 = ss.y;
         float unit = 0.0f;
 #pragma clang loop unroll(full)
         for (short f = 0; f < FH; ++f) {
@@ -948,7 +949,7 @@ kernel void mmvq_id_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], byte
             g = fma(q.x, xs[f][2 * p], g);
             g = fma(q.y, xs[f][2 * p + 1], g);
           }
-          unit = fma(float(as_type<char4>(f < 4 ? sc : sc1)[f % 4]), g, unit);
+          unit = fma(float(as_type<uchar4>(f < 4 ? sc : sc1)[f % 4]) - 32.0f, g, unit);
         }
         sum[c] = fma(h16(wr[c] + d_at + u / 2 * 2), unit, sum[c]);
       }
