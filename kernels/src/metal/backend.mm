@@ -35,7 +35,6 @@ struct kernels {
   id<MTLComputePipelineState> embed[LARCH_Q3_K + 1], dequant[LARCH_Q3_K + 1], mmvq[LARCH_Q3_K + 1];
   id<MTLComputePipelineState> mmvq_mm[2][LARCH_Q3_K + 1];  // up to 8 and up to 16 rows
   id<MTLComputePipelineState> mmvq_ext[2][LARCH_Q3_K + 1];  // up to 4 and up to 8 rows
-  id<MTLComputePipelineState> mmvq_mmc8_q3_k;  // Q3_K at 2-8 rows under LARCH_METAL_MMVQ_MMC
   id<MTLComputePipelineState> mmvq1[LARCH_Q3_K + 1];        // 1 row: Q3_K, Q4_K, Q5_K and Q6_K, nil for the others
   id<MTLComputePipelineState> mmvq_mma[2][LARCH_Q3_K + 1];  // up to 8 and up to 16 rows: the K-quants
   // mmvq_verify's staged tile at 8, 16 and 32 rows (vv_mmvq_st, staged.metal): Q3_K to Q8_0 on Apple GPU family 10,
@@ -81,15 +80,13 @@ struct kernels {
 //   at a time on simdgroup matrices (MLX's chunked delta rule); 0 keeps vv_gdn's row-by-row walk, for A/B timing.
 // LARCH_METAL_MOE_NARROW (default 1): mmvq_id at decode and check row counts on experts under 1024 wide takes
 //   vv_mmvq_id1n, which keeps all 32 lanes busy; 0 keeps vv_mmvq_id1, for A/B timing.
-// LARCH_METAL_MMVQ_MMC (default 0): Q3_K mmvq at 2-8 rows takes vv_mmvq_mmc8_q3_k (codes into the MMA, each group's
-//   scale after its chain, as Splash's register tile) instead of vv_mmvq_mma8_q3_k; for A/B timing.
 // LARCH_METAL_ATTN_NAX (default 1): flash prefill at head_dim 64, 128 or 256 takes vv_attn_paged_nax (MLX's NAX
 //   attention over the paged pool, macOS 26.2 and the tensor API); 0 keeps vv_attn_flash, for A/B timing.
 // LARCH_METAL_ATTN_NAX_HM (default 0): 1 launches vv_attn_paged_nax with the q head as grid x (the _hm kernels),
 //   for A/B timing at long contexts.
 struct feed {
   bool concurrent = true, commit = true, profile = false, simd_kernels = true, moe_prefetch = true, gdn_wide = true,
-       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false, mmvq_mmc = false;
+       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false;
 };
 static constexpr uint32_t first_commit = 32, commit_every = 128;
 struct mtl_device : larch_device {
@@ -170,8 +167,7 @@ static larch_status read_feed(feed* f) {
                                  std::pair{"LARCH_METAL_MOE_NARROW", &f->moe_narrow},
                                  std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk},
                                  std::pair{"LARCH_METAL_ATTN_NAX", &f->attn_nax},
-                                 std::pair{"LARCH_METAL_ATTN_NAX_HM", &f->attn_nax_hm},
-                                 std::pair{"LARCH_METAL_MMVQ_MMC", &f->mmvq_mmc}}) {
+                                 std::pair{"LARCH_METAL_ATTN_NAX_HM", &f->attn_nax_hm}}) {
     const char* c = std::getenv(name);
     if (c && std::strcmp(c, "0") && std::strcmp(c, "1"))
       return vv_fail(LARCH_ERR_INVALID_ARG, std::string(name) + " must be 0 or 1");
@@ -414,7 +410,6 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
       k.mmvq_id_grouped[t] = pipe(std::string("vv_mmvq_id_grouped_") + dtype_name[t], 128);
       if (t == LARCH_Q3_K || t == LARCH_Q4_K || t == LARCH_Q5_K || t == LARCH_Q6_K) {
         k.mmvq1[t] = pipe(std::string("vv_mmvq1_") + dtype_name[t], 32 * MMVQ1_SG);
-        if (t == LARCH_Q3_K) k.mmvq_mmc8_q3_k = pipe("vv_mmvq_mmc8_q3_k", 32 * MMVQ_MMA_SG);
         k.mmvq_id1[t] = pipe(std::string("vv_mmvq_id1_") + dtype_name[t], 32 * MMVQ1_SG);
         if (fed.moe_narrow) k.mmvq_id1n[t] = opt(std::string("vv_mmvq_id1n_") + dtype_name[t], 32 * MMVQ1_SG);
       }
@@ -1150,12 +1145,6 @@ void mmvq_rows(larch_stream* vs, const view& w, const view& x, const view& b, co
   // (M5, 10 Oct: 8 rows of 14336 x 4096 Q4_K 473 to 318 us, llama.cpp 319). At 2 rows the shared-x kernel won
   // for Q4_K, Q5_K and Q6_K (Q5_K 12288 x 2048: 140 vs 168 us), but on Q3_K it took 361 us to the MMA kernel's 138
   // (M5, 27 Nov; 8 rows 467 to 139).
-  if (w.dtype == LARCH_Q3_K && x.rows >= 2 && x.rows <= 8 && stream->dev->fed.mmvq_mmc && ks(vs).mmvq_mmc8_q3_k) {
-    const int64_t cols = 8 * MMVQ_MMA_NT;
-    groups(stream, ks(vs).mmvq_mmc8_q3_k, {input(w), input(x), input_or(b, at(w)), at(o)}, a, (w.rows + cols - 1) / cols,
-           32 * MMVQ_MMA_SG);
-    return;
-  }
   if (x.rows >= (w.dtype == LARCH_Q3_K ? 2 : 3) && ks(vs).mmvq_mma[x.rows > 8][w.dtype]) {
     const int64_t cols = 8 * MMVQ_MMA_NT;
     groups(stream, ks(vs).mmvq_mma[x.rows > 8][w.dtype], {input(w), input(x), input_or(b, at(w)), at(o)}, a,
