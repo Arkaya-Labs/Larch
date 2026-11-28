@@ -82,14 +82,15 @@ struct kernels {
 // LARCH_METAL_MOE_NARROW (default 1): mmvq_id at decode and check row counts on experts under 1024 wide takes
 //   vv_mmvq_id1n, which keeps all 32 lanes busy; 0 keeps vv_mmvq_id1, for A/B timing.
 // LARCH_METAL_MMVQ_NAX (default 0): Q3_K mmvq at 2-16 rows takes vv_mmvq_nax_q3_k (MLX's affine_qmv_nax on NAX
-//   fragments, macOS 26.2 and the tensor API) instead of the MMA tile; for A/B timing.
+//   fragments, macOS 26.2 and the tensor API) instead of the MMA tile; for A/B timing. With it,
+//   LARCH_METAL_MMVQ_NAX_RAW=1 skips the decode (wrong output, timing only).
 // LARCH_METAL_ATTN_NAX (default 1): flash prefill at head_dim 64, 128 or 256 takes vv_attn_paged_nax (MLX's NAX
 //   attention over the paged pool, macOS 26.2 and the tensor API); 0 keeps vv_attn_flash, for A/B timing.
 // LARCH_METAL_ATTN_NAX_HM (default 0): 1 launches vv_attn_paged_nax with the q head as grid x (the _hm kernels),
 //   for A/B timing at long contexts.
 struct feed {
   bool concurrent = true, commit = true, profile = false, simd_kernels = true, moe_prefetch = true, gdn_wide = true,
-       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false, mmvq_nax = false;
+       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false, mmvq_nax = false, mmvq_nax_raw = false;
 };
 static constexpr uint32_t first_commit = 32, commit_every = 128;
 struct mtl_device : larch_device {
@@ -171,7 +172,8 @@ static larch_status read_feed(feed* f) {
                                  std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk},
                                  std::pair{"LARCH_METAL_ATTN_NAX", &f->attn_nax},
                                  std::pair{"LARCH_METAL_ATTN_NAX_HM", &f->attn_nax_hm},
-                                 std::pair{"LARCH_METAL_MMVQ_NAX", &f->mmvq_nax}}) {
+                                 std::pair{"LARCH_METAL_MMVQ_NAX", &f->mmvq_nax},
+                                 std::pair{"LARCH_METAL_MMVQ_NAX_RAW", &f->mmvq_nax_raw}}) {
     const char* c = std::getenv(name);
     if (c && std::strcmp(c, "0") && std::strcmp(c, "1"))
       return vv_fail(LARCH_ERR_INVALID_ARG, std::string(name) + " must be 0 or 1");
@@ -489,7 +491,7 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
         for (int wide = 0; wide < 3 && fed.attn_nax; ++wide)  // 4, 4 and 2 x 4 simdgroups (attn_full_nax.metal)
           k.attn_paged_nax[wide] = opt("vv_attn_paged_nax" + std::to_string(64 << wide) + (fed.attn_nax_hm ? "_hm" : ""),
                                        wide == 2 ? 256 : 128);
-        if (fed.mmvq_nax) k.mmvq_nax_q3_k = opt("vv_mmvq_nax_q3_k", 256);
+        if (fed.mmvq_nax) k.mmvq_nax_q3_k = opt(fed.mmvq_nax_raw ? "vv_mmvq_nax_raw_q3_k" : "vv_mmvq_nax_q3_k", 256);
         from = lib;
       }
     }

@@ -218,7 +218,10 @@ static inline uint nax_u32_at(const device uchar* p) {  // 4 bytes at a 2-byte a
   return uint(h[0]) | uint(h[1]) << 16;
 }
 
-[[kernel, max_total_threads_per_threadgroup(MMVQ_NAX_WK * 32)]] void vv_mmvq_nax_q3_k(
+// RAW (timing only, wrong output): B is the quant words reinterpreted as halves, no decode, to split the decode's
+// cost from the loads' and the matmuls'.
+template <bool RAW>
+[[kernel, max_total_threads_per_threadgroup(MMVQ_NAX_WK * 32)]] void mmvq_nax_q3_k(
     const device uchar* w [[buffer(0)]], const device uchar* x [[buffer(1)]], const device uchar* bias [[buffer(2)]],
     device uchar* out [[buffer(3)]], constant mm_args& a [[buffer(4)]], uint3 tid [[threadgroup_position_in_grid]],
     uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
@@ -286,6 +289,12 @@ static inline uint nax_u32_at(const device uchar* p) {  // 4 bytes at a 2-byte a
       for (short t = 0; t < 2; t++) {
         STEEL_PRAGMA_UNROLL
         for (short r = 0; r < 2; r++) {
+          if (RAW) {
+            const half4 v = as_type<half4>(uint2(q[t][r][word], hm[t][r][word]));
+            STEEL_PRAGMA_UNROLL
+            for (short e = 0; e < 4; e++) bf[t][4 * r + e] = v[e];
+            continue;
+          }
           const uint c = (q[t][r][word] >> (2 * i) & 0x03030303u) | (hm[t][r][word] >> (4 * h + i) & 0x01010101u) << 2;
           const float s = dl[t][r][i];
           const half4 v = half4(fma(float4(as_type<uchar4>(c)), float4(s), float4(-4.0f * s)));
@@ -329,3 +338,7 @@ static inline uint nax_u32_at(const device uchar* p) {  // 4 bytes at a 2-byte a
     }
   }
 }
+
+typedef decltype(mmvq_nax_q3_k<false>) mmvq_nax_q3_k_t;
+template [[host_name("vv_mmvq_nax_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_nax_q3_k<false>;
+template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_nax_q3_k<true>;
