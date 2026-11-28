@@ -810,14 +810,19 @@ fn a_split_check_chunk_is_decode_bit_for_bit() {
 
 /// `check_chunks_match_decode` on a real GGUF and device (a Mac's Metal is device 0), with the
 /// routed experts of the first LARCH_CHECK_HOST_LAYERS layers (default 0) on CPU_COMPUTE, as a
-/// MoE too big for the device runs:
-///   LARCH_CHECK_GGUF=<model.gguf> cargo test --release -p larch-model --test qwen35 -- --ignored --nocapture a_check_chunk_on
+/// MoE too big for the device runs. Metal's checks are exact only with LARCH_EXACT_CHECKS=1:
+///   LARCH_EXACT_CHECKS=1 LARCH_CHECK_GGUF=<model.gguf> cargo test --release -p larch-model --test qwen35 -- --ignored --nocapture a_check_chunk_on
 #[test]
-#[ignore = "needs a GGUF: LARCH_CHECK_GGUF, LARCH_CHECK_DEVICE (default 0), LARCH_CHECK_HOST_LAYERS (default 0)"]
+#[ignore = "needs a GGUF: LARCH_CHECK_GGUF, LARCH_CHECK_DEVICE (default 0), LARCH_CHECK_HOST_LAYERS (default 0); LARCH_EXACT_CHECKS=1 on Metal"]
 fn a_check_chunk_on_a_device() {
     let path = PathBuf::from(std::env::var("LARCH_CHECK_GGUF").unwrap());
     let device = std::env::var("LARCH_CHECK_DEVICE").map_or(0, |d| d.parse().unwrap());
     let dev = Device::open(device).unwrap();
+    let backend = dev.props().unwrap().backend;
+    assert!(
+        larch_model::exact_checks(backend),
+        "{backend:?} checks are not exact: run with LARCH_EXACT_CHECKS=1"
+    );
     let host = std::env::var("LARCH_CHECK_HOST_LAYERS").map_or(0, |n| n.parse().unwrap());
     let place = Placement {
         cpu_expert_layers: host,

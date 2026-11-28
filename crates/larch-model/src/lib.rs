@@ -33,7 +33,22 @@ pub use transformer::{
     RouteCase, Transformer,
 };
 
-use larch_kernels::{DType, KError, KvPool, Stream, Tensor};
+use larch_kernels::{Backend, DType, KError, KvPool, Stream, Tensor};
+
+/// Whether a check step on `backend` computes every row bit-identically to a one-row decode
+/// ([`StepBatch::check`]), so a guessing load's output is its output without guesses. Off on Metal,
+/// where those row-independent kernels made every step of a guessing load about 24% slower (M5,
+/// 27 Nov 2026): a check there takes the decode kernels of its row count, so guessed text can differ
+/// from unguessed text where the model's top two tokens nearly tie, as text already differs with
+/// how many chats share a step. `LARCH_EXACT_CHECKS=1` keeps the exact kernels on Metal, `0` drops
+/// them anywhere.
+// ponytail: CUDA keeps exact checks unmeasured (its check steps were exact but slower than plain); time
+// it there and drop them the same way if they cost.
+pub fn exact_checks(backend: Backend) -> bool {
+    larch_kernels::routes()
+        .exact_checks
+        .unwrap_or(backend != Backend::Metal)
+}
 
 /// One step's inputs, built by the executor; every tensor is i32 on the model's device. Rows are the
 /// decode rows (one per decoding sequence) followed by the prefill rows (each prefilling sequence's
@@ -63,8 +78,10 @@ pub struct StepBatch<'a> {
     pub logits_rows: Tensor<'a>,
     /// `larch_attn_decode`'s split-K count; 0 lets the backend pick.
     pub attn_splits: u32,
-    /// The prefill chunks are check chunks (a decoding sequence's last token plus guesses): the model
-    /// must compute every row bit-identically to a one-row decode at the same `attn_splits`.
+    /// The prefill chunks are check chunks (a decoding sequence's last token plus guesses), each row
+    /// attending as a one-row decode at the same `attn_splits`. Where [`exact_checks`] holds, the model
+    /// computes every row bit-identically to a one-row decode; elsewhere its projections take the
+    /// decode kernels of the step's row count.
     pub check: bool,
 }
 

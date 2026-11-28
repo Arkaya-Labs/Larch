@@ -97,18 +97,19 @@ const PENALTY_WINDOW: usize = 64;
 /// target, 11 Nov) is the streaming pool's room, so a larger chunk is set at startup.
 pub(crate) const PREFILL_CHUNK_SCRATCH: usize = 1024;
 
-/// Whether a pure decode step runs as a check step (`StepBatch::check`): on Metal, while a guessing
-/// load may still check. Its rows then take the check kernels at every row count, one row
-/// included, so a row's bits never depend on whether a check runs beside it, and the output with
-/// guesses is the output of the same load without them (exact within the mode). Other backends'
-/// check kernels already equal their plain decode, and a load without guesses keeps plain decode.
+/// Whether a pure decode step runs as a check step (`StepBatch::check`): on Metal with exact checks
+/// ([`larch_model::exact_checks`]), while a guessing load may still check. Its rows then take the
+/// check kernels at every row count, one row included, so a row's bits never depend on whether a
+/// check runs beside it, and the output with guesses is the output of the same load without them
+/// (exact within the mode). Other backends' check kernels already equal their plain decode, Metal's
+/// without exact checks are its decode kernels, and a load without guesses keeps plain decode.
 fn decodes_as_check(
-    metal: bool,
+    exact_metal: bool,
     guess_max: usize,
     checkable: Option<bool>,
     plan: &StepPlan,
 ) -> bool {
-    metal
+    exact_metal
         && guess_max > 0
         && checkable != Some(false)
         && plan.prefill.is_empty()
@@ -4378,7 +4379,8 @@ impl Engine {
     /// [`decodes_as_check`] for this load.
     fn decodes_as_check(&self, plan: &StepPlan) -> bool {
         let metal = (self.loaded.as_ref()).is_some_and(|l| l.info.caps.backend == Backend::Metal);
-        decodes_as_check(metal, self.sched.guess_max, self.sched.checkable, plan)
+        let exact = metal && larch_model::exact_checks(KBackend::Metal);
+        decodes_as_check(exact, self.sched.guess_max, self.sched.checkable, plan)
     }
 
     /// The next step's `attn_splits`. Checks are exact only at the decode rows' own nonzero splits.
@@ -11306,7 +11308,8 @@ mod tests {
             }
         }
 
-        /// Only a Metal load that may still check, on a pure decode step, takes the check kernels.
+        /// Only a Metal load with exact checks that may still check, on a pure decode step, takes the
+        /// check kernels.
         #[test]
         fn only_metal_guessing_decode_runs_as_check() {
             use crate::engine::decodes_as_check;
@@ -11324,14 +11327,20 @@ mod tests {
             assert!(!decodes_as_check(true, 8, None, &StepPlan::default()));
         }
 
-        /// On a Metal device, dense, MoE and hybrid MoE: a guessing load's output equals the same
-        /// load's with no guess proposed, since every pure decode step takes the check kernels.
-        /// LARCH_TEST_DEVICE=0 cargo test --release -p larch-engine --lib -- --ignored
-        /// metal_check_steps
+        /// On a Metal device with exact checks, dense, MoE and hybrid MoE: a guessing load's output
+        /// equals the same load's with no guess proposed, since every pure decode step takes the
+        /// check kernels.
+        /// LARCH_EXACT_CHECKS=1 LARCH_TEST_DEVICE=0 cargo test --release -p larch-engine --lib --
+        /// --ignored metal_check_steps
         #[test]
-        #[ignore = "needs a Metal device: LARCH_TEST_DEVICE"]
+        #[ignore = "needs a Metal device: LARCH_TEST_DEVICE, and LARCH_EXACT_CHECKS=1"]
         fn metal_check_steps_keep_greedy_output() {
             let device = std::env::var("LARCH_TEST_DEVICE").unwrap().parse().unwrap();
+            let exact = larch_model::exact_checks(larch_kernels::Backend::Metal);
+            assert!(
+                exact,
+                "Metal checks are exact only with LARCH_EXACT_CHECKS=1"
+            );
             for arch in [Arch::Llama, Arch::Qwen3Moe, Arch::Qwen35Moe] {
                 let reqs = prompts(0);
                 let run = |d: Box<dyn Drafter + Send>| {

@@ -1025,9 +1025,11 @@ pub struct Transformer {
     quant_i8: bool,
     compute_units: u32,
     arch_code: u32,
-    /// The running step is a check step ([`StepBatch::check`]): each row as a one-row decode. A
-    /// cell so the MTP drafter, which shares the activations, resets it behind `&self`.
+    /// The running step is a check step ([`StepBatch::check`]) on exact kernels: each row as a one-row
+    /// decode. A cell so the MTP drafter, which shares the activations, resets it behind `&self`.
     check: std::cell::Cell<bool>,
+    /// [`crate::exact_checks`] for this device at load: a check step takes the exact kernels.
+    exact_checks: bool,
     /// Rows a check step's mmvq_id takes at a time on this device ([`ID_ROWS`], [`METAL_ID_ROWS`]).
     id_rows: i64,
     /// A check step's own kernels ran once on this backend ([`Transformer::probe_check`]).
@@ -2461,6 +2463,7 @@ impl Transformer {
             compute_units: props.compute_units,
             arch_code: props.arch_code,
             check: std::cell::Cell::new(false),
+            exact_checks: crate::exact_checks(props.backend),
             id_rows: match props.backend {
                 Backend::Metal => METAL_ID_ROWS,
                 _ => ID_ROWS,
@@ -4434,7 +4437,7 @@ impl Transformer {
         }
         // The taps' layers, dtypes and shapes are checked before the first op; row values are not.
         let taps = taps.map(|t| t.blocks(c).map(|out| (t, out))).transpose()?;
-        self.check.set(b.check);
+        self.check.set(b.check && self.exact_checks);
         // A capture would keep the probe's ops; second-hit admission runs it eagerly first.
         if b.check && !self.checks_ran && !s.capturing() {
             self.probe_check(s, b, kv, logits)?;

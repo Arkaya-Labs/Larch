@@ -32,6 +32,10 @@ pub struct Routes {
     /// on by default (larch-model's `FUSED`, on CUDA sm_120 only), where a gemm-replacing entry is on only once it
     /// gives the unfused path's bytes or passes parity against it.
     pub fused: Option<bool>,
+    /// `LARCH_EXACT_CHECKS`: check steps on the row-independent kernels, so guessed output is unguessed
+    /// output bit for bit (larch-model's `exact_checks`). `1` forces them on, `0` off; `None` keeps them
+    /// everywhere but Metal.
+    pub exact_checks: Option<bool>,
 }
 
 /// A tri-state switch: `1` forces the route on, `0` off, anything else leaves the measured-arch default.
@@ -57,6 +61,7 @@ pub fn routes() -> Routes {
                 .ok()
                 .and_then(|v| v.parse().ok()),
             fused: env("LARCH_FUSED"),
+            exact_checks: env("LARCH_EXACT_CHECKS"),
         }
     })
 }
