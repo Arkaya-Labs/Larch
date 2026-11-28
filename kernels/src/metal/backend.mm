@@ -45,6 +45,7 @@ struct kernels {
   id<MTLComputePipelineState> mmvq_id_mm[2][LARCH_Q3_K + 1];  // the tensor path's grouped mmvq_id, [64 x 32 tile]
   id<MTLComputePipelineState> mmvq_id1[LARCH_Q3_K + 1];  // Q3_K, Q4_K, Q5_K and Q6_K, nil for the others
   id<MTLComputePipelineState> mmvq_id1n[LARCH_Q3_K + 1];  // the same formats, for experts under 1024 wide
+  id<MTLComputePipelineState> mmvq_id_qmv[LARCH_Q3_K + 1];  // the same formats, for those with k a multiple of 512
   id<MTLComputePipelineState> attn_flash[3];                 // head_dim up to 64, 128 and 256
   // The simdgroup-matrix kernels for GPUs without the tensor API; nil when LARCH_METAL_SIMD_KERNELS=0.
   id<MTLComputePipelineState> gemm_qs[LARCH_Q3_K + 1], mmvq_id_mm_sg[LARCH_Q3_K + 1];
@@ -80,13 +81,15 @@ struct kernels {
 //   at a time on simdgroup matrices (MLX's chunked delta rule); 0 keeps vv_gdn's row-by-row walk, for A/B timing.
 // LARCH_METAL_MOE_NARROW (default 1): mmvq_id at decode and check row counts on experts under 1024 wide takes
 //   vv_mmvq_id1n, which keeps all 32 lanes busy; 0 keeps vv_mmvq_id1, for A/B timing.
+// LARCH_METAL_MOE_QMV (default 1): those narrow experts with k a multiple of 512 take vv_mmvq_id_qmv (MLX's
+//   gather_qmv_fast plan) instead; 0 keeps vv_mmvq_id1n, for A/B timing.
 // LARCH_METAL_ATTN_NAX (default 1): flash prefill at head_dim 64, 128 or 256 takes vv_attn_paged_nax (MLX's NAX
 //   attention over the paged pool, macOS 26.2 and the tensor API); 0 keeps vv_attn_flash, for A/B timing.
 // LARCH_METAL_ATTN_NAX_HM (default 0): 1 launches vv_attn_paged_nax with the q head as grid x (the _hm kernels),
 //   for A/B timing at long contexts.
 struct feed {
   bool concurrent = true, commit = true, profile = false, simd_kernels = true, moe_prefetch = true, gdn_wide = true,
-       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false;
+       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false, moe_qmv = true;
 };
 static constexpr uint32_t first_commit = 32, commit_every = 128;
 struct mtl_device : larch_device {
@@ -167,7 +170,8 @@ static larch_status read_feed(feed* f) {
                                  std::pair{"LARCH_METAL_MOE_NARROW", &f->moe_narrow},
                                  std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk},
                                  std::pair{"LARCH_METAL_ATTN_NAX", &f->attn_nax},
-                                 std::pair{"LARCH_METAL_ATTN_NAX_HM", &f->attn_nax_hm}}) {
+                                 std::pair{"LARCH_METAL_ATTN_NAX_HM", &f->attn_nax_hm},
+                                 std::pair{"LARCH_METAL_MOE_QMV", &f->moe_qmv}}) {
     const char* c = std::getenv(name);
     if (c && std::strcmp(c, "0") && std::strcmp(c, "1"))
       return vv_fail(LARCH_ERR_INVALID_ARG, std::string(name) + " must be 0 or 1");
@@ -412,6 +416,8 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
         k.mmvq1[t] = pipe(std::string("vv_mmvq1_") + dtype_name[t], 32 * MMVQ1_SG);
         k.mmvq_id1[t] = pipe(std::string("vv_mmvq_id1_") + dtype_name[t], 32 * MMVQ1_SG);
         if (fed.moe_narrow) k.mmvq_id1n[t] = opt(std::string("vv_mmvq_id1n_") + dtype_name[t], 32 * MMVQ1_SG);
+        if (fed.moe_narrow && fed.moe_qmv)
+          k.mmvq_id_qmv[t] = opt(std::string("vv_mmvq_id_qmv_") + dtype_name[t], 32 * MMVQ1_SG);
       }
       // G1's best step (M5, 14 Nov): 32 inputs for the K-quants, 128 for Q8_0. All three row tiles or none, so a format
       // never changes kernel with the row count.
@@ -1277,8 +1283,11 @@ larch_status mmvq_id(larch_stream* vs, const larch_tensor* w_quant, const larch_
     // Drafter mode runs per pair at any row count, 1-row decode included, so a row's bits never depend on the rows
     // beside it (the engine's check steps send up to 32 rows a call).
     if (s->check || pairs < MOE_GROUP_PAIRS * experts || experts > MOE_ROUTE_MAX || w.cols > 1024 * MOE_GROUP_T) {
-      id<MTLComputePipelineState> narrow = w.cols < 1024 ? ks(vs).mmvq_id1n[w.dtype] : nil;
-      const int64_t cols = MMVQ1_SG * (narrow ? MMVQ1N_C : MMVQ1_NR);
+      // MLX's qmv_fast plan where k is whole 512-wide steps: down 2048 x 512 Q3_K at 1-8 rows took 22 to 44% more
+      // time in vv_mmvq_id1n than in MLX's affine_gather_qmv_fast at equal bytes (M5, 28 Nov).
+      id<MTLComputePipelineState> qmv = w.cols < 1024 && w.cols % 512 == 0 ? ks(vs).mmvq_id_qmv[w.dtype] : nil;
+      id<MTLComputePipelineState> narrow = qmv ? qmv : w.cols < 1024 ? ks(vs).mmvq_id1n[w.dtype] : nil;
+      const int64_t cols = MMVQ1_SG * (qmv ? MMVQ_QMV_RS : narrow ? MMVQ1N_C : MMVQ1_NR);
       if (id<MTLComputePipelineState> one = narrow ? narrow : ks(vs).mmvq_id1[w.dtype])
         groups(s, one, {input(w), input(x), input(ids), input_or(b, at(w)), input_or(wt, at(w)), at(o)}, a, (n + cols - 1) / cols,
                32 * MMVQ1_SG, weighted ? x.rows : pairs);

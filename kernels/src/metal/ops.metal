@@ -765,6 +765,74 @@ kernel void mmvq_id1(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
   }
 }
 
+// mmvq_id per (row, slot) pair after MLX's affine_gather_qmv_fast (qmv_fast_impl, mlx quantized.h): a
+// simdgroup owns MMVQ_QMV_RS rows of the chosen expert, and lane l takes 16 consecutive weights at k positions
+// 16 l + 512 i of each, so a simdgroup step covers 512 of k (k must be a multiple of 512). MLX holds 16 3-bit
+// values a thread the same way; here a lane decodes a K-quant piece (16 weights of a 256-weight block).
+// Weighted, one row over its slots in ascending order, as mmvq_id1.
+template <int BYTES, deq16_fn F>
+kernel void mmvq_id_qmv(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in ids [[buffer(2)]],
+                        bytes_in bias [[buffer(3)]], bytes_in wt [[buffer(4)]], device uchar* out [[buffer(5)]],
+                        constant id_args& a [[buffer(6)]], uint2 tg [[threadgroup_position_in_grid]],
+                        ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+  constexpr short RS = MMVQ_QMV_RS;
+  const uint n0 = (tg.x * MMVQ1_SG + sg) * RS;
+  if (n0 >= a.n) return;  // the whole simdgroup
+  const uint r = a.weighted ? tg.y : tg.y / a.slots, first = a.weighted ? 0 : tg.y % a.slots;
+  const uint last = a.weighted ? a.slots : first + 1;
+  float acc[RS] = {};
+  for (uint j = first; j < last; ++j) {
+    const uint e = uint(at<int>(ids + r * a.ids_rs, 4, j));
+    bytes_in we = w + u64(e) * a.n * a.w_rs;
+    device const half* xr = (device const half*)(x + r * a.x_rs + j * a.x_slot_rs);
+    bytes_in wr[RS];
+#pragma clang loop unroll(full)
+    for (short c = 0; c < RS; ++c) wr[c] = we + u64(min(n0 + c, a.n - 1)) * a.w_rs;  // a ragged tail recomputes n - 1
+    float sum[RS] = {};
+    for (uint k0 = 16 * lane; k0 < a.k; k0 += 512) {
+      float xv[16];
+#pragma clang loop unroll(full)
+      for (short i = 0; i < 4; ++i) {  // packed: larch.h promises x 2-byte alignment only
+        const float4 u = float4(half4(((device const packed_half4*)(xr + k0))[i]));
+#pragma clang loop unroll(full)
+        for (short l = 0; l < 4; ++l) xv[4 * i + l] = u[l];
+      }
+      const uint blk = k0 / 256, p = k0 % 256 / 16;
+#pragma clang loop unroll(full)
+      for (short c = 0; c < RS; ++c) {
+        float y[16];
+        F(wr[c] + blk * BYTES, int(p), y);
+        float t = 0;
+#pragma clang loop unroll(full)
+        for (short l = 0; l < 16; ++l) t += y[l] * xv[l];
+        sum[c] += t;
+      }
+    }
+#pragma clang loop unroll(full)
+    for (short c = 0; c < RS; ++c) {
+      const uint n = min(n0 + c, a.n - 1);
+      float v = simd_sum(sum[c]);
+      if (a.has_bias) v += at<float>(bias, a.bias_rs, e * a.n + n);
+      if (a.weighted) {
+        acc[c] += at<float>(wt + r * a.wt_rs, 4, j) * v;
+      } else if (!lane && n0 + c < a.n) {
+        device uchar* o = out + r * a.out_rs + j * a.out_slot_rs;
+        if (a.out_f32)
+          ((device float*)o)[n] = v;
+        else
+          ((device half*)o)[n] = half(v);
+      }
+    }
+  }
+  for (short c = 0; a.weighted && !lane && c < RS && n0 + c < a.n; ++c) {
+    device uchar* o = out + r * a.out_rs;
+    if (a.out_f32)
+      ((device float*)o)[n0 + c] = acc[c];
+    else
+      ((device half*)o)[n0 + c] = half(acc[c]);
+  }
+}
+
 // mmvq_id1 for experts under 4 blocks wide (k < 1024: MoE down projections of 512 and 768),
 // where mmvq1's lane groups, which each walk every 4th block (every 2nd for Q6_K), leave groups idle (half of
 // them at k = 512). Here a simdgroup owns MMVQ1N_C columns and lane group g takes the (column, block) units
@@ -1000,6 +1068,10 @@ template [[host_name("vv_mmvq_id1n_q3_k")]] kernel decltype(mmvq_id1n<110>) mmvq
 template [[host_name("vv_mmvq_id1n_q4_k")]] kernel decltype(mmvq_id1n<144>) mmvq_id1n<144>;
 template [[host_name("vv_mmvq_id1n_q5_k")]] kernel decltype(mmvq_id1n<176>) mmvq_id1n<176>;
 template [[host_name("vv_mmvq_id1n_q6_k")]] kernel decltype(mmvq_id1n<210>) mmvq_id1n<210>;
+template [[host_name("vv_mmvq_id_qmv_q3_k")]] kernel decltype(mmvq_id_qmv<110, deq16p_q3_k>) mmvq_id_qmv<110, deq16p_q3_k>;
+template [[host_name("vv_mmvq_id_qmv_q4_k")]] kernel decltype(mmvq_id_qmv<144, deq16_q4_k>) mmvq_id_qmv<144, deq16_q4_k>;
+template [[host_name("vv_mmvq_id_qmv_q5_k")]] kernel decltype(mmvq_id_qmv<176, deq16_q5_k>) mmvq_id_qmv<176, deq16_q5_k>;
+template [[host_name("vv_mmvq_id_qmv_q6_k")]] kernel decltype(mmvq_id_qmv<210, deq16_q6_k>) mmvq_id_qmv<210, deq16_q6_k>;
 template [[host_name("vv_mmvq_mma8_q3_k")]] kernel mmvq_mma_t mmvq_mma<110, deq16p_q3_k, 1>;
 template [[host_name("vv_mmvq_mma16_q3_k")]] kernel mmvq_mma_t mmvq_mma<110, deq16p_q3_k, 2>;
 template [[host_name("vv_mmvq_mma8_q5_k")]] kernel mmvq_mma_t mmvq_mma<176, deq16_q5_k, 1>;
