@@ -598,6 +598,24 @@ void deq16_q6_k(bytes_in b, int p, thread float* y) {
 inline ushort mma_fm(ushort l) { return ((l / 4) & 4) + ((l / 2) % 4); }
 inline ushort mma_fn(ushort l) { return ((l / 4) & 2) * 2 + (l % 2) * 2; }
 
+// One 8x8x8 MMA on operands held in plain registers, c += a b, lane l holding elements (fm, fn), (fm, fn + 1) of
+// each. The simdgroup_matrix objects live only inside the call (MLX steel's pattern, as Splash's sgmatrix::mma_acc
+// has it), so the accumulators stay float2 registers: persistent simdgroup_matrix arrays read through
+// thread_elements() can be kept in thread memory.
+template <typename T>
+__attribute__((always_inline)) inline void mma_acc(thread float2& c, vec<T, 2> a, vec<T, 2> b) {
+  simdgroup_matrix<T, 8, 8> A, B;
+  simdgroup_float8x8 C, D;
+  A.thread_elements()[0] = a[0];
+  A.thread_elements()[1] = a[1];
+  B.thread_elements()[0] = b[0];
+  B.thread_elements()[1] = b[1];
+  C.thread_elements()[0] = c[0];
+  C.thread_elements()[1] = c[1];
+  simdgroup_multiply_accumulate(D, A, B, C);
+  c = float2(D.thread_elements()[0], D.thread_elements()[1]);
+}
+
 template <int BYTES, deq16_fn F, int RT>
 kernel void mmvq_mma(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in bias [[buffer(2)]],
                      device uchar* out [[buffer(3)]], constant mm_args& a [[buffer(4)]],
@@ -617,13 +635,13 @@ kernel void mmvq_mma(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
     for (int e = 0; e < 2; ++e)
       xr[rt][e] = (device const half*)(x + u64(min(uint(8 * rt + fn + e), a.m - 1)) * a.a_rs) + 16 * (fm / 2) +
                   8 * (fm % 2);
-  simdgroup_float8x8 c[RT][NT];
+  float2 c[RT][NT];
 #pragma clang loop unroll(full)
   for (int rt = 0; rt < RT; ++rt)
 #pragma clang loop unroll(full)
-    for (int t = 0; t < NT; ++t) c[rt][t] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+    for (int t = 0; t < NT; ++t) c[rt][t] = 0.0f;
   for (uint g = sg; g < a.k / 64; g += MMVQ_MMA_SG) {
-    simdgroup_float8x8 b[RT][8];
+    float2 b[RT][8];
 #pragma clang loop unroll(full)
     for (int rt = 0; rt < RT; ++rt)
 #pragma clang loop unroll(full)
@@ -631,10 +649,7 @@ kernel void mmvq_mma(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
         const float4 u = float4(half4(((device const packed_half4*)(xr[rt][0] + 64 * g))[i]));
         const float4 v = float4(half4(((device const packed_half4*)(xr[rt][1] + 64 * g))[i]));
 #pragma clang loop unroll(full)
-        for (int s = 0; s < 4; ++s) {
-          b[rt][4 * i + s].thread_elements()[0] = u[s];
-          b[rt][4 * i + s].thread_elements()[1] = v[s];
-        }
+        for (int s = 0; s < 4; ++s) b[rt][4 * i + s] = float2(u[s], v[s]);
       }
     const int p = 4 * g + fn / 2;
 #pragma clang loop unroll(full)
@@ -642,13 +657,9 @@ kernel void mmvq_mma(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
       float y[16];
       F(wr[t] + p / 16 * BYTES, p % 16, y);
 #pragma clang loop unroll(full)
-      for (int s = 0; s < 8; ++s) {
-        simdgroup_float8x8 am;
-        am.thread_elements()[0] = y[s];
-        am.thread_elements()[1] = y[8 + s];
+      for (int s = 0; s < 8; ++s)
 #pragma clang loop unroll(full)
-        for (int rt = 0; rt < RT; ++rt) simdgroup_multiply_accumulate(c[rt][t], am, b[rt][s], c[rt][t]);
-      }
+        for (int rt = 0; rt < RT; ++rt) mma_acc(c[rt][t], float2(y[s], y[8 + s]), b[rt][s]);
     }
   }
 #pragma clang loop unroll(full)
@@ -656,7 +667,7 @@ kernel void mmvq_mma(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
 #pragma clang loop unroll(full)
     for (int t = 0; t < NT; ++t)
 #pragma clang loop unroll(full)
-      for (int e = 0; e < 2; ++e) red[((sg * RT + rt) * NT + t) * 64 + 2 * lane + e] = c[rt][t].thread_elements()[e];
+      for (int e = 0; e < 2; ++e) red[((sg * RT + rt) * NT + t) * 64 + 2 * lane + e] = c[rt][t][e];
   threadgroup_barrier(mem_flags::mem_threadgroup);
   for (uint i = sg * 32 + lane; i < RT * NT * 64; i += MMVQ_MMA_SG * 32) {
     float v = 0;
