@@ -564,8 +564,9 @@ pub(crate) struct Engine {
 struct DocsBefore {
     max_context: u32,
     kv_pool_fraction: f32,
-    /// `max_batch_seqs` as it stood, and whether a person had set it.
-    seats: (f64, bool),
+    /// `max_batch_seqs` as it stood, whether the plan paid its state slots
+    /// (`Partial::seats_asked`), and whether a person had set it (`Partial::seats_by_hand`).
+    seats: (f64, bool, bool),
     drafter: (Option<std::path::PathBuf>, Option<std::path::PathBuf>),
     /// What the documents reloads set, which a field goes back from only while it still holds:
     /// a setting changed in between is the person's.
@@ -849,6 +850,9 @@ struct Partial {
     /// slots (more chats at once), else for one (the fastest single chat), the rest from what is
     /// left (`Weights::asked`).
     seats_asked: bool,
+    /// `max_batch_seqs` is a person's (set at startup, live or by a reload), not a documents plan's:
+    /// only then may a hybrid's state slots pass [`hybrid_slots`] ([`hybrid_cap`]).
+    seats_by_hand: bool,
     /// The state slots demand asks a plan for when nobody set them ([`Demand`]); 0 is one.
     seats_auto: u32,
 }
@@ -1318,13 +1322,14 @@ pub(crate) fn hybrid_slots(seats: u32) -> u32 {
 }
 
 /// The state slots a hybrid's load plans and a live grow adds up to: [`hybrid_slots`], or every
-/// seat a person set by hand (`asked`). The plan's floor stays at [`hybrid_slots`] of the asked
-/// seats, so the slots past it take KV room down to one full context but never a host layer.
+/// seat a person set by hand (`by_hand`, `Partial::seats_by_hand`; a documents plan's seats are
+/// not). The plan's floor stays at [`hybrid_slots`] of the asked seats, so the slots past it take
+/// KV room down to one full context but never a host layer.
 // ponytail: past 8 only on a hand-set max_batch_seqs (24 GB M5, q36: 8 f16 slots hold 28,192 KV
 // tokens at 8k, and each slot past them costs ~3k); make it the default once a 16-64 chat bench
 // on a 24 GB Mac shows which seat count wins with q8_0 KV.
-pub(crate) fn hybrid_cap(seats: u32, asked: bool) -> u32 {
-    if asked { seats } else { hybrid_slots(seats) }
+pub(crate) fn hybrid_cap(seats: u32, by_hand: bool) -> u32 {
+    if by_hand { seats } else { hybrid_slots(seats) }
 }
 
 /// Whether a hand-set `max_batch_seqs` (`want` slots, [`hybrid_cap`]) re-plans a load of a
@@ -1603,7 +1608,7 @@ impl Loaded {
             // (past 8 only for seats set by hand, at the floor's host layers); requests past the slots
             // wait (`limits`) or grow them live (`grow_seats`).
             w.seqs.store(
-                hybrid_cap(startup_seqs, partial.seats_asked),
+                hybrid_cap(startup_seqs, partial.seats_by_hand),
                 Ordering::Relaxed,
             );
             let asked = match partial.seats_asked {
@@ -2112,7 +2117,7 @@ impl Engine {
             let before = DocsBefore {
                 max_context: opts.max_context,
                 kv_pool_fraction: opts.kv_pool_fraction,
-                seats: (cfg.values[seats_knob], seats_asked),
+                seats: (cfg.values[seats_knob], seats_asked, seats_asked),
                 drafter,
                 set: DocsSet {
                     max_context: Some(plan.max_context),
@@ -2143,6 +2148,7 @@ impl Engine {
             startup: true,
             graphs_fit_gated: graphs_fit_gated(&cfg, explicit_graphs),
             seats_asked: seats_asked || documents,
+            seats_by_hand: seats_asked && !documents,
             ..Partial::default()
         };
         let cache_compatible = weights.is_some() || opts.prefix_cache_custom_compatible;
@@ -2228,6 +2234,7 @@ impl Engine {
             // A documents plan's seats stay asked through later rebuilds, as after its reload.
             partial: Partial {
                 seats_asked: documents,
+                seats_by_hand: seats_asked && !documents,
                 ..Partial::default()
             },
             reload: None,
@@ -3512,6 +3519,7 @@ impl Engine {
                 seats: (
                     self.cfg.values[knob_id::MAX_BATCH_SEQS as usize],
                     self.partial.seats_asked,
+                    self.partial.seats_by_hand,
                 ),
                 drafter: (opts.drafter.clone(), opts.drafter_auto.clone()),
                 set: DocsSet::default(),
@@ -3545,8 +3553,10 @@ impl Engine {
             let mut cfg = self.cfg;
             if let Some(seats) = change.max_batch_seqs {
                 // As a hand-set knob: the plan pays its state slots (`Partial::seats_asked`).
+                // A documents plan's seats stay under `hybrid_slots`, as before `hybrid_cap`.
                 cfg.values[knob_id::MAX_BATCH_SEQS as usize] = f64::from(seats);
                 self.partial.seats_asked = true;
+                self.partial.seats_by_hand = !documents;
             }
             if custom_loader {
                 if !self.graphs_forced_off {
@@ -3886,7 +3896,7 @@ impl Engine {
         let loaded = self.loaded.as_mut().expect("loaded engine");
         let slots = loaded.model.state_slots();
         let seats = self.cfg.values[knob_id::MAX_BATCH_SEQS as usize] as u32;
-        let want = hybrid_cap(seats, self.partial.seats_asked);
+        let want = hybrid_cap(seats, self.partial.seats_by_hand);
         if slots == 0
             || slots >= want
             || self.sched.n_waiting() == 0
@@ -3925,7 +3935,7 @@ impl Engine {
     fn replan_seats(&mut self) {
         let want = hybrid_cap(
             self.value(knob_id::MAX_BATCH_SEQS) as u32,
-            self.partial.seats_asked,
+            self.partial.seats_by_hand,
         );
         if self.replan_due(want) {
             // A person's seats: the reload's own events report it.
@@ -3993,7 +4003,7 @@ impl Engine {
             back = true;
         }
         if set.seats == Some(*seats) {
-            (*seats, self.partial.seats_asked) = before.seats;
+            (*seats, self.partial.seats_asked, self.partial.seats_by_hand) = before.seats;
             // As the options' own load would have it: nobody set the seats or the expert cache.
             if set.auto_off {
                 self.auto =
@@ -5611,6 +5621,7 @@ impl Engine {
             // A person's seats, not a tuner's: only they are worth a reload, and they end the
             // demand switch (one already waiting is cancelled).
             (self.partial.seats_asked, self.replan, self.auto) = (true, true, false);
+            self.partial.seats_by_hand = true;
         }
         if let KnobReply::Applied { rev, previous, .. } = reply {
             self.guard.unwatch(knob);
@@ -9155,6 +9166,7 @@ mod tests {
             startup: true,
             graphs_fit_gated: true,
             seats_asked: asked.is_some(),
+            seats_by_hand: asked.is_some(),
             ..Partial::default()
         };
         let loaded = Loaded::load(&mut opts, &mut cfg, load, weights, &s, 512, &mut partial);
@@ -10794,6 +10806,25 @@ mod tests {
                 }
                 std::fs::remove_file(&e.opts.model).unwrap();
             }
+        }
+
+        /// A documents plan's seats are not a person's (`Partial::seats_by_hand`): on a hybrid they
+        /// keep `hybrid_slots` state slots however many seats the plan asks, as before `hybrid_cap`.
+        #[test]
+        fn a_documents_plan_on_a_hybrid_keeps_eight_state_slots() {
+            let (mut e, _h) = engine(Arch::Qwen35, 0, Box::<SuffixDrafter>::default(), 64, false);
+            std::fs::write(&e.opts.model, tiny::gguf(Arch::Qwen35, 3)).unwrap();
+            plain_reload(&mut e);
+            let change = crate::ReloadChange {
+                max_batch_seqs: Some(12),
+                ..documents(1024)
+            };
+            reload_to(&mut e, change);
+            assert_eq!(e.opts.max_context, 1024, "the documents plan loaded");
+            assert!(e.partial.seats_asked && !e.partial.seats_by_hand);
+            let slots = e.loaded.as_ref().unwrap().model.state_slots();
+            assert_eq!(slots, crate::engine::hybrid_slots(12));
+            std::fs::remove_file(&e.opts.model).unwrap();
         }
 
         /// An engine on the documents plan, with the plan before it noted: (context, pool fraction,
