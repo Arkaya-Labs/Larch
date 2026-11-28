@@ -1411,16 +1411,16 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
     });
     let host_plan = plan_experts(&experts, block_experts);
     let moe = MoeCfg::from_gguf(&header, c.arch)?;
-    // The expert cache (per-expert residency): 0 keeps whole host layers, 1 places experts
-    // statically, 2 adds dynamic residency. Only LARCH_EXPERT_CACHE takes it: on the 5070 Ti at
-    // W4@8 (the hybrid MoE target, 27 Nov) the cache from a recorded histogram ran 188.5 tok/s
-    // against 237.1 for whole layers and the prefill pool, so neither seats nor a histogram beside
-    // the model pick it.
-    // ponytail: only a load that takes the cache records routes. Pick it by seats again, and
-    // record on whole-layer loads, if a measured per-expert plan beats whole layers with the pool.
-    let cache = std::env::var("LARCH_EXPERT_CACHE")
-        .ok()
-        .and_then(|v| expert_cache(&v));
+    // The expert cache (per-expert residency, [`expert_cache`]): 0 keeps whole host layers, 1
+    // places experts statically, 2 adds dynamic residency, and unset a hybrid MoE on CUDA places
+    // them statically from its profile ([`profile`]) where [`fit::cheapest_split`] prices a split
+    // under whole layers. On the 5070 Ti the hybrid MoE target's split from its shipped profile
+    // ran 161.8 tok/s at W4@1 and 298.2 at W4@4 against 136.0 and 245.8 for whole layers and the
+    // prefill pool (27 Nov). Only dynamic residency records routes: a static split's in-place
+    // rows go uncounted (`mixed_rows`), so its counts would drift colder with use.
+    // ponytail: one shipped profile, the hybrid MoE target's; record one on first use for other
+    // models once a static split counts its in-place rows.
+    let env = cache_env();
     let load = Box::new(move |dev: &Device, s: &Stream, rows| {
         let before = device_props(dev).map_err(|e| LoadError::Backend(e.code()))?;
         // The effective max_context and fraction, as the fit after the load sees them.
@@ -1467,18 +1467,25 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
         };
         let held = s.capture_arena_held();
         let diagnostics = std::env::var("LARCH_FIT_DIAGNOSTICS").is_ok_and(|v| v == "1");
-        let hybrid_moe = c.arch == larch_model::Arch::Qwen35Moe;
         let routers = routers_bytes(&c, moe);
         // The prefill streaming pool, which only host layers use: a plan that moves any pays for
         // it as for the state slots, ~2.4x prefill (#489, pp512) for ~0.6 ms a token at one more
         // host layer (its want, as `Loaded::load`'s fit admits it).
         // `stream_pool_bytes` is the file's largest expert tensor, an upper bound on the host
         // layers' (`stream_pool_want`), so the plan never reserves less than the model asks.
-        let pool = match c.arch.hybrid() && cache.is_none() && maps && stream_rows_for(&before) > 0
-        {
+        // A per-expert attempt plans without it (the split layers stream nothing); the whole
+        // layers after one that does not load have it back where the cache was not asked for.
+        let hybrid_moe = c.arch == larch_model::Arch::Qwen35Moe;
+        let cache = expert_cache(
+            env.as_deref(),
+            hybrid_moe && before.backend == larch_kernels::Backend::Cuda,
+        );
+        let asked_off = cache.is_none() || env.is_none();
+        let pool_want = match c.arch.hybrid() && asked_off && maps && stream_rows_for(&before) > 0 {
             true => pool_bytes(&header),
             false => 0,
         };
+        let pool = std::cell::Cell::new(pool_want);
         // The serving buffers, the f16 copy of the routers the model keeps beside the weights,
         // and a hybrid's own scratch and `slots` slots of recurrent state.
         let reserve =
@@ -1489,7 +1496,15 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
             let (reserve, bytes) = (reserve(slots) + swing, t.get().bytes);
             let (ctx, f) = (max_context, fraction);
             fit::host_expert_layers_with_pool(
-                &before, bytes, &host_plan, &c, ctx, f, reserve, slots, pool,
+                &before,
+                bytes,
+                &host_plan,
+                &c,
+                ctx,
+                f,
+                reserve,
+                slots,
+                pool.get(),
             )
         };
         // Whether `n` host layers at the floor's slots leave the pool its room, whether or not a
@@ -1497,9 +1512,9 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
         // spends it, and the check after the load keeps it ([`pool_checked`]).
         let covers = |n: u32, swing: u64| {
             let (ctx, f, bytes) = (max_context, fraction, t.get().bytes);
-            let with = reserve(floor) + swing + pool;
+            let with = reserve(floor) + swing + pool.get();
             let fits = |k| k <= n;
-            pool > 0
+            pool.get() > 0
                 && n > 0
                 && fit::host_expert_layers_that_fit(
                     &before, bytes, &host_plan, &c, ctx, f, with, floor,
@@ -1514,7 +1529,7 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
             let covers = covers(n, swing);
             fit::most_state_slots(cap, n, |s| match covers {
                 true => {
-                    let reserve = reserve(s) + swing + pool;
+                    let reserve = reserve(s) + swing + pool.get();
                     fit::host_expert_layers_that_fit(
                         &before, bytes, &host_plan, &c, ctx, f, reserve, s,
                     )
@@ -1555,7 +1570,7 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
             let (last, t) = (count as usize == experts.len(), t.get());
             let left = scratch_after_load(t.scratch, mtp_weights);
             let covers = covers(count, load_check_need(before.backend, hybrid_moe, tried, 0));
-            let stream = pool_checked(covers, last, m.stream_pool_want().0, pool);
+            let stream = pool_checked(covers, last, m.stream_pool_want().0, pool.get());
             let need = |slots: u32| {
                 let beside = kept_beside(&before, left, seats_of(slots), held, last, t.checks);
                 let (ctx, f) = (max_context, fraction);
@@ -1574,6 +1589,8 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                 if diagnostics {
                     eprintln!("{tag},{count},{free},{},{slots}", need(slots));
                 }
+                #[cfg(test)]
+                LAST_CHECK.set((free, need(slots)));
                 // A slot costs 64 MB on the hybrid MoE target, a layer 381 MB: the most slots
                 // down to `floor` that the freed state covers, then measured again.
                 if free >= need(slots) || !c.arch.hybrid() {
@@ -1661,21 +1678,31 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
         // What the load records from, usable or not; only counts make it a per-expert plan.
         let start = moe
             .filter(|_| planned && cache.is_some())
-            .and_then(|m| Histogram::for_load(&header, &c, m, &hist_path, len));
+            .and_then(|m| Histogram::for_load(&header, &c, m, &hist_path, len))
+            .map(|h| profile(h, &path, header.data_offset));
         // A per-expert attempt moved memory, so a fallback's check allows CUDA's free swing too.
         let mut tried = false;
         if let (Some(m), Some(hist)) = (moe, plan_from(start.as_ref())) {
             let dynamic = cache == Some(true);
-            let log = Transformer::route_log_bytes(&c, m, rows);
+            // Only dynamic residency records (see `cache`), so only it has a route log.
+            let log = match dynamic {
+                true => Transformer::route_log_bytes(&c, m, rows),
+                false => 0,
+            };
             let tensors = header.tensors.len() as u64;
-            // Its check allows the swing; its slots are what whole layers would leave room for.
+            // Its check allows the swing, which the plan keeps free as whole layers' does; its
+            // slots are what whole layers would leave room for.
             let swing = post_load_need(before.backend, 0);
+            pool.set(0);
             let slots = slots_for(layers_for(floor, swing), swing);
-            let reserve = reserve(slots);
+            let reserve = reserve(slots) + swing;
             let (bytes, host_embed) = (t.get().bytes, t.get().host_embed);
-            let charge = fit::expert_cache_bytes(&before, log, tensors, dynamic);
             let largest = experts.iter().map(|&b| b / u64::from(m.experts)).max();
             let margin = replan_margin(before.backend, largest.unwrap_or(0));
+            // With what the check after the load finds missing and the re-plan's margin, so the
+            // first plan is the one that loads.
+            let charge = fit::expert_cache_bytes(&before, log, tensors, dynamic)
+                + first_charge(before.backend, margin);
             let loaded = replan_on_shortfall(charge, margin, |charge| {
                 let resident = fit::expert_residency(
                     &before,
@@ -1693,6 +1720,8 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                 let Some(resident) = resident else {
                     return Err((LoadError::DoesNotFit { need: 0, have: 0 }, 0));
                 };
+                #[cfg(test)]
+                SPLIT_PLANS.set(SPLIT_PLANS.get() + 1);
                 let split = resident
                     .iter()
                     .filter(|r| r.len() < m.experts as usize)
@@ -1727,8 +1756,10 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                     ),
                 }
                 .and_then(|mut t| {
-                    t.record_routes(s, hist_path.clone(), hist.clone())
-                        .map_err(|e| LoadError::Backend(e.code()))?;
+                    if dynamic {
+                        t.record_routes(s, hist_path.clone(), hist.clone())
+                            .map_err(|e| LoadError::Backend(e.code()))?;
+                    }
                     Ok(t)
                 })
                 .map_err(|e| (e, 0))
@@ -1738,6 +1769,7 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                 })
             });
             // Per-expert placement that does not fit falls back to whole layers.
+            pool.set(pool_want);
             let oom = LoadError::Backend(larch_kernels::KError::Oom.code());
             match loaded {
                 Err(LoadError::DoesNotFit { .. }) => {}
@@ -1757,8 +1789,10 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                     let (reserve, bytes) = (reserve(slots_for(n, swing)) + swing, t.get().bytes);
                     let covers = covers(n, swing);
                     eprintln!(
-                        "larch_host_experts_plan,{n},{},{},{bytes},{reserve},{max_context},{fraction},{rows},{pool},{covers}",
-                        before.vram_free, before.vram_total
+                        "larch_host_experts_plan,{n},{},{},{bytes},{reserve},{max_context},{fraction},{rows},{},{covers}",
+                        before.vram_free,
+                        before.vram_total,
+                        pool.get()
                     );
                 }
                 n
@@ -1893,14 +1927,87 @@ fn stream_rows_for(before: &DeviceProps) -> u32 {
     }
 }
 
-/// LARCH_EXPERT_CACHE: `Some(dynamic)` for per-expert residency (1 static, 2 dynamic), `None`
-/// (unset, 0) for whole host layers.
-fn expert_cache(v: &str) -> Option<bool> {
+/// LARCH_EXPERT_CACHE (`v`): `Some(dynamic)` for per-expert residency (1 static, 2 dynamic), `None`
+/// (0, any other value) for whole host layers. Unset, `default` places experts statically: a hybrid
+/// MoE on a backend that reads host experts in place (CUDA), where [`fit::cheapest_split`]'s costs
+/// were measured. A plan still needs a profile ([`profile`]); without one, whole layers load.
+fn expert_cache(v: Option<&str>, default: bool) -> Option<bool> {
     match v {
-        "1" => Some(false),
-        "2" => Some(true),
-        _ => None,
+        None => default.then_some(false),
+        Some("1") => Some(false),
+        Some("2") => Some(true),
+        Some(_) => None,
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Stands a value in for LARCH_EXPERT_CACHE (`Some(None)`: unset), and a profile in for the
+    /// shipped ones (its file's length, header id and histogram bytes).
+    static FAKE_CACHE: std::cell::Cell<Option<Option<&'static str>>> =
+        const { std::cell::Cell::new(None) };
+    static FAKE_PROFILE: std::cell::RefCell<Option<(u64, u64, Vec<u8>)>> =
+        const { std::cell::RefCell::new(None) };
+    /// Stands in for [`first_charge`]: the tiny fixture's experts are far under the real one.
+    static FAKE_FIRST_CHARGE: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    /// The check after the last load: the free memory it read and what it needed.
+    static LAST_CHECK: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+    /// The per-expert plans the loader loaded.
+    static SPLIT_PLANS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// LARCH_EXPERT_CACHE, as the loader reads it.
+fn cache_env() -> Option<String> {
+    #[cfg(test)]
+    if let Some(v) = FAKE_CACHE.get() {
+        return v.map(str::to_owned);
+    }
+    std::env::var("LARCH_EXPERT_CACHE").ok()
+}
+
+/// Routing profiles that ship with larch, each for the one model file it was recorded on: that
+/// file's length, [`header_id`] of its GGUF header, and the histogram (bench/routes).
+const PROFILES: &[(u64, u64, &[u8])] = &[(
+    17_117_951_808,
+    0x6a18_da79_eac0_85e8,
+    include_bytes!("../../../bench/routes/m13.experts"),
+)];
+
+/// FNV-1a of a GGUF's header, its first `header_len` bytes (to the data section): with the file's
+/// length, what tells a shipped profile's model file from another without reading the weights.
+fn header_id(path: &Path, header_len: u64) -> Option<u64> {
+    use std::io::Read;
+    let mut b = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(header_len)
+        .read_to_end(&mut b)
+        .ok()?;
+    let fnv = |h: u64, &x: &u8| (h ^ u64::from(x)).wrapping_mul(0x0100_0000_01b3);
+    (b.len() as u64 == header_len).then(|| b.iter().fold(0xcbf2_9ce4_8422_2325, fnv))
+}
+
+/// What a per-expert plan starts from: the histogram beside the model when it has counts, else a
+/// shipped profile of this very file (its length and [`header_id`]), else `start` as read (uniform
+/// or all zeros: [`plan_from`] keeps whole layers).
+fn profile(start: Histogram, path: &Path, header_len: u64) -> Histogram {
+    if plan_from(Some(&start)).is_some() {
+        return start;
+    }
+    let (len, layers, experts) = (start.file_len, start.layers, start.experts);
+    let pick = |table: &[(u64, u64, &[u8])]| {
+        (table.iter())
+            .filter(|p| p.0 == len)
+            .find(|p| header_id(path, header_len) == Some(p.1))
+            .and_then(|p| Histogram::parse(p.2, len, layers, experts))
+    };
+    #[cfg(test)]
+    if let Some(fake) =
+        FAKE_PROFILE.with_borrow(|f| f.as_ref().map(|(l, id, b)| pick(&[(*l, *id, b)])))
+    {
+        return fake.unwrap_or(start);
+    }
+    pick(PROFILES).unwrap_or(start)
 }
 
 /// The histogram a per-expert plan starts from; `None` keeps whole layers. `Histogram::for_load`
@@ -1913,8 +2020,9 @@ fn plan_from(start: Option<&Histogram>) -> Option<&Histogram> {
 /// `load(reserve)` and, when the check after that load found it short, `load` once more with the
 /// shortfall and `margin` reserved. A per-expert plan leaves under one expert's bytes unused, so
 /// the shortfall alone fits only when the second plan's slack is at least the first's; `margin`,
-/// the largest expert, makes it fit by construction. What the plan did not count (the MoE target on a
-/// 5070 Ti: about 118 MB) costs experts, not the placement.
+/// the largest expert, makes it fit by construction. A first plan charges what the check finds
+/// missing ([`split_uncounted`]) and this margin, so this second load runs only where that
+/// figure is short (another card).
 fn replan_on_shortfall<T>(
     reserve: u64,
     margin: u64,
@@ -2250,6 +2358,31 @@ fn load_check_need(
     } else {
         need
     }
+}
+
+/// What a per-expert load takes on `backend` past its plan's terms, which the check after the load
+/// finds missing: on the 5070 Ti the hybrid MoE target's first plans at 4 and 8 state slots came
+/// 173,162,418 and 173,470,819 B short (27 Nov), [`FREE_SWING`] of it the reserve's (now kept)
+/// and 101.9 to 102.2 MB this. Its whole-layer loads miss as much past their ledger, inside a
+/// layer's rounding.
+// ponytail: an allowance measured on one card, and charged only on CUDA, where it was. Find what
+// the load allocates past its ledger and charge that instead, if another card's first plan
+// re-plans (`larch_expert_cache_plan` twice in the fit diagnostics).
+fn split_uncounted(backend: larch_kernels::Backend) -> u64 {
+    match backend {
+        larch_kernels::Backend::Cuda => 98 << 20,
+        _ => 0,
+    }
+}
+
+/// What a per-expert load's first plan charges past its own terms: [`split_uncounted`] and the
+/// re-plan's `margin` ([`replan_margin`]), whose swing covers a low reading at the check.
+fn first_charge(backend: larch_kernels::Backend, margin: u64) -> u64 {
+    #[cfg(test)]
+    if let Some(fake) = FAKE_FIRST_CHARGE.get() {
+        return fake;
+    }
+    split_uncounted(backend) + margin
 }
 
 /// The re-plan's margin past the shortfall on `backend`, for `largest`-byte experts: one expert,
@@ -3210,11 +3343,33 @@ mod tests {
 
     /// No histogram plans as the cache off does, compared as the plan itself; recorded counts do not.
     #[test]
-    fn expert_cache_is_off_unless_asked() {
-        assert_eq!(super::expert_cache(""), None);
-        assert_eq!(super::expert_cache("0"), None);
-        assert_eq!(super::expert_cache("1"), Some(false));
-        assert_eq!(super::expert_cache("2"), Some(true));
+    fn expert_cache_is_static_by_default_where_it_reads_in_place() {
+        use super::expert_cache;
+        for default in [false, true] {
+            assert_eq!(expert_cache(Some(""), default), None);
+            assert_eq!(expert_cache(Some("0"), default), None);
+            assert_eq!(expert_cache(Some("1"), default), Some(false));
+            assert_eq!(expert_cache(Some("2"), default), Some(true));
+        }
+        assert_eq!(expert_cache(None, true), Some(false), "unset, on CUDA");
+        assert_eq!(expert_cache(None, false), None, "unset, elsewhere");
+    }
+
+    /// The shipped profiles parse as their model's histograms (the hybrid MoE target: 40 layers of
+    /// 256 experts), and [`super::header_id`] is FNV-1a 64 of the header's bytes.
+    #[test]
+    fn the_shipped_profiles_are_their_models_histograms() {
+        for &(len, _, b) in super::PROFILES {
+            let h = Histogram::parse(b, len, 40, 256).expect("a whole histogram");
+            assert!(super::plan_from(Some(&h)).is_some(), "with counts");
+        }
+        let p = std::env::temp_dir().join(format!("larch-header-id-{}", std::process::id()));
+        std::fs::write(&p, b"GGUF and more").unwrap();
+        // python: h = 0xcbf29ce484222325; for x in b"GGUF": h = ((h ^ x) * 0x100000001b3) % 2**64
+        assert_eq!(super::header_id(&p, 4), Some(0x69ea_617d_4935_d0bc));
+        assert_eq!(super::header_id(&p, 0), Some(0xcbf2_9ce4_8422_2325));
+        assert_eq!(super::header_id(&p, 99), None, "past the file");
+        std::fs::remove_file(&p).unwrap();
     }
 
     #[test]

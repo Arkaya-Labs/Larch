@@ -572,8 +572,7 @@ const HOST_ROWS: i64 = 3;
 /// model, so a restart's new plan never takes them away from one that had them.
 // ponytail: refused outright; remap adapter ids per split and keep the trained suffix resident when
 // learning has to run on a model past the room with the cache on.
-const NO_LEARNING: &str =
-    "larch_expert_cache_no_learning,unsetting LARCH_EXPERT_CACHE keeps whole layers";
+const NO_LEARNING: &str = "larch_expert_cache_no_learning,LARCH_EXPERT_CACHE=0 keeps whole layers";
 /// Recorded passes between two saves of the histogram.
 const SAVE_EVERY: u32 = 256;
 /// The same for a recording whole-layer load: a serve is killed, never dropped, and its replayed

@@ -1283,14 +1283,15 @@ pub(crate) fn hybrid_slots(seats: u32) -> u32 {
 /// hybrid (`slots` state slots) whose experts partly sit in host memory (`in_ram`), planned for
 /// `planned` slots: when it asks for more slots than the load holds, or for fewer than its host
 /// layers pay for. Elsewhere the slots grow live from free memory ([`Engine::grow_seats`]) or cost
-/// no host layer. Seats pick no other plan: only `LARCH_EXPERT_CACHE` takes the expert cache.
+/// no host layer. A split load's split layers count as its host layers (`in_ram`), and its plan
+/// takes the slots as whole layers' does: seats re-plan it alike. Whether a load splits follows
+/// its profile and `LARCH_EXPERT_CACHE`, never the seats.
 fn replan_due(want: u32, slots: u32, in_ram: bool, planned: Option<u32>) -> bool {
     slots > 0 && in_ram && planned.is_some_and(|p| want > slots || want < p)
 }
 
 /// The state slots a hybrid's many-chats plan pays for, with whole host layers and the prefill
-/// pool (the expert cache only where `LARCH_EXPERT_CACHE` asks: the loader's `cache`); fast mode
-/// plans for one. A load that already holds this many never switches up ([`Demand::seats`]).
+/// pool, or the split (the loader's `cache`); fast mode plans for one. A load that already holds this many never switches up ([`Demand::seats`]).
 pub(crate) const MANY_SEATS: u32 = 4;
 
 /// Requests waiting on full seats this long switch a fast plan to many chats.
@@ -9034,13 +9035,18 @@ mod tests {
             p.flags = larch_kernels::DeviceProps::CAP_GRAPHS;
             p.vram_total = 17_066_033_152;
             let l = *l.lock().unwrap();
-            p.vram_free = if l.weights_on_device != 0 {
-                after(h.load(Ordering::Relaxed), l.hybrid)
-            } else {
-                before
+            p.vram_free = match (l.weights_on_device, TAKEN.get()) {
+                (0, _) => before,
+                (on, Some(u)) => {
+                    before.saturating_sub(on + l.hybrid + l.activation + l.routers + u)
+                }
+                _ => after(h.load(Ordering::Relaxed), l.hybrid),
             };
             p
         })));
+        if crate::FAKE_FIRST_CHARGE.get().is_none() {
+            crate::FAKE_FIRST_CHARGE.set(Some(split_room()));
+        }
         let dev = larch_kernels::Device::open(CPU).unwrap();
         let s = Stream::new(&dev).unwrap();
         let mut cfg = larch_records::EffectiveConfig::defaults(larch_records::REGISTRY);
@@ -9056,9 +9062,17 @@ mod tests {
         };
         let loaded = Loaded::load(&mut opts, &mut cfg, load, weights, &s, 512, &mut partial);
         crate::FAKE_PROPS.set(None);
+        crate::FAKE_FIRST_CHARGE.set(None);
         std::fs::remove_file(&path).unwrap();
         let (n, l) = (host.load(Ordering::Relaxed), *ledger.lock().unwrap());
         (loaded.expect("the load fits"), cfg, n, l)
+    }
+
+    thread_local! {
+        /// A fake card that reads as a real one after the load: `before` less the weights on the
+        /// device, the state, activations and routers, and this past them ([`fake_cuda_seats`]'s
+        /// `after` then goes unread).
+        static TAKEN: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     }
 
     /// The model file [`fake_cuda_seats`] writes and loads for `before` and `forced`.
@@ -9149,11 +9163,8 @@ mod tests {
 
     /// Through the real loader on a fake CUDA card: a many-chats load (4 seats asked) plans whole
     /// layers with the stream pool, as a one-chat load does, with or without a recorded route
-    /// histogram beside the model: a card a layer short of the weights and four slots moves one
-    /// layer without the pool and two with it. The expert cache (only `LARCH_EXPERT_CACHE` takes
-    /// it) ran slower there (5070 Ti, the hybrid MoE target, W4@8: with no histogram it kept no
-    /// pool, prompt chunks beside decode rows 472 ms against 130, 26 Nov; from a recorded one
-    /// 188.5 tok/s against 237.1, 27 Nov).
+    /// histogram beside the model where a split's charge leaves no room: a card a layer short of
+    /// the weights and four slots moves one layer without the pool and two with it.
     #[test]
     fn a_many_chats_load_keeps_whole_layers_and_the_stream_pool() {
         use larch_model::{Histogram, MoeCfg};
@@ -9192,6 +9203,213 @@ mod tests {
             (2, 4),
             "a histogram beside the model"
         );
+    }
+
+    /// Through the real loader on a fake CUDA card a layer short of the tiny hybrid MoE's weights
+    /// at 4 slots: (split or host layers, weights on the device, state slots) of a load with
+    /// LARCH_EXPERT_CACHE at `cache` (`None`: unset), `beside` written beside the model, and a
+    /// shipped profile `shipped` for a file `delta` bytes longer than this one.
+    fn plan_with(
+        cache: Option<&'static str>,
+        beside: Option<&larch_model::Histogram>,
+        shipped: Option<(&larch_model::Histogram, u64)>,
+    ) -> (u32, u64, u32) {
+        let (props, c, bytes, l, slot) = fake_cuda_terms();
+        let need = |beside, seats| {
+            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+        };
+        let four = need(reserve_at(&l, slot, 4), 4) + crate::FREE_SWING;
+        let file = tiny::gguf(Arch::Qwen35Moe, 3);
+        let g = larch_model::gguf::Gguf::parse(&file).unwrap();
+        let layer: u64 = (g.tensors.iter())
+            .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
+            .map(|t| t.bytes)
+            .sum();
+        let short = bytes - layer + four + split_room();
+        let model = fake_cuda_path(short, None);
+        let hist = larch_model::Histogram::path(&model);
+        if let Some(h) = beside {
+            h.write(&hist).unwrap();
+        }
+        if let Some((h, delta)) = shipped {
+            std::fs::write(&model, &file).unwrap();
+            let id = crate::header_id(&model, g.data_offset).unwrap();
+            h.write(&hist).unwrap();
+            let b = std::fs::read(&hist).unwrap();
+            std::fs::remove_file(&hist).unwrap();
+            if let Some(h) = beside {
+                h.write(&hist).unwrap();
+            }
+            crate::FAKE_PROFILE.set(Some((file.len() as u64 + delta, id, b)));
+        }
+        crate::FAKE_CACHE.set(Some(cache));
+        let (loaded, _, n, l) = fake_cuda_seats(short, |_, _| 1 << 30, None, Some(4), None);
+        crate::FAKE_CACHE.set(None);
+        crate::FAKE_PROFILE.set(None);
+        let _ = std::fs::remove_file(&hist);
+        (n, l.weights_on_device, loaded.model.state_slots())
+    }
+
+    /// A static split load never writes the histogram beside the model: its split layers' in-place
+    /// rows go uncounted, so its counts would drift colder with use. The file keeps its bytes and
+    /// is never replaced (its inode), through the load and its drop.
+    #[cfg(unix)]
+    #[test]
+    fn a_static_split_load_writes_no_histogram() {
+        use larch_model::{Histogram, MoeCfg};
+        use std::os::unix::fs::MetadataExt;
+        let file = tiny::gguf(Arch::Qwen35Moe, 3);
+        let g = larch_model::gguf::Gguf::parse(&file).unwrap();
+        let c = ModelConfig::from_gguf(&g).unwrap();
+        let m = MoeCfg::from_gguf(&g, c.arch).unwrap().unwrap();
+        let mut hot = Histogram::uniform(file.len() as u64, c.n_layers, m.experts);
+        for (i, n) in hot.counts.iter_mut().enumerate() {
+            *n = (i % m.experts as usize) as u64;
+        }
+        let (props, c, bytes, l, slot) = fake_cuda_terms();
+        let need = |beside, seats| {
+            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+        };
+        let layer: u64 = (g.tensors.iter())
+            .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
+            .map(|t| t.bytes)
+            .sum();
+        let short =
+            bytes - layer + need(reserve_at(&l, slot, 4), 4) + crate::FREE_SWING + split_room();
+        let hist = larch_model::Histogram::path(&fake_cuda_path(short, None));
+        hot.write(&hist).unwrap();
+        let (bytes_before, ino) = (
+            std::fs::read(&hist).unwrap(),
+            hist.metadata().unwrap().ino(),
+        );
+        crate::FAKE_CACHE.set(Some(Some("1")));
+        let (loaded, _, n, _) = fake_cuda_seats(short, |_, _| 1 << 30, None, Some(4), None);
+        crate::FAKE_CACHE.set(None);
+        drop(loaded);
+        let after = (
+            std::fs::read(&hist).unwrap(),
+            hist.metadata().unwrap().ino(),
+        );
+        std::fs::remove_file(&hist).unwrap();
+        assert!(n > 0, "a split load");
+        assert!(
+            after == (bytes_before, ino),
+            "the file beside the model was rewritten"
+        );
+    }
+
+    /// What a split of the tiny hybrid MoE charges past whole layers' room in these tests, in place
+    /// of [`crate::first_charge`] (98 MiB and the swing are past all its weights): a quarter of
+    /// its first layer's experts (one expert), which [`fake_cuda_seats`] sets.
+    fn split_room() -> u64 {
+        let g = larch_model::gguf::Gguf::parse(&tiny::gguf(Arch::Qwen35Moe, 3)).unwrap();
+        let layer: u64 = (g.tensors.iter())
+            .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
+            .map(|t| t.bytes)
+            .sum();
+        layer / 4
+    }
+
+    /// On a card that reads as a real one after the load (one that takes past the plan's terms what
+    /// the first plan charges for, [`crate::first_charge`]), a split load plans once: the first plan charges what the check
+    /// after the load would find missing (on the 5070 Ti the hybrid MoE target's first plan came
+    /// 173 MB short and planned again, 15 split layers becoming 20).
+    #[test]
+    fn a_split_load_plans_once() {
+        use larch_model::{Histogram, MoeCfg};
+        let file = tiny::gguf(Arch::Qwen35Moe, 3);
+        let g = larch_model::gguf::Gguf::parse(&file).unwrap();
+        let c = ModelConfig::from_gguf(&g).unwrap();
+        let m = MoeCfg::from_gguf(&g, c.arch).unwrap().unwrap();
+        let mut hot = Histogram::uniform(file.len() as u64, c.n_layers, m.experts);
+        for (i, n) in hot.counts.iter_mut().enumerate() {
+            *n = (i % m.experts as usize) as u64;
+        }
+        let (props, c, bytes, l, slot) = fake_cuda_terms();
+        let need = |beside, seats| {
+            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+        };
+        let layer: u64 = (g.tensors.iter())
+            .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
+            .map(|t| t.bytes)
+            .sum();
+        let short =
+            bytes - layer + need(reserve_at(&l, slot, 4), 4) + crate::FREE_SWING + split_room();
+        let hist = larch_model::Histogram::path(&fake_cuda_path(short, None));
+        hot.write(&hist).unwrap();
+        crate::FAKE_CACHE.set(Some(None));
+        // The plan's own slack on this card: what the check finds spare when nothing is taken and
+        // the first plan charges nothing.
+        TAKEN.set(Some(0));
+        crate::FAKE_FIRST_CHARGE.set(Some(0));
+        fake_cuda_seats(short, |_, _| 0, None, Some(4), None);
+        let (free, need) = crate::LAST_CHECK.get();
+        let spare = free - need;
+        // The card takes half the charge past that: a plan that did not charge it re-plans.
+        TAKEN.set(Some(spare + split_room() / 2));
+        crate::SPLIT_PLANS.set(0);
+        let (_, _, n, l) = fake_cuda_seats(short, |_, _| 0, None, Some(4), None);
+        let plans = crate::SPLIT_PLANS.get();
+        crate::FAKE_CACHE.set(Some(Some("0")));
+        let (_, _, _, whole) = fake_cuda_seats(short, |_, _| 0, None, Some(4), None);
+        TAKEN.set(None);
+        crate::FAKE_CACHE.set(None);
+        std::fs::remove_file(&hist).unwrap();
+        assert!(
+            n > 0 && l.weights_on_device > whole.weights_on_device,
+            "a split load"
+        );
+        assert_eq!(plans, 1, "one plan, one load");
+    }
+
+    /// A plain load (LARCH_EXPERT_CACHE unset) of a hybrid MoE on CUDA splits from a profile shipped
+    /// for its very file, matched by length and header; one for a file a byte longer is another
+    /// model's. A histogram beside the model wins over the shipped profile. `=0`, no profile, or
+    /// another file's load what whole layers load (the pool's plan), byte for byte; `=1` splits
+    /// from the shipped profile too.
+    #[test]
+    fn a_plain_load_splits_from_its_shipped_profile() {
+        use larch_model::{Histogram, MoeCfg};
+        let file = tiny::gguf(Arch::Qwen35Moe, 3);
+        let g = larch_model::gguf::Gguf::parse(&file).unwrap();
+        let c = ModelConfig::from_gguf(&g).unwrap();
+        let m = MoeCfg::from_gguf(&g, c.arch).unwrap().unwrap();
+        let len = file.len() as u64;
+        let mut hot = Histogram::uniform(len, c.n_layers, m.experts);
+        for (i, n) in hot.counts.iter_mut().enumerate() {
+            *n = (i % m.experts as usize) as u64;
+        }
+        let even = Histogram {
+            counts: vec![5; hot.counts.len()],
+            ..hot.clone()
+        };
+        crate::FAKE_POOL.set(Some(
+            (g.tensors.iter())
+                .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
+                .map(|t| t.bytes)
+                .sum(),
+        ));
+        let whole = plan_with(Some("0"), None, None);
+        let split = plan_with(None, None, Some((&hot, 0)));
+        let got = [
+            plan_with(None, None, None),
+            plan_with(None, None, Some((&hot, 1))),
+            plan_with(Some("0"), None, Some((&hot, 0))),
+        ];
+        let beside = plan_with(None, Some(&hot), None);
+        let even_beside = plan_with(None, Some(&even), None);
+        let wins = plan_with(None, Some(&even), Some((&hot, 0)));
+        let asked = plan_with(Some("1"), None, Some((&hot, 0)));
+        crate::FAKE_POOL.set(None);
+        assert_eq!(whole.0, 2, "whole layers move the pool's layer too");
+        assert!(split.0 > 0 && split.1 > whole.1, "{split:?} {whole:?}");
+        assert_eq!(got, [whole; 3], "no profile, another file's, =0");
+        assert_eq!(beside, split, "the file beside, as the shipped one");
+        assert!(
+            even_beside != split && wins == even_beside,
+            "the file beside wins"
+        );
+        assert_eq!(asked, split, "=1");
     }
 
     /// Through the real loader on a fake CUDA card: a host layer moved without the pool that
@@ -9280,6 +9498,16 @@ mod tests {
         assert!(
             !replan_due(4, 4, true, Some(1)),
             "crossing 4 seats on slots it holds picks no other plan"
+        );
+        // A split load: its split layers are its host layers.
+        assert!(replan_due(8, 4, true, Some(1)), "a split past its slots");
+        assert!(
+            !replan_due(4, 8, true, Some(1)),
+            "a split on slots it holds"
+        );
+        assert!(
+            !replan_due(8, 8, false, Some(1)),
+            "a split that kept every expert"
         );
     }
 
