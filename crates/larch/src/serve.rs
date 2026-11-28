@@ -44,6 +44,7 @@ use clap::Args;
 use larch_model::{ToolCall as HistoryCall, ToolMessage, gguf::Gguf};
 use larch_records::{
     DeviceSample, EngineSample, HealthState, Outcome, ReadFrom, Record, RequestSpan, RingReader,
+    knob_id,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -66,6 +67,10 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// The longest a stream stays silent while its request waits, prefills or holds back a call: agent
 /// clients abort a stream idle for long (Claude Code's watchdog), and a ping is bytes on the wire.
 const PING: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 });
+/// The context `larch serve` asks for when `--set max_context` does not choose one: room for an
+/// agent client's system prompt, tools and a working conversation. On the 35B MoE on a 24 GB Mac
+/// it fits with every expert layer on the GPU; 64k moves seven to host memory (27 Nov 2026).
+const SERVE_CONTEXT: u32 = 32_768;
 /// `/v1/completions`' `max_tokens` when unset, as OpenAI and vLLM have it.
 const COMPLETION_TOKENS: u32 = 16;
 /// How far back `/api/status`'s throughput reaches, in buckets of [`BUCKET_MS`].
@@ -107,6 +112,12 @@ pub struct Options {
     /// tool list too large for the grammar runs without it.
     #[arg(long)]
     pub tool_grammar: bool,
+    /// Thinking for a request that does not choose: `on` or `off`. Unset, an OpenAI request thinks
+    /// as the chat template does by default and an Anthropic one does not think, as Anthropic's
+    /// API has it. A request chooses with OpenAI's `reasoning_effort` (`none` is off),
+    /// `chat_template_kwargs.enable_thinking` or Ollama's `think`, or with Anthropic's `thinking`.
+    #[arg(long, value_parser = ["on", "off"])]
+    pub thinking: Option<String>,
     /// Startup knob assignment, repeatable.
     #[arg(long = "set")]
     pub set: Vec<String>,
@@ -152,10 +163,33 @@ pub fn run(opts: Options, err: &mut impl Write) -> Result<()> {
     if !env::var("LARCH_PREFIX_CACHE_BLOCKS").is_ok_and(|v| v.parse::<usize>().is_ok()) {
         load.prefix_cache_blocks = usize::MAX;
     }
+    // Agent clients send 10-20k tokens before the conversation starts (Claude Code's first
+    // request is ~12k), past the engine's 8,192. Without `--set max_context`, serve asks for
+    // SERVE_CONTEXT and halves down to the engine's default until the model fits.
+    let chosen = (load.knob_overrides.iter()).any(|(k, _)| *k == knob_id::MAX_CONTEXT);
+    let least = load.max_context;
+    if !chosen {
+        load.max_context = SERVE_CONTEXT.max(least);
+    }
     // Bound before the weights load, so a taken port fails at once: under the supervisor a bind
     // that failed after the load would reload the whole model on every restart.
     let listener = TcpListener::bind((opts.host.as_str(), opts.port))?;
-    let larch = Larch::load(load)?;
+    let larch = loop {
+        match Larch::load(load.clone()) {
+            Err(crate::LoadError::DoesNotFit { need, have })
+                if !chosen && load.max_context > least =>
+            {
+                let next = (load.max_context / 2).max(least);
+                writeln!(
+                    err,
+                    "a {}-token context does not fit ({need} bytes needed, {have} free): trying {next}",
+                    load.max_context
+                )?;
+                load.max_context = next;
+            }
+            loaded => break loaded?,
+        }
+    };
     let rejected: Vec<_> = larch
         .rejected_overrides()
         .iter()
@@ -168,12 +202,14 @@ pub fn run(opts: Options, err: &mut impl Write) -> Result<()> {
     writeln!(err, "{}", crate::supervise::READY_LINE)?;
     writeln!(
         err,
-        "serving {name} on http://{}/v1",
-        listener.local_addr()?
+        "serving {name} on http://{}/v1 with a {}-token context (--set max_context changes it)",
+        listener.local_addr()?,
+        larch.deployment().ctx_max
     )?;
     let server = Server {
         xml,
         tool_grammar: opts.tool_grammar,
+        thinking: opts.thinking.as_deref().map(|t| t == "on"),
         ..Server::new(larch, name, key, opts.tool_format.as_deref())
     };
     serve(&server, listener);
@@ -199,6 +235,8 @@ struct Server {
     /// The template thinks by default: it renders differently with thinking off. A forced call
     /// then arms after `</think>`, and a JSON answer renders with thinking off.
     thinks: bool,
+    /// `--thinking`: whether a request that does not choose thinks.
+    thinking: Option<bool>,
     /// Start time in seconds: `created` in responses, and in ids so they differ across restarts.
     started: u64,
     watch: Mutex<Watch>,
@@ -233,6 +271,7 @@ impl Server {
             xml: false,
             tool_grammar: false,
             thinks,
+            thinking: None,
             started,
             watch,
             convs: Mutex::default(),
@@ -260,6 +299,7 @@ impl Server {
         tools: Vec<Value>,
         mode: Option<Mode>,
         schema: Option<&Value>,
+        thinking: Option<bool>,
     ) -> Result<Tools, Fail> {
         let forced = mode.as_ref().is_some_and(|m| *m != Mode::Auto);
         if forced && schema.is_some() {
@@ -314,7 +354,7 @@ impl Server {
         // JSON answer stays untriggered, as a triggered grammar re-arms to free text after it: its
         // prompt renders with thinking off instead.
         let grammar = grammar.map(|mut g| {
-            if forced && self.thinks {
+            if forced && self.thinks && thinking != Some(false) {
                 g.trigger = Some("</think>".into());
             }
             g
@@ -378,6 +418,22 @@ impl Server {
         (self.convs.lock().unwrap_or_else(PoisonError::into_inner))
             .done(&session, r.is_ok().then_some(kept));
         r
+    }
+
+    /// The template's `enable_thinking` for a request that `asked` for thinking or not: a JSON
+    /// answer renders with thinking off (its grammar holds from the first token), and a template
+    /// that renders the same either way gets the default.
+    fn thinking_for(&self, asked: Option<bool>, json: bool) -> Option<bool> {
+        match self.thinks {
+            true if json => Some(false),
+            true => asked,
+            false => None,
+        }
+    }
+
+    /// Whether a request rendered with `thinking` thinks, so its think blocks can stream back.
+    fn shows(&self, thinking: Option<bool>) -> bool {
+        self.thinks && thinking != Some(false)
     }
 
     /// Whether the model has recurrent state, which only a kept conversation session resumes.
@@ -999,6 +1055,24 @@ struct ChatIn {
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
     response_format: Option<Value>,
+    /// `none` turns thinking off, any other effort on.
+    reasoning_effort: Option<String>,
+    /// vLLM's and llama.cpp's way through to the template; larch reads `enable_thinking`.
+    chat_template_kwargs: Option<Value>,
+    /// Ollama's: `false` turns thinking off; `true` or an effort turns it on.
+    think: Option<Value>,
+}
+
+impl ChatIn {
+    /// Whether the request asks to think, by any of the fields clients use for it.
+    fn thinking(&self) -> Option<bool> {
+        let kwargs =
+            (self.chat_template_kwargs.as_ref()).and_then(|k| k["enable_thinking"].as_bool());
+        let think = (self.think.as_ref())
+            .and_then(|t| t.as_bool().or_else(|| t.as_str().map(|e| e != "none")));
+        let effort = self.reasoning_effort.as_deref().map(|e| e != "none");
+        kwargs.or(think).or(effort)
+    }
 }
 
 #[derive(Deserialize)]
@@ -1164,13 +1238,15 @@ fn chat(server: &Server, raw: &[u8], conn: &TcpStream, out: &mut &TcpStream) -> 
             _ => return Err(bad(format!("tool_choice {c} is not supported"))),
         },
     };
-    let (tools, family, grammar, auto) = server.tools(req.tools, mode, schema.as_ref())?;
+    let thinking = server.thinking_for(req.thinking().or(server.thinking), schema.is_some());
+    let shows = server.shows(thinking);
+    let (tools, family, grammar, auto) =
+        server.tools(req.tools, mode, schema.as_ref(), thinking)?;
     let messages = req
         .messages
         .into_iter()
         .map(openai_message)
         .collect::<Result<Vec<_>, _>>()?;
-    let thinking = (schema.is_some() && server.thinks).then_some(false);
     let (tokens, history) = render(server, messages, &tools, thinking, server.keeps())?;
     let p = GenParams {
         max_tokens: max_tokens(
@@ -1183,6 +1259,7 @@ fn chat(server: &Server, raw: &[u8], conn: &TcpStream, out: &mut &TcpStream) -> 
         seed: req.seed,
         stop: Stop::strings(req.stop),
         grammar,
+        stream_thinking: shows,
         ..GenParams::default()
     };
     let stream = server.generate(tokens, history, p, auto)?;
@@ -1198,6 +1275,9 @@ fn chat(server: &Server, raw: &[u8], conn: &TcpStream, out: &mut &TcpStream) -> 
         let a = drive(stream, family, &tools, |_| alive(conn))?;
         let content = (a.calls.is_empty() || !a.text.trim().is_empty()).then_some(&a.text);
         let mut message = json!({"role": "assistant", "content": content});
+        if let Some(thought) = a.thinking.as_ref().filter(|_| shows) {
+            message["reasoning_content"] = thought.as_str().into();
+        }
         if !a.calls.is_empty() {
             message["tool_calls"] = openai_calls(server, request, &a.calls).into();
         }
@@ -1221,10 +1301,12 @@ fn chat(server: &Server, raw: &[u8], conn: &TcpStream, out: &mut &TcpStream) -> 
     )?;
     let result = drive(stream, family, &tools, |piece| match piece {
         // A closed socket takes the first write after it, so the client is asked first.
-        None => alive(conn).and_then(|()| ping(out)),
+        Piece::Ping => alive(conn).and_then(|()| ping(out)),
         // Text held back as a possible call sends nothing, so the client is asked directly.
-        Some("") => alive(conn),
-        Some(piece) => data(out, &chunk(json!({"content": piece}), None)),
+        Piece::Text("") | Piece::Think("") => alive(conn),
+        Piece::Text(piece) => data(out, &chunk(json!({"content": piece}), None)),
+        // As DeepSeek, vLLM and llama.cpp send it.
+        Piece::Think(piece) => data(out, &chunk(json!({"reasoning_content": piece}), None)),
     });
     match result {
         Ok(a) => {
@@ -1339,9 +1421,9 @@ fn completions(
     }
     start_events(out)?;
     let result = drive(stream, None, &[], |piece| match piece {
-        None => alive(conn).and_then(|()| ping(out)),
-        Some("") => alive(conn),
-        Some(piece) => data(out, &choice(piece, None)),
+        Piece::Ping => alive(conn).and_then(|()| ping(out)),
+        Piece::Text("") | Piece::Think(_) => alive(conn),
+        Piece::Text(piece) => data(out, &choice(piece, None)),
     });
     match result {
         Ok(a) => {
@@ -1414,6 +1496,23 @@ struct PromptIn {
     #[serde(default)]
     tools: Vec<ToolIn>,
     tool_choice: Option<Value>,
+    /// `{"type": "enabled" | "adaptive" | "disabled"}`; unset is no thinking, as in Anthropic's API.
+    /// `budget_tokens` is ignored, and `display: "omitted"` sends no thinking text.
+    thinking: Option<Value>,
+}
+
+impl PromptIn {
+    /// Whether the request asks to think, and whether its thinking text goes back to the client.
+    fn thinking(&self) -> Result<(Option<bool>, bool), Fail> {
+        let Some(t) = &self.thinking else {
+            return Ok((None, true));
+        };
+        match t["type"].as_str() {
+            Some("enabled" | "adaptive") => Ok((Some(true), t["display"] != "omitted")),
+            Some("disabled") => Ok((Some(false), false)),
+            _ => Err(bad(format!("thinking {t} is not supported"))),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1500,7 +1599,10 @@ fn anthropic_prompt(
     req: PromptIn,
     schema: Option<&Value>,
     keep: bool,
-) -> Result<(Vec<u32>, u32, Tools), Fail> {
+) -> Result<(Vec<u32>, u32, Tools, Thinking), Fail> {
+    let (asked, display) = req.thinking()?;
+    let thinking = server.thinking_for(asked.or(server.thinking).or(Some(false)), schema.is_some());
+    let shows = display && server.shows(thinking);
     let tools = req
         .tools
         .into_iter()
@@ -1519,7 +1621,7 @@ fn anthropic_prompt(
         (Some("tool"), Some(name)) => Some(Mode::Named(name.into())),
         _ => return Err(bad(format!("tool_choice {choice} is not supported"))),
     };
-    let (tools, family, grammar, auto) = server.tools(tools, mode, schema)?;
+    let (tools, family, grammar, auto) = server.tools(tools, mode, schema, thinking)?;
     let mut history = Vec::new();
     if let Some(system) = &req.system {
         // Claude Code sends its billing header as a system block, which the Anthropic API reads
@@ -1552,10 +1654,12 @@ fn anthropic_prompt(
     for m in req.messages {
         anthropic_message(m, &mut history)?;
     }
-    let thinking = (schema.is_some() && server.thinks).then_some(false);
     let (tokens, end) = render(server, history, &tools, thinking, keep)?;
-    Ok((tokens, end, (tools, family, grammar, auto)))
+    Ok((tokens, end, (tools, family, grammar, auto), shows))
 }
+
+/// Whether an Anthropic answer streams its thinking back, as a `thinking` block.
+type Thinking = bool;
 
 /// `POST /v1/messages/count_tokens`: the loaded tokenizer's count, as `/v1/messages` prefills it.
 fn count_tokens(server: &Server, raw: &[u8], out: &mut impl Write) -> Result<(), Fail> {
@@ -1578,15 +1682,16 @@ fn messages(
         Some(f) if f["type"] == "json_schema" => Some(&f["schema"]),
         Some(f) => return Err(bad(format!("output format {f} is not supported"))),
     };
-    let (tokens, history, (tools, family, grammar, auto)) =
+    let (tokens, history, (tools, family, grammar, auto), shows) =
         anthropic_prompt(server, req.prompt, schema, server.keeps())?;
     let prompt_tokens = tokens.len();
     // 0 here is a cap the context could not hold: max_tokens refuses a 0 from the client.
     let cap = max_tokens(server, Some(req.max_tokens), prompt_tokens)?;
-    // ponytail: `thinking` is ignored and answers carry no thinking blocks; map it to
-    // GenParams::thinking_budget when a thinking model serves Anthropic clients.
+    // ponytail: `budget_tokens` is ignored; map it to GenParams::thinking_budget when a client's
+    // turns show long think blocks under a budget.
     let p = GenParams {
         max_tokens: cap,
+        stream_thinking: shows,
         temperature: req.temperature,
         top_p: req.top_p,
         // The engine samples from its 64 best candidates and refuses more; Anthropic's API takes
@@ -1609,6 +1714,9 @@ fn messages(
     let tool_use = |i: usize, c: &toolcall::ToolCall, input: &Value| json!({"type": "tool_use", "id": server.call_id(request, i), "name": c.name, "input": input});
     if !req.stream {
         let a = drive(stream, family, &tools, |_| alive(conn))?;
+        // Larch signs nothing: a client sends the block back, and its history drops it.
+        let thought = (a.thinking.as_ref().filter(|_| shows))
+            .map(|t| json!({"type": "thinking", "thinking": t, "signature": ""}));
         let text = (!a.text.trim().is_empty() || a.calls.is_empty())
             .then(|| json!({"type": "text", "text": a.text}));
         let calls = a
@@ -1618,7 +1726,7 @@ fn messages(
             .map(|(i, c)| tool_use(i, c, &c.args));
         let reply = json!({
             "id": id, "type": "message", "role": "assistant", "model": server.name,
-            "content": text.into_iter().chain(calls).collect::<Vec<_>>(),
+            "content": thought.into_iter().chain(text).chain(calls).collect::<Vec<_>>(),
             "stop_reason": stop_reason(&a), "stop_sequence": stop_sequence(&a),
             "usage": anthropic_usage(a.usage),
         });
@@ -1633,33 +1741,53 @@ fn messages(
         "usage": {"input_tokens": prompt_tokens, "output_tokens": 0},
     }});
     event(out, &start)?;
-    let mut open = false;
+    // The open block's index and whether it is the thinking one; blocks number from 0 in order.
+    let mut open: Option<(usize, bool)> = None;
     let result = drive(stream, family, &tools, |piece| {
-        let piece = match piece {
-            None => return alive(conn).and_then(|()| event(out, &json!({"type": "ping"}))),
+        let (piece, thinking) = match piece {
+            Piece::Ping => return alive(conn).and_then(|()| event(out, &json!({"type": "ping"}))),
             // Text held back as a possible call sends nothing, so the client is asked directly.
-            Some("") => return alive(conn),
-            Some(piece) => piece,
+            Piece::Text("") | Piece::Think("") => return alive(conn),
+            Piece::Think(_) if !shows => return alive(conn),
+            Piece::Text(piece) => (piece, false),
+            Piece::Think(piece) => (piece, true),
         };
-        if !open {
-            let block = json!({"type": "text", "text": ""});
-            event(
-                out,
-                &json!({"type": "content_block_start", "index": 0, "content_block": block}),
-            )?;
-            open = true;
-        }
-        let delta = json!({"type": "text_delta", "text": piece});
+        let index = match open {
+            Some((index, kind)) if kind == thinking => index,
+            _ => {
+                let index = match open {
+                    Some((index, _)) => {
+                        event(out, &json!({"type": "content_block_stop", "index": index}))?;
+                        index + 1
+                    }
+                    None => 0,
+                };
+                let block = match thinking {
+                    true => json!({"type": "thinking", "thinking": "", "signature": ""}),
+                    false => json!({"type": "text", "text": ""}),
+                };
+                event(
+                    out,
+                    &json!({"type": "content_block_start", "index": index, "content_block": block}),
+                )?;
+                open = Some((index, thinking));
+                index
+            }
+        };
+        let delta = match thinking {
+            true => json!({"type": "thinking_delta", "thinking": piece}),
+            false => json!({"type": "text_delta", "text": piece}),
+        };
         event(
             out,
-            &json!({"type": "content_block_delta", "index": 0, "delta": delta}),
+            &json!({"type": "content_block_delta", "index": index, "delta": delta}),
         )
     });
     match result {
         Ok(a) => {
-            let first = usize::from(open);
-            if open {
-                event(out, &json!({"type": "content_block_stop", "index": 0}))?;
+            let first = open.map_or(0, |(index, _)| index + 1);
+            if let Some((index, _)) = open {
+                event(out, &json!({"type": "content_block_stop", "index": index}))?;
             }
             for (i, c) in a.calls.iter().enumerate() {
                 let index = first + i;
@@ -1715,9 +1843,22 @@ fn anthropic_usage(u: Usage) -> Value {
 /// and counts.
 struct Answer {
     text: String,
+    /// The withheld think blocks' text, when there was any.
+    thinking: Option<String>,
     calls: Vec<toolcall::ToolCall>,
     finish: Finish,
     usage: Usage,
+}
+
+/// What [`drive`] hands its caller as an answer runs.
+enum Piece<'a> {
+    /// Nothing went out for [`PING`]: a stream sends its keepalive.
+    Ping,
+    /// Answer text safe to send; empty when the text so far is held back as a possible call, so a
+    /// caller that streams nothing still notices the client leave.
+    Text(&'a str),
+    /// Think-block text, for a request with `stream_thinking`.
+    Think(&'a str),
 }
 
 /// Runs `stream` to its end and returns the answer, handing `piece` each run of text as it becomes
@@ -1729,7 +1870,7 @@ fn drive(
     stream: TextStream,
     family: Option<Family>,
     tools: &[Value],
-    mut piece: impl FnMut(Option<&str>) -> io::Result<()>,
+    mut piece: impl FnMut(Piece) -> io::Result<()>,
 ) -> Result<Answer, Cut> {
     let (cancel, request) = (stream.handle.canceller(), stream.request_id());
     // The stream blocks until the engine's next token, so it is read on a thread of its own and
@@ -1760,13 +1901,13 @@ fn answer(
     request: u64,
     family: Option<Family>,
     tools: &[Value],
-    piece: &mut impl FnMut(Option<&str>) -> io::Result<()>,
+    piece: &mut impl FnMut(Piece) -> io::Result<()>,
 ) -> Result<Answer, Cut> {
     let (mut text, mut sent, mut quiet) = (String::new(), 0, Instant::now());
     loop {
         // Checked per event too: text held back as a possible call arrives but sends nothing.
         if quiet.elapsed() >= PING {
-            piece(None).map_err(Cut::Client)?;
+            piece(Piece::Ping).map_err(Cut::Client)?;
             quiet = Instant::now();
         }
         let event = match events.recv_timeout(PING.saturating_sub(quiet.elapsed())) {
@@ -1778,11 +1919,15 @@ fn answer(
             }
         };
         match event {
-            TextEvent::Prefilled { .. } | TextEvent::Thinking { .. } => {}
+            TextEvent::Prefilled { .. } => {}
+            TextEvent::Thinking { delta } => {
+                piece(Piece::Think(&delta)).map_err(Cut::Client)?;
+                quiet = Instant::now();
+            }
             TextEvent::Text { delta, .. } => {
                 text.push_str(&delta);
                 let safe = family.map_or(text.len(), |f| hold(f, &text, sent));
-                piece(Some(&text[sent..safe])).map_err(Cut::Client)?;
+                piece(Piece::Text(&text[sent..safe])).map_err(Cut::Client)?;
                 if safe > sent {
                     quiet = Instant::now();
                 }
@@ -1792,6 +1937,7 @@ fn answer(
                 finish,
                 usage,
                 timings,
+                thinking,
                 ..
             } => {
                 // Kept out of the API body: picks forced past the model's 64 candidates, the number
@@ -1807,10 +1953,11 @@ fn answer(
                     toolcall::coerce(c, tools);
                 }
                 let end = end.max(sent);
-                piece(Some(&text[sent..end])).map_err(Cut::Client)?;
+                piece(Piece::Text(&text[sent..end])).map_err(Cut::Client)?;
                 text.truncate(end);
                 return Ok(Answer {
                     text,
+                    thinking,
                     calls,
                     finish,
                     usage,
@@ -2039,7 +2186,33 @@ mod tests {
 
         /// [`Fixture::new`] with `edit` applied to the server before it serves.
         fn with(key: Option<&str>, pace: Duration, edit: impl FnOnce(&mut Server)) -> Self {
-            let g = Gguf::parse(&std::fs::read(tiny::TOKENIZER_GGUF).unwrap()).unwrap();
+            Self::with_tokens(key, pace, &[], edit)
+        }
+
+        /// [`Fixture::with`] on a vocabulary that ends in `extra`, control tokens (`<think>`)
+        /// a script says by id: the vocabulary's size plus their place in `extra`.
+        fn with_tokens(
+            key: Option<&str>,
+            pace: Duration,
+            extra: &[&str],
+            edit: impl FnOnce(&mut Server),
+        ) -> Self {
+            use larch_model::gguf::Value as V;
+            let mut g = Gguf::parse(&std::fs::read(tiny::TOKENIZER_GGUF).unwrap()).unwrap();
+            for (k, v) in g.kv.iter_mut() {
+                match (k.as_str(), v) {
+                    ("tokenizer.ggml.tokens", V::Arr(tokens)) => {
+                        tokens.extend(extra.iter().map(|t| V::Str((*t).into())));
+                    }
+                    ("tokenizer.ggml.token_type", V::Arr(types)) => {
+                        types.extend(extra.iter().map(|_| V::I32(3)));
+                    }
+                    _ => {}
+                }
+            }
+            let kv: Vec<_> = g.kv.into_iter().collect();
+            let none: &[(String, Vec<u64>, u32, Vec<u8>)] = &[];
+            let g = Gguf::parse(&larch_model::gguf::write(&kv, none)).unwrap();
             let tokenizer = Tokenizer::from_gguf(&g).unwrap();
             let vocab = g
                 .get("tokenizer.ggml.tokens")
@@ -2265,6 +2438,143 @@ mod tests {
             .filter_map(|c| c["choices"][0]["text"].as_str())
             .collect();
         assert_eq!(text, "ok");
+    }
+
+    /// Think blocks stream apart from the answer: OpenAI's `reasoning_content`, Anthropic's
+    /// `thinking` block when the request turned thinking on, and nothing when it is off.
+    #[test]
+    fn thinking_streams_apart_from_the_answer() {
+        let f = Fixture::with_tokens(None, Duration::ZERO, &["<think>", "</think>"], |s| {
+            s.thinks = true;
+        });
+        let g = Gguf::parse(&std::fs::read(tiny::TOKENIZER_GGUF).unwrap()).unwrap();
+        let base = g
+            .get("tokenizer.ggml.tokens")
+            .unwrap()
+            .as_arr()
+            .unwrap()
+            .len() as u32;
+        let (open, close) = (base, base + 1);
+        let say = || {
+            f.said.lock().unwrap().push_back(open);
+            f.say("pondering");
+            f.said.lock().unwrap().push_back(close);
+            f.say("Hello");
+        };
+        let user = json!([{"role": "user", "content": "hi"}]);
+        let reasoning = |events: &[Value], key: &str| -> String {
+            (events.iter())
+                .filter_map(|e| e["choices"][0]["delta"][key].as_str())
+                .collect()
+        };
+
+        say();
+        let (_, body) = f.post(
+            "/v1/chat/completions",
+            &json!({"messages": user, "stream": true}),
+        );
+        let ev = events(&body);
+        assert!(
+            reasoning(&ev, "reasoning_content").contains("pondering"),
+            "{body}"
+        );
+        assert_eq!(reasoning(&ev, "content"), "Hello", "{body}");
+
+        say();
+        let (_, body) = f.post("/v1/chat/completions", &json!({"messages": user}));
+        let message = &json(&body)["choices"][0]["message"];
+        assert!(
+            message["reasoning_content"]
+                .as_str()
+                .unwrap()
+                .contains("pondering")
+        );
+        assert_eq!(message["content"], "Hello");
+
+        say();
+        let off = json!({"messages": user, "stream": true, "reasoning_effort": "none"});
+        let (_, body) = f.post("/v1/chat/completions", &off);
+        assert!(!body.contains("pondering"), "{body}");
+
+        let starts = |body: &str| -> Vec<Value> {
+            (events(body).into_iter())
+                .filter(|e| e["type"] == "content_block_start")
+                .map(|e| json!([e["index"], e["content_block"]["type"]]))
+                .collect()
+        };
+        let ask = |thinking: Value| {
+            let mut req = json!({"max_tokens": 100, "stream": true, "messages": user});
+            if !thinking.is_null() {
+                req["thinking"] = thinking;
+            }
+            say();
+            f.post("/v1/messages", &req).1
+        };
+        let body = ask(json!({"type": "adaptive"}));
+        assert_eq!(
+            starts(&body),
+            [json!([0, "thinking"]), json!([1, "text"])],
+            "{body}"
+        );
+        let thought: String = (events(&body).iter())
+            .filter_map(|e| e["delta"]["thinking"].as_str())
+            .collect();
+        assert!(thought.contains("pondering"), "{body}");
+        // Anthropic's default is no thinking, and `omitted` keeps the text back.
+        for thinking in [
+            Value::Null,
+            json!({"type": "adaptive", "display": "omitted"}),
+        ] {
+            let body = ask(thinking);
+            assert_eq!(starts(&body), [json!([0, "text"])], "{body}");
+            assert!(!body.contains("pondering"), "{body}");
+        }
+        let (status, _) = f.post(
+            "/v1/messages",
+            &json!({"max_tokens": 1, "messages": user, "thinking": {"type": "sometimes"}}),
+        );
+        assert_eq!(status, 400);
+    }
+
+    /// The request's choice reaches the template: Qwen 3.5 renders an empty think block with
+    /// thinking off, and an Anthropic request without `thinking` renders as off.
+    #[test]
+    fn a_request_turns_thinking_on_and_off() {
+        let (larch, tokenizer) = tiny_model(larch_model::Arch::Llama);
+        let f = Fixture::serving(larch, tokenizer);
+        let user = json!([{"role": "user", "content": "hi"}]);
+        let count = |thinking: Value| {
+            let mut req = json!({"messages": user});
+            if !thinking.is_null() {
+                req["thinking"] = thinking;
+            }
+            let (_, body) = f.post("/v1/messages/count_tokens", &req);
+            json(&body)["input_tokens"].as_u64().unwrap()
+        };
+        let (on, off) = (
+            count(json!({"type": "enabled", "budget_tokens": 1024})),
+            count(Value::Null),
+        );
+        assert!(off > on, "off {off} on {on}");
+        assert_eq!(count(json!({"type": "disabled"})), off);
+        let prompt = |extra: Value| {
+            let mut req = json!({"messages": user, "max_tokens": 1});
+            req.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let (status, body) = f.post("/v1/chat/completions", &req);
+            assert_eq!(status, 200, "{body}");
+            json(&body)["usage"]["prompt_tokens"].as_u64().unwrap()
+        };
+        assert_eq!(prompt(json!({})), on);
+        for off_ in [
+            json!({"reasoning_effort": "none"}),
+            json!({"chat_template_kwargs": {"enable_thinking": false}}),
+            json!({"think": false}),
+        ] {
+            assert_eq!(prompt(off_.clone()), off, "{off_}");
+        }
+        assert_eq!(prompt(json!({"reasoning_effort": "high"})), on);
     }
 
     #[test]
@@ -3169,6 +3479,7 @@ mod tests {
     fn the_context_running_out_is_not_the_clients_cap() {
         let a = |finish| Answer {
             text: String::new(),
+            thinking: None,
             calls: Vec::new(),
             finish,
             usage: Usage::default(),
@@ -3392,7 +3703,7 @@ mod tests {
     fn rendered(server: &Server, body: &Value) -> (Vec<u32>, usize) {
         if body.get("system").is_some() {
             let req: PromptIn = serde_json::from_value(body.clone()).unwrap();
-            let Ok((tokens, end, _)) = anthropic_prompt(server, req, None, true) else {
+            let Ok((tokens, end, ..)) = anthropic_prompt(server, req, None, true) else {
                 panic!("{body} renders")
             };
             return (tokens, end as usize);

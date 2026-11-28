@@ -13,6 +13,11 @@ larch serve -m model.gguf
 It listens on `127.0.0.1:8080`. `--host` and `--port` change that; see
 [Remote access](#remote-access) before you listen on anything other than localhost.
 
+Agent clients such as Claude Code send 10,000 to 20,000 tokens of system prompt and tools before
+the conversation starts, so `larch serve` asks for a 32,768-token context unless you set one with
+`--set max_context=N`. If that does not fit in memory, it halves the context down to 8,192 and
+prints the context it got.
+
 ## Endpoints
 
 | Method | Path | API | Notes |
@@ -85,6 +90,10 @@ error that says why, so you never get an answer that silently ignored your setti
 | `n` | Only `1` |
 | `logprobs` | Refused: not supported yet |
 | `frequency_penalty`, `presence_penalty` | Refused unless `0`. Use the `repeat_penalty_default` knob instead |
+| `reasoning_effort`, `chat_template_kwargs.enable_thinking`, `think` | Turn thinking on or off for a model that thinks. `reasoning_effort: "none"` is off; any other effort is on. Unset, the model thinks as its chat template does by default |
+
+A thinking model's reasoning streams as `reasoning_content` deltas, and a non-streamed answer
+carries it in `message.reasoning_content`. It is never part of `content`.
 
 ### `/v1/completions`
 
@@ -96,6 +105,14 @@ error that says why, so you never get an answer that silently ignored your setti
 `messages`, `system`, `max_tokens` (required), `stream`, `temperature`, `top_p`, `top_k`,
 `stop_sequences`, `tools`, `tool_choice`, and `output_config.format` (or the older `output_format`)
 for JSON output.
+
+`thinking` works as in Anthropic's API: with no `thinking` field the model does not think, and
+`{"type": "enabled"}` or `{"type": "adaptive"}` turns it on. The reasoning comes back as a
+`thinking` block before the answer, with an empty `signature`, unless the request sets
+`"display": "omitted"`. `budget_tokens` is accepted and ignored.
+
+`larch serve --thinking on` or `--thinking off` sets the default for requests to either API that
+do not choose.
 
 ## Authentication
 

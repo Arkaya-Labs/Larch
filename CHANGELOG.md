@@ -14,6 +14,17 @@ Fixes for the Mac install.
 - The installer downloads its first model over several connections at once, as the app's Models
   page already did.
 
+### Server
+- `larch serve` starts with a 32,768-token context unless `--set max_context` chooses one, so
+  Claude Code's first request (about 12,000 tokens) fits. It halves the context down to 8,192 when
+  the model does not fit.
+- Thinking can be turned off per request: OpenAI's `reasoning_effort: "none"`,
+  `chat_template_kwargs.enable_thinking` or Ollama's `think`, and Anthropic's `thinking`. An
+  Anthropic request without `thinking` no longer thinks, as in Anthropic's API. `--thinking on|off`
+  sets the default.
+- A thinking model's reasoning streams as it is written: OpenAI `reasoning_content` deltas and
+  Anthropic `thinking` blocks, so clients no longer wait in silence through a long think.
+
 ### Engine
 - Mixture-of-experts models that keep some expert layers in system RAM beside an NVIDIA GPU run
   faster with several chats, and `larch faster` writes a smaller copy of such a model that fits on
