@@ -154,7 +154,8 @@ Rule: within 3 % at W4@1 and at W4@4, else keep 4 seats. The 8-seat plan loses 3
 3 to 5 % faster and pay 11 to 13 % of throughput at eight or more chats, with an eight-chat TTFT p50 of 4.5 s
 (requests wait for a seat) against 0.14 s; 8 seats are the reverse, and their TPOT p99 at many chats is 27 ms against
 15 (more rows a step). A demand switch (a reload between the two plans, as the whole-layer plan has between 1 and 4
-seats) would take both, at a reload's cost; the brief added none. The maintainer's decision.
+seats) would take both, at a reload's cost; the brief added none. Decided 27 Nov: 4 seats by default; 8 is a
+many-chats setting the person turns on (`max_batch_seqs=8` at startup or live), with no demand switch to it.
 
 ## P
 
@@ -224,7 +225,7 @@ ran again; it is not a measurement.
 | The cold gate/up read | #21's G1: cold gate and up read at about 3 GB/s while down reads at about 24 GB/s; a cold pair costs about 360 µs. | Unchanged; the split's cost model assumes it. |
 | HIP | HIP's wrap answers UNSUPPORTED, so HIP keeps whole layers by default (and Metal, the CPU). | A HIP wrap of page-locked memory and measured `SPLIT_LAYER_US`/`COLD_PAIR_US` there. |
 | 98 MiB allowance | Measured on one card (5070 Ti, WSL2), charged on CUDA only; A's loads miss as much inside a layer's rounding. | A card whose first plan re-plans (`larch_expert_cache_plan` twice). |
-| Seats (D5) | 4 seats: −11 to −13 % at 8+ chats against 8 seats; 8 seats: −3 to −5 % at 1 and 4. | The maintainer's decision; or a demand switch between the two plans. |
+| Seats (D5) | 4 seats: −11 to −13 % at 8+ chats against 8 seats; 8 seats: −3 to −5 % at 1 and 4. | Decided 27 Nov: 4 by default, 8 by `max_batch_seqs=8`, no demand switch to 8. |
 | Expert adapters on m13 | A split load refuses expert adapters (`larch_expert_cache_no_learning`); m13 now splits by default, so they need `LARCH_EXPERT_CACHE=0` (the message says so). Suffix training is Qwen3 MoE only and unaffected. | Adapters on the hybrid MoE target. |
 | Eager mixed steps, uncounted histogram rows | #21's rows (prompt chunks beside decode rows run eager; the static split's rows go uncounted, now moot for the file). | As #21. |
 

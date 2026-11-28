@@ -9364,6 +9364,52 @@ mod tests {
         assert_eq!(plans, 1, "one plan, one load");
     }
 
+    /// The many-chats setting on a split load (decided 27 Nov: 4 seats by default, 8 when the
+    /// person sets `max_batch_seqs=8`, at startup or live): 4 and 8 seats each plan their split in
+    /// one per-expert plan, at 4 and 8 state slots (8 needs more room: the tiny fixture's state and
+    /// graph reserve weigh as much as its experts); a live 8 re-plans a 4-slot split and a live 4
+    /// re-plans an 8-slot one ([`replan_due`]); demand never asks 4 slots for more.
+    #[test]
+    fn the_many_chats_setting_plans_eight_slots_once() {
+        let (_, _, bytes, _, _) = fake_cuda_terms();
+        let g = larch_model::gguf::Gguf::parse(&tiny::gguf(Arch::Qwen35Moe, 3)).unwrap();
+        let experts: u64 = (g.tensors.iter())
+            .filter(|t| t.name.ends_with("_exps.weight"))
+            .map(|t| t.bytes)
+            .sum();
+        // Every layer whole on the host keeps the rest; a split keeps some experts beside it.
+        let plan = |short: u64, asked| {
+            let hist = larch_model::Histogram::path(&fake_cuda_path(short, None));
+            hot().write(&hist).unwrap();
+            crate::FAKE_CACHE.set(Some(None));
+            crate::FAKE_POOL.set(Some(0));
+            crate::SPLIT_PLANS.set(0);
+            let (loaded, _, n, l) = fake_cuda_seats(short, |_, _| 1 << 30, None, Some(asked), None);
+            crate::FAKE_CACHE.set(None);
+            crate::FAKE_POOL.set(None);
+            std::fs::remove_file(&hist).unwrap();
+            let split = n > 0 && l.weights_on_device > bytes - experts;
+            (split, loaded.model.state_slots(), crate::SPLIT_PLANS.get())
+        };
+        let card = short_card(split_room());
+        assert_eq!(plan(card, 4), (true, 4, 1), "4 seats: a split, one plan");
+        assert_eq!(
+            plan(card + 14 * layer0(), 8),
+            (true, 8, 1),
+            "8 seats: a split, one plan"
+        );
+        assert!(super::replan_due(8, 4, true, Some(4)), "a live 8 re-plans");
+        assert!(
+            super::replan_due(4, 8, true, Some(8)),
+            "a live 4 re-plans back"
+        );
+        let mut d = super::Demand::default();
+        let s = 1_000_000_000;
+        for t in 0..400 {
+            assert_eq!(d.seats(t * s, 4, 12, 4), None, "demand past 4 slots");
+        }
+    }
+
     /// A plain load (LARCH_EXPERT_CACHE unset) of a hybrid MoE on CUDA splits from a profile shipped
     /// for its very file, matched by length and header; one for a file a byte longer is another
     /// model's. A histogram beside the model wins over the shipped profile. `=0`, no profile, or

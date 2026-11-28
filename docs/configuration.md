@@ -102,6 +102,11 @@ interrupting a chat. `larch knob list` prints all of them. These are the ones wo
 | `kv_pool_fraction` | `0.85` | 0.3 to 0.95 | Model reload | Share of free GPU memory used for chats' state |
 | `device` | `0` | 0 to 63 | Restart | Which GPU to use |
 
+On a model whose experts do not all fit on the GPU, Larch plans for 4 chats at once by default and keeps the
+experts that do not fit in system memory. `max_batch_seqs=8` plans for 8 instead: faster in total once about 8
+chats run together, a little slower with 1 to 4, and a longer wait between tokens for the slowest chats. Set it at
+startup, or live: a live change reloads the model once no request is running.
+
 Set them at startup with `--set`, or live inside `larch chat`:
 
 ```sh
