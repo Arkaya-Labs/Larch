@@ -46,7 +46,8 @@ void usage() {
   std::puts("usage:");
   std::puts("  metal_perf copy --device ORDINAL --bytes BYTES --iterations COUNT");
   std::puts("  metal_perf mmvq --device ORDINAL --format FORMAT --rows ROWS --n COLS --k WIDTH --iterations COUNT");
-  std::puts("  metal_perf st --device ORDINAL --format FORMAT|all --n COLS --k WIDTH --iterations COUNT [--cold MIB]");
+  std::puts("  metal_perf st --device ORDINAL --format FORMAT|all --n COLS --k WIDTH --iterations COUNT [--cold MIB] "
+            "[--splits PARTS]");
   std::puts("  metal_perf dequant --device ORDINAL --format FORMAT --n ROWS --k WIDTH --iterations COUNT");
   std::puts("  metal_perf mmvq-id --device ORDINAL --format FORMAT --experts COUNT --rows ROWS --slots USED --n COLS "
             "--k WIDTH --weighted 0|1 --iterations COUNT");
@@ -480,6 +481,8 @@ constexpr const char* kStFormats[] = {"q3_k", "q4_k", "q5_k", "q6_k", "q8_0"};
 // lm_head, n of 65536 or more), and a summary of the configs that pass at all four. False when a check failed.
 // --cold MIB: each timed call reads the next of enough copies of w to fill MIB MiB, as a decode step reads each
 // weight from DRAM once, where the warm default reads one copy from cache (the checks use the first copy).
+// --splits PARTS: the K split to time instead of st_splits' (whole units a part, as st_splits rounds it), so one
+// build can try the split rule's constants.
 bool run_st_format(const arguments& parsed, const std::string& name) {
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
   const quant_format qf = format(name);
@@ -492,7 +495,12 @@ bool run_st_format(const arguments& parsed, const std::string& name) {
   session run(ordinal);
   const uint32_t cores = run.props.compute_units;
   if (!cores) fail("the device reports no GPU core count, which st_splits needs");
-  const uint32_t splits = st_splits(uint32_t(n), uint32_t(k), cores);
+  uint32_t splits = st_splits(uint32_t(n), uint32_t(k), cores);
+  if (parsed.values.count("--splits")) {
+    const uint64_t units = k / ST_UNIT, asked = bounded(parsed, "--splits", 1, units);
+    const uint64_t per = (units + asked - 1) / asked;
+    splits = uint32_t((units + per - 1) / per);
+  }
   const uint64_t tiles = (n + ST_N - 1) / ST_N, row_bytes = k / qf.block_elements * qf.block_bytes;
 
   rng g(35);
@@ -667,7 +675,7 @@ bool run_st_format(const arguments& parsed, const std::string& name) {
 // metal_perf st: run_st_format on --format, or on each of the five with --format all. Exits 1 when a row check
 // failed, 77 (ctest's skip) without an Apple GPU family 10 device: the tile needs the tensor API.
 void run_st(const arguments& parsed) {
-  require_only(parsed, {"--device", "--format", "--n", "--k", "--iterations", "--cold"});
+  require_only(parsed, {"--device", "--format", "--n", "--k", "--iterations", "--cold", "--splits"});
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
   NSArray<id<MTLDevice>>* devices = direct_devices();
   if (ordinal >= devices.count || ![devices[NSUInteger(ordinal)] supportsFamily:MTLGPUFamilyApple10]) {
