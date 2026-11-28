@@ -12,6 +12,7 @@
 #include "mlx/backend/metal/kernels/steel/attn/kernels/steel_attention_nax.h"
 
 #include "args.h"
+#include "quants.h"
 
 instantiate_kernel("vv_attn_full_nax64", attention_nax, half, 64, 32, 64, 64, 4, 1, float, float)
 
@@ -329,3 +330,80 @@ static inline uint nax_u32_at(const device uchar* p) {  // 4 bytes at a 2-byte a
     }
   }
 }
+
+// Grouped mmvq_id for a prefill on NAX fragments: MLX's affine_gather_qmm_rhs_nax (quantized_nax.h, transpose,
+// WM = WN = 2) with GGUF blocks. x is vv_moe_gather's xs, the pairs' rows in expert order (vv_moe_group's lists g:
+// expert e's pairs are g[e] .. g[e + 1], their pair ids after the experts + 1 offsets), so it is MLX's sorted x.
+// Threadgroup (tile x, row tile y) takes BN = 64 columns and BM rows of one expert, scheduled over the experts' row
+// tiles in order as MLX's schedule_row_tile does; tiles past the last return at once. Per BK = 64 inputs the four
+// simdgroups stage the expert's w tile as f16 with the decode the tensor-path tiles stage (stage_expert_w, the
+// same rounding), and each simdgroup (SM = BM / 2 rows, SN = 32 columns) loads its x straight from xs and runs
+// one 16 x 32 x 16 NAX matmul per 16 inputs, f32 accumulation. Each product goes where store_pair puts the tensor
+// path's: to its (row, slot), or weighted to the f32 partials vv_moe_reduce sums. k is padded to BK in xs (zeros)
+// and in the w tile (stage_expert_w stages zeros past k).
+template <int QK, int BYTES, lq::deq_fn F, int BM>
+[[kernel, max_total_threads_per_threadgroup(128)]] void mmvq_id_nax(
+    const device uchar* w [[buffer(0)]], const device half* xs [[buffer(1)]], const device uint* g [[buffer(2)]],
+    const device uchar* bias [[buffer(3)]], device uchar* out [[buffer(4)]], constant id_args& a [[buffer(5)]],
+    uint3 tid [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]], uint t [[thread_index_in_threadgroup]]) {
+  constexpr short BN = 64, BK = MOE_MM_K, L = BK + 8, WM = 2, WN = 2, SM = BM / WM, SN = BN / WN, SK = 32;
+  constexpr short TM = SM / 16, TN = SN / 16, TK = SK / 16;
+  static_assert(BK == 64 && MOE_MM_SG == WM * WN, "stage_expert_w's tile: 64 inputs, 4 simdgroups");
+  const int pairs = int(g[a.experts]), kp = int((a.k + BK - 1) / BK * BK);
+  int row, e;
+  short rows;
+  if (!schedule_row_tile<BM>((const device int*)g, int(a.experts), pairs, int(tid.y), lane, row, e, rows)) return;
+  const uint n0 = tid.x * BN;
+  const short tm = SM * short(sg / WN), tn = SN * short(sg % WN);
+  const short sgp_sm = short(clamp(int(rows) - tm, 0, int(SM)));
+  threadgroup half4 ws4[BN * L / 4];
+  const threadgroup half* Ws = (const threadgroup half*)ws4;
+  NAXTile<float, TM, TN> Dtile;
+  Dtile.clear();
+  const device half* xn = xs + ulong(row + tm) * kp;
+  for (int k0 = 0; k0 < kp; k0 += BK) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);  // the last step's loads from ws done
+    lq::stage_expert_w<QK, BYTES, F, BN, L>(w, a, uint(e), n0, uint(k0), t, ws4);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    STEEL_PRAGMA_NO_UNROLL
+    for (short kk = 0; kk < BK; kk += SK) {
+      if (sgp_sm > 0) {
+        NAXTile<half, TM, TK> Atile;
+        NAXTile<half, TN, TK> Btile;
+        volatile int compiler_barrier;
+        if (sgp_sm == SM)
+          Atile.load(xn + k0 + kk, kp);
+        else
+          Atile.load_rows(xn + k0 + kk, kp, sgp_sm);  // the next expert's rows, or past the pairs: zeros
+        Btile.template load<half, L, 1>(Ws + tn * L + kk);
+        tile_matmad_nax(Dtile, Atile, metal::bool_constant<false>{}, Btile, metal::bool_constant<true>{});
+        (void)compiler_barrier;
+      }
+    }
+  }
+  if (sgp_sm == 0) return;
+  device const uint* order = g + a.experts + 1;
+  using Frag = typename NAXTile<float, TM, TN>::NAXFrag_t;
+  STEEL_PRAGMA_UNROLL
+  for (short i = 0; i < TM; i++) {
+    STEEL_PRAGMA_UNROLL
+    for (short j = 0; j < TN; j++) {
+      STEEL_PRAGMA_UNROLL
+      for (short v = 0; v < Frag::kElemsPerFrag; v++) {
+        const short2 c = Frag::get_coord(v);  // (column, row) in the 16 x 16 fragment
+        const short r = 16 * i + c.y;
+        const uint n = n0 + uint(tn + 16 * j + c.x);
+        if (r < sgp_sm && n < a.n)
+          lq::store_pair(out, bias, a, order, uint(row + tm + r), uint(e), n, Dtile.frag_at(i, j)[v]);
+      }
+    }
+  }
+}
+#define MMVQ_ID_NAX(name, qk, bytes)                                                                         \
+  template [[host_name("vv_mmvq_id_nax32_" #name)]] kernel decltype(mmvq_id_nax<qk, bytes, lq::deq_##name, 32>) \
+      mmvq_id_nax<qk, bytes, lq::deq_##name, 32>;                                                            \
+  template [[host_name("vv_mmvq_id_nax64_" #name)]] kernel decltype(mmvq_id_nax<qk, bytes, lq::deq_##name, 64>) \
+      mmvq_id_nax<qk, bytes, lq::deq_##name, 64>;
+MMVQ_ID_NAX(q3_k, 256, 110)
+MMVQ_ID_NAX(q4_k, 256, 144)

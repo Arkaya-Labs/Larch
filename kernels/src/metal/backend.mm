@@ -44,6 +44,8 @@ struct kernels {
   id<MTLComputePipelineState> gemm_q[2][2][LARCH_Q3_K + 1];  // [rows > GEMM_Q_M_SMALL][k <= n]; nil: none
   id<MTLComputePipelineState> mmvq_id[LARCH_Q3_K + 1], mmvq_id_grouped[LARCH_Q3_K + 1];
   id<MTLComputePipelineState> mmvq_id_mm[2][LARCH_Q3_K + 1];  // the tensor path's grouped mmvq_id, [64 x 32 tile]
+  // The grouped mmvq_id on NAX fragments under LARCH_METAL_MOE_NAX, [64-row tile]: Q3_K and Q4_K, nil for the others
+  id<MTLComputePipelineState> mmvq_id_nax[2][LARCH_Q3_K + 1];
   id<MTLComputePipelineState> mmvq_id1[LARCH_Q3_K + 1];  // Q3_K, Q4_K, Q5_K and Q6_K, nil for the others
   id<MTLComputePipelineState> mmvq_id1n[LARCH_Q3_K + 1];  // the same formats, for experts under 1024 wide
   id<MTLComputePipelineState> attn_flash[3];                 // head_dim up to 64, 128 and 256
@@ -83,13 +85,16 @@ struct kernels {
 //   vv_mmvq_id1n, which keeps all 32 lanes busy; 0 keeps vv_mmvq_id1, for A/B timing.
 // LARCH_METAL_MMVQ_NAX (default 0): Q3_K mmvq at 2-16 rows takes vv_mmvq_nax_q3_k (MLX's affine_qmv_nax on NAX
 //   fragments, macOS 26.2 and the tensor API) instead of the MMA tile; for A/B timing.
+// LARCH_METAL_MOE_NAX (default 0): a prefill's grouped Q3_K and Q4_K mmvq_id takes vv_mmvq_id_nax (MLX's
+//   affine_gather_qmm_rhs_nax on NAX fragments, macOS 26.2 and the tensor API) instead of the MPP tiles; for A/B timing.
 // LARCH_METAL_ATTN_NAX (default 1): flash prefill at head_dim 64, 128 or 256 takes vv_attn_paged_nax (MLX's NAX
 //   attention over the paged pool, macOS 26.2 and the tensor API); 0 keeps vv_attn_flash, for A/B timing.
 // LARCH_METAL_ATTN_NAX_HM (default 0): 1 launches vv_attn_paged_nax with the q head as grid x (the _hm kernels),
 //   for A/B timing at long contexts.
 struct feed {
   bool concurrent = true, commit = true, profile = false, simd_kernels = true, moe_prefetch = true, gdn_wide = true,
-       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false, mmvq_nax = false;
+       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false, mmvq_nax = false,
+       moe_nax = false;
 };
 static constexpr uint32_t first_commit = 32, commit_every = 128;
 struct mtl_device : larch_device {
@@ -171,7 +176,8 @@ static larch_status read_feed(feed* f) {
                                  std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk},
                                  std::pair{"LARCH_METAL_ATTN_NAX", &f->attn_nax},
                                  std::pair{"LARCH_METAL_ATTN_NAX_HM", &f->attn_nax_hm},
-                                 std::pair{"LARCH_METAL_MMVQ_NAX", &f->mmvq_nax}}) {
+                                 std::pair{"LARCH_METAL_MMVQ_NAX", &f->mmvq_nax},
+                                 std::pair{"LARCH_METAL_MOE_NAX", &f->moe_nax}}) {
     const char* c = std::getenv(name);
     if (c && std::strcmp(c, "0") && std::strcmp(c, "1"))
       return vv_fail(LARCH_ERR_INVALID_ARG, std::string(name) + " must be 0 or 1");
@@ -490,6 +496,9 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
           k.attn_paged_nax[wide] = opt("vv_attn_paged_nax" + std::to_string(64 << wide) + (fed.attn_nax_hm ? "_hm" : ""),
                                        wide == 2 ? 256 : 128);
         if (fed.mmvq_nax) k.mmvq_nax_q3_k = opt("vv_mmvq_nax_q3_k", 256);
+        for (int t : {LARCH_Q3_K, LARCH_Q4_K})
+          for (int tall = 0; tall < 2 && fed.moe_nax; ++tall)
+            k.mmvq_id_nax[tall][t] = opt(std::string(tall ? "vv_mmvq_id_nax64_" : "vv_mmvq_id_nax32_") + dtype_name[t], 128);
         from = lib;
       }
     }
@@ -1310,7 +1319,10 @@ larch_status mmvq_id(larch_stream* vs, const larch_tensor* w_quant, const larch_
     const int64_t kp = (w.cols + MOE_MM_K - 1) / MOE_MM_K * MOE_MM_K, pairs_max = std::min(x.rows, block) * slots;
     // ponytail: gate and up's gathered x is not blocked: 256 MiB at the 8,192-token chunk maximum for k 2048. Block
     // it under MOE_PARTIAL_BYTES too if a 16 GB Mac's fit shows it.
-    const bool gathered = ks(vs).mmvq_id_mm[0][w.dtype];  // only the 32 x 64 tile reads it
+    // MLX's row tile: 32 rows when experts average under 64 pairs, else 64 (quantized.cpp gather_qmm_rhs_nax).
+    const bool nax_tall = pairs_max >= 64 * experts;
+    const id<MTLComputePipelineState> nax = ks(vs).mmvq_id_nax[nax_tall][w.dtype];
+    const bool gathered = ks(vs).mmvq_id_mm[0][w.dtype] || nax;  // the 32 x 64 tile and the NAX tile read it
     const uint64_t lists = (uint64_t(experts + 1 + pairs_max) * 4 + 15) / 16 * 16;
     const uint64_t parts = weighted ? (uint64_t(pairs_max * n) * 4 + 15) / 16 * 16 : 0;
     const uint64_t bytes = lists + parts + (gathered ? uint64_t(pairs_max * kp) * 2 : 0);
@@ -1335,7 +1347,12 @@ larch_status mmvq_id(larch_stream* vs, const larch_tensor* w_quant, const larch_
       // Q3_K 768 x 2048 17.18 -> 14.71 ms, Q6_K 2048 x 768 21.34 -> 17.48 ms; Q4_K and Q5_K stay 32 x 64 (8.34 vs
       // 9.31, 12.21 vs 14.03 ms), as does Q3_K at 512 rows (6.46 vs 9.10 ms).
       const bool tall = (w.dtype == LARCH_Q3_K || w.dtype == LARCH_Q6_K) && r * slots >= 64 * experts;
-      if (id<MTLComputePipelineState> mm = ks(vs).mmvq_id_mm[tall][w.dtype]) {
+      if (nax) {
+        const int64_t bm = nax_tall ? 64 : 32, tiles = std::min<int64_t>(r * slots, (r * slots + bm - 1) / bm + experts - 1);
+        each(s, ks(vs).moe_gather, {xa, input(lst), xsort}, ab, kp / 4, r * slots);
+        groups(s, nax, {input(w), input(xsort), input(lst), input_or(b, at(w)), weighted ? part : oa}, ab, (n + 63) / 64,
+               128, tiles);
+      } else if (id<MTLComputePipelineState> mm = ks(vs).mmvq_id_mm[tall][w.dtype]) {
         if (!tall) each(s, ks(vs).moe_gather, {xa, input(lst), xsort}, ab, kp / 4, r * slots);  // tall stages x
         groups(s, mm, {input(w), tall ? xa : input(xsort), input(lst), input_or(b, at(w)), weighted ? part : oa}, ab,
                (n + (tall ? 31 : 63)) / (tall ? 32 : 64), MOE_MM_SG * 32, experts);
