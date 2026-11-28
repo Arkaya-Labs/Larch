@@ -347,13 +347,12 @@ template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_n
 // Prototype for metal_perf affine-q3 --layout nax only (no backend path): vv_mmvq_nax_q3_k's plan on Q3_K rewritten
 // exactly into a layout built for NAX fragments, so the decode is masks: (code - 4) sc is a small integer, exact in
 // f16, and d multiplies each block's f32 sum after the matmuls (Splash's epilogue scale). Fragment f of unit u (128
-// inputs) is scale group 8 u + f, lane (fm, fn) holding inputs 16 f + fn .. + 3. A row (a.b_rs apart) holds:
-// - codes q + 4 (0..7): per unit, per item j = fn / 4, three words (12 bytes) with its 32 codes 4 f + e as 16 pairs
-//   P = 2 f + e / 2. Pair P < 15 is at bits 3 (P % 5) and 16 + 3 (P % 5) of word P / 5, so (word >> s) & 0x00070007
-//   or 0x64006400 is the pair as half2 1024 + code. Pair 15's three bits are bit 15 (e = 2) and 31 (e = 3) of the
-//   three words, bit b of the code in word b. k 3 / 8 bytes.
-// - Q3_K's 12 scale bytes a block (nq3.h), then each block's fp16 d (k / 256 x 2): as many bytes as Q3_K.
-// Simdgroup s takes blocks s, s + WK, ...; the host sends k a multiple of 256 and x rows 8-byte aligned. Out f32.
+// inputs) is scale group 8 u + f, lane (fm, fn) holding inputs 16 f + fn .. + 3. A row (a.b_rs apart) is args.h's
+// nq3 layout: per unit, per item j = fn / 4, three code words (q + 4, 0..7) with its 32 codes 4 f + e as 16 pairs
+// P = 2 f + e / 2. Pair P < 15 is at bits 3 (P % 5) and 16 + 3 (P % 5) of word P / 5, so (word >> s) & 0x00070007
+// or 0x64006400 is the pair as half2 1024 + code. Pair 15's three bits are bit 15 (e = 2) and 31 (e = 3) of the
+// three words, bit b of the code in word b. Scales as Q3_K has them (nq3.h) and d per block.
+// Simdgroup s takes blocks s, s + WK, ...; the host sends k a multiple of 512 and x rows 8-byte aligned. Out f32.
 [[kernel, max_total_threads_per_threadgroup(MMVQ_NAX_WK * 32)]] void vv_mmvq_nax_nq3(
     const device uchar* w [[buffer(0)]], const device uchar* x [[buffer(1)]], device uchar* out [[buffer(2)]],
     constant mm_args& a [[buffer(3)]], uint3 tid [[threadgroup_position_in_grid]],
@@ -365,7 +364,6 @@ template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_n
   const short2 coord = Frag::get_coord();
   const uint fm = uint(coord.y), fn = uint(coord.x), j = fn / 4;
   const uint m = a.m, n = a.n, blocks = a.k / 256, col0 = tid.x * 32;
-  const uint code_bytes = a.k * 3 / 8, d_at = code_bytes + a.k / 256 * 12;
   const device uchar* rows[2][2];
   STEEL_PRAGMA_UNROLL
   for (short t = 0; t < 2; t++) {
@@ -392,11 +390,11 @@ template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_n
       for (short t = 0; t < 2; t++) {
         STEEL_PRAGMA_UNROLL
         for (short r = 0; r < 2; r++) {
-          const device uint* c = (const device uint*)(rows[t][r] + (u * 4 + j) * 12);
+          const device uint* c = (const device uint*)(rows[t][r] + nq3_codes_at(u, j));
           cw[t][r][0] = c[0];
           cw[t][r][1] = c[1];
           cw[t][r][2] = c[2];
-          sc[t][r] = nq3_scales(rows[t][r] + code_bytes + u / 2 * 12, u % 2);
+          sc[t][r] = nq3_scales(rows[t][r] + nq3_scales_at(u), u % 2);
         }
       }
       STEEL_PRAGMA_UNROLL
@@ -436,7 +434,7 @@ template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_n
       STEEL_PRAGMA_UNROLL
       for (short q = 0; q < 4; q++) {
         const device uchar* row = w + ulong(min(col0 + 16 * t + fn + q, n - 1)) * a.b_rs;
-        const float d = float(*(const device half*)(row + d_at + blk * 2));
+        const float d = float(*(const device half*)(row + nq3_d_at(blk)));
         acc[t][q] = fma(d, D[t][q], acc[t][q]);
         acc[t][q + 4] = fma(d, D[t][q + 4], acc[t][q + 4]);
       }

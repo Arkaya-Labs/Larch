@@ -860,7 +860,7 @@ kernel void vv_mmvq1_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], dev
   constexpr short RS = 4;
   const uint n0 = (tg.y * 2 + sg) * RS;
   if (n0 >= a.n) return;  // the whole simdgroup
-  const uint units = a.k / 128, code_bytes = a.k * 3 / 8, d_at = code_bytes + a.k / 256 * 12, j = lane % 4;
+  const uint units = a.k / 128, j = lane % 4;
   bytes_in wr[RS];
   for (short i = 0; i < RS; ++i) wr[i] = w + u64(min(n0 + i, a.n - 1)) * a.b_rs;
   float res[RS] = {};
@@ -871,9 +871,9 @@ kernel void vv_mmvq1_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], dev
     for (short f = 0; f < 8; ++f) xs[f] = float4(*(device const half4*)(xu + 16 * f));
 #pragma unroll
     for (short r = 0; r < RS; ++r) {
-      device const uint* c = (device const uint*)(wr[r] + (u * 4 + j) * 12);
+      device const uint* c = (device const uint*)(wr[r] + nq3_codes_at(u, j));
       const uint cw[3] = {c[0], c[1], c[2]};
-      const uint2 sc = nq3_scales(wr[r] + code_bytes + u / 2 * 12, u % 2);
+      const uint2 sc = nq3_scales(wr[r] + nq3_scales_at(u), u % 2);
       float unit = 0.0f;
 #pragma unroll
       for (short f = 0; f < 8; ++f) {
@@ -889,7 +889,7 @@ kernel void vv_mmvq1_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], dev
         }
         unit = fma(float(as_type<uchar4>(f < 4 ? sc.x : sc.y)[f % 4]) - 32.0f, g, unit);
       }
-      res[r] = fma(float(*(device const half*)(wr[r] + d_at + u / 2 * 2)), unit, res[r]);
+      res[r] = fma(float(*(device const half*)(wr[r] + nq3_d_at(u / 2))), unit, res[r]);
     }
   }
   for (short r = 0; r < RS; ++r) {
@@ -913,7 +913,7 @@ kernel void mmvq_id_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], byte
   if (n0 >= a.n) return;  // the whole simdgroup
   const uint r = a.weighted ? tg.y : tg.y / a.slots, first = a.weighted ? 0 : tg.y % a.slots;
   const uint last = a.weighted ? a.slots : first + 1;
-  const uint units = a.k / 128, code_bytes = a.k * 3 / 8, d_at = code_bytes + a.k / 256 * 12;
+  const uint units = a.k / 128;
   const uint j = (lane % LPU) / (8 / FH), f0 = FH == 8 ? 0 : 4 * (lane % 2);
   float acc[RS] = {};
   for (uint s = first; s < last; ++s) {
@@ -931,9 +931,9 @@ kernel void mmvq_id_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], byte
         xs[f] = float4(half4(*(device const packed_half4*)(xr + u * 128 + 16 * (f0 + f) + 4 * j)));
 #pragma clang loop unroll(full)
       for (short c = 0; c < RS; ++c) {
-        device const uint* cp = (device const uint*)(wr[c] + (u * 4 + j) * 12);
+        device const uint* cp = (device const uint*)(wr[c] + nq3_codes_at(u, j));
         const uint cw[3] = {cp[0], cp[1], cp[2]};
-        const uint2 ss = nq3_scales(wr[c] + code_bytes + u / 2 * 12, u % 2);
+        const uint2 ss = nq3_scales(wr[c] + nq3_scales_at(u), u % 2);
         const uint sc = f0 ? ss.y : ss.x, sc1 = ss.y;
         float unit = 0.0f;
 #pragma clang loop unroll(full)
@@ -951,7 +951,7 @@ kernel void mmvq_id_nq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], byte
           }
           unit = fma(float(as_type<uchar4>(f < 4 ? sc : sc1)[f % 4]) - 32.0f, g, unit);
         }
-        sum[c] = fma(h16(wr[c] + d_at + u / 2 * 2), unit, sum[c]);
+        sum[c] = fma(h16(wr[c] + nq3_d_at(u / 2)), unit, sum[c]);
       }
     }
 #pragma clang loop unroll(full)

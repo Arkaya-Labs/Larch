@@ -253,3 +253,11 @@ struct sample_row {
   float repeat_penalty;
   u32 penalty_window;
 };
+
+/// The nq3 layout (Q3_K rewritten exactly for the Metal kernels; nq3.h): a row of k inputs (k a multiple of 512)
+/// is k / 512 pairs of Q3_K blocks, each 220 bytes, as many as the two blocks: the codes of its four units of 128
+/// inputs (48 bytes a unit, 12 an item j = 0..3), then each block's 12 scale bytes as Q3_K has them, then each
+/// block's fp16 d. These are byte offsets in a row: of unit u's item j, of unit u's block's scales, of block b's d.
+static inline u32 nq3_codes_at(u32 u, u32 j) { return u / 4 * 220 + u % 4 * 48 + j * 12; }
+static inline u32 nq3_scales_at(u32 u) { return u / 4 * 220 + 192 + u / 2 % 2 * 12; }
+static inline u32 nq3_d_at(u32 b) { return b / 2 * 220 + 216 + b % 2 * 2; }
