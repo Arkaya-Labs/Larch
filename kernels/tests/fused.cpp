@@ -322,10 +322,12 @@ static void proj_add(larch_dtype t, int gate, int64_t rows) {
 }
 
 // Entry 7: (gated: the 0/1 selector gemms,) qk_norm of q and k (norm), rope of both and kv_write; partial neox or full
-// normal rope; row 1 is bucket padding (slot -1) when there are two rows or more.
-static void attn_in(bool gated, bool norm, bool neox, int64_t hd, int64_t rows) {
+// normal rope; row 1 is bucket padding (slot -1) when there are two rows or more. kv is the pool's pages, f16 or q8_0
+// (a backend without q8_0 pages answers the sequence's kv_write UNSUPPORTED, and the case is skipped).
+static void attn_in(bool gated, bool norm, bool neox, int64_t hd, int64_t rows, larch_dtype kv = LARCH_F16) {
   const std::string name = std::string("attn_in") + (gated ? " gated" : "") + (norm ? " normed" : "") +
-                           (neox ? " neox" : " normal") + " hd " + std::to_string(hd) + " rows " + std::to_string(rows);
+                           (neox ? " neox" : " normal") + " hd " + std::to_string(hd) + " rows " + std::to_string(rows) +
+                           (kv == LARCH_F16 ? "" : std::string(" ") + DTYPE[kv] + " pages");
   constexpr int64_t H = 4, KVH = 2, BLOCKS = 4, BT = 16;
   const larch_tensor q_in = random(LARCH_F16, {rows, H, gated ? 2 * hd : hd}), k = random(LARCH_F16, {rows, KVH, hd});
   const larch_tensor v = random(LARCH_F16, {rows, KVH, hd}), qn = random(LARCH_F32, {hd}), kn = random(LARCH_F32, {hd});
@@ -335,10 +337,14 @@ static void attn_in(bool gated, bool norm, bool neox, int64_t hd, int64_t rows) 
     slots[size_t(r)] = r == 1 ? -1 : int32_t(r * 2 + 1) % int32_t(BLOCKS * BT);
   }
   const larch_tensor pt = tensor(LARCH_I32, {rows}, pos.data()), sl = tensor(LARCH_I32, {rows}, slots.data());
-  const auto pool_buf = [&] { return tensor(LARCH_F16, {2 * BLOCKS * BT, KVH, hd}, halves(size_t(2 * BLOCKS * BT * KVH * hd), g).data()); };
+  const auto pool_buf = [&] {
+    return kv == LARCH_F16
+               ? tensor(LARCH_F16, {2 * BLOCKS * BT, KVH, hd}, halves(size_t(2 * BLOCKS * BT * KVH * hd), g).data())
+               : random(kv, {2 * BLOCKS * BT, KVH * hd});  // a slot row of whole q8_0 blocks
+  };
   const larch_tensor pk = pool_buf(), pv = pool_buf(), wk = copy(pk), wv = copy(pv);
-  const larch_kv_pool got_pool = {pk.buf, pv.buf, BLOCKS, BT, 2, KVH, uint32_t(hd), LARCH_F16, 1},
-                       want_pool = {wk.buf, wv.buf, BLOCKS, BT, 2, KVH, uint32_t(hd), LARCH_F16, 1};
+  const larch_kv_pool got_pool = {pk.buf, pv.buf, BLOCKS, BT, 2, KVH, uint32_t(hd), kv, 1},
+                       want_pool = {wk.buf, wv.buf, BLOCKS, BT, 2, KVH, uint32_t(hd), kv, 1};
   larch_rope_params p = {};
   p.n_dims = uint32_t(neox ? hd / 4 : hd);
   p.neox = neox;
@@ -369,6 +375,11 @@ static void attn_in(bool gated, bool norm, bool neox, int64_t hd, int64_t rows) 
   if (us == LARCH_OK) us = larch_rope(st, &wq, &pt, &p);
   if (us == LARCH_OK) us = larch_rope(st, &wkc, &pt, &p);
   if (us == LARCH_OK) us = larch_kv_write(st, &wkc, &v, &sl, &want_pool);
+  if (kv != LARCH_F16 && us == LARCH_ERR_UNSUPPORTED) {
+    std::printf("no %s pages: %s\n", DTYPE[kv], name.c_str());
+    release();
+    return;
+  }
   // got
   const larch_tensor gq = gated ? tensor(LARCH_F16, {rows, H, hd}) : copy(q_in), gg = tensor(LARCH_F16, {rows, H, hd});
   const larch_tensor* qi = gated ? &q_in : &gq;
@@ -485,6 +496,8 @@ int main() {
       for (const bool norm : {false, true}) {
         attn_in(gated, norm, true, 256, r);
         attn_in(gated, norm, false, 64, r);
+        attn_in(gated, norm, true, 256, r, LARCH_Q8_0);
+        attn_in(gated, norm, false, 64, r, LARCH_Q8_0);
       }
   for (const int64_t hd : {32, 64, 128})
     for (const int64_t r : ROWS) {
@@ -518,6 +531,7 @@ int main() {
       for (const bool gated : {false, true}) {
         attn_in(gated, true, true, hd, r);
         attn_in(gated, true, false, hd, r);
+        if (hd % 32 == 0) attn_in(gated, true, true, hd, r, LARCH_Q8_0);  // q8_0 pages: whole 32-value blocks
       }
   larch_stream_destroy(st);
   larch_device_close(dev);

@@ -1693,17 +1693,36 @@ kernel void vv_rope(device uchar* qk [[buffer(0)]], bytes_in pos [[buffer(1)]], 
   x[p1] = half(x0 * s + x1 * c);
 }
 
+// One 32-value block of an f16 row into a q8_0 page block, as the CPU reference's kv_from_f32 (ggml's
+// quantize_row_q8_0_ref): amax by its NaN-keeping compare, d = amax / 127 to f16, q = round(x / d) with id = 1 / d
+// unrounded, NaN to 0. precise:: keeps the two divides correctly rounded, so the page is the reference's bit for bit.
+// x is device or threadgroup memory (vv_attn_in quantizes its roped k rows from threadgroup memory).
+template <typename P>
+static void q8_block(P x, device uchar* b) {
+  float amax = 0.0f;
+  for (uint j = 0; j < 32; ++j) amax = amax > fabs(float(x[j])) ? amax : fabs(float(x[j]));
+  const float d = precise::divide(amax, 127.0f), id = d != 0.0f ? precise::divide(1.0f, d) : 0.0f;
+  *(device half*)b = half(d);
+  for (uint j = 0; j < 32; ++j) {
+    const float q = round(float(x[j]) * id);
+    b[2 + j] = uchar(char(isnan(q) ? 0.0f : q));
+  }
+}
+
 // fused_attn_in: simdgroup s of threadgroup g takes head (g % per_row) * simdgroups + s of row g / per_row, counting
 // q's heads then k's. A q head: its half of q_in (the other half to gate), vv_qk_norm, vv_rope, to q. A k head, where
 // the row's slot is not negative: the same from k (left as it was) to the pool, and v's head to the pool. Each step
 // is its own kernel's arithmetic, rounded to half where that kernel stores, so the result is the sequence's bytes.
-kernel void vv_attn_in(bytes_in q_in [[buffer(0)]], device uchar* q [[buffer(1)]], device uchar* gate [[buffer(2)]],
-                       bytes_in k [[buffer(3)]], bytes_in v [[buffer(4)]], bytes_in slots [[buffer(5)]],
-                       bytes_in pos [[buffer(6)]], bytes_in ff [[buffer(7)]], bytes_in qn [[buffer(8)]],
-                       bytes_in kn [[buffer(9)]], device half* kp [[buffer(10)]], device half* vp [[buffer(11)]],
-                       constant attn_in_args& a [[buffer(12)]], uint g [[threadgroup_position_in_grid]],
-                       ushort sg [[simdgroup_index_in_threadgroup]], ushort nsg [[simdgroups_per_threadgroup]],
-                       ushort lane [[thread_index_in_simdgroup]]) {
+// vv_attn_in writes f16 pages; vv_attn_in_q8 q8_0 ones, as vv_kv_write_q8: a k head's roped row stays in x, rounded
+// to half as vv_rope stores it, and lane j < head_dim / 32 quantizes block j of it and of v's head.
+template <bool Q8>
+kernel void attn_in(bytes_in q_in [[buffer(0)]], device uchar* q [[buffer(1)]], device uchar* gate [[buffer(2)]],
+                    bytes_in k [[buffer(3)]], bytes_in v [[buffer(4)]], bytes_in slots [[buffer(5)]],
+                    bytes_in pos [[buffer(6)]], bytes_in ff [[buffer(7)]], bytes_in qn [[buffer(8)]],
+                    bytes_in kn [[buffer(9)]], device uchar* kp [[buffer(10)]], device uchar* vp [[buffer(11)]],
+                    constant attn_in_args& a [[buffer(12)]], uint g [[threadgroup_position_in_grid]],
+                    ushort sg [[simdgroup_index_in_threadgroup]], ushort nsg [[simdgroups_per_threadgroup]],
+                    ushort lane [[thread_index_in_simdgroup]]) {
   threadgroup half heads[8 * ATTN_IN_HD];
   const uint total = a.heads + a.kv_heads, per_row = (total + nsg - 1) / nsg, r = g / per_row,
              hh = g % per_row * nsg + sg, n = a.hd;
@@ -1731,7 +1750,10 @@ kernel void vv_attn_in(bytes_in q_in [[buffer(0)]], device uchar* q [[buffer(1)]
     for (uint i = lane; i < n; i += 32) x[i] = half(float(x[i]) * scale * at<float>(w, w_rs, i));
   }
   simdgroup_barrier(mem_flags::mem_threadgroup);  // every lane's x, before rope pairs them across lanes
-  device half* o = is_q ? (device half*)(q + r * a.q_rs) + hh * n : kp + u64(slot) * a.kv_heads * n + kh * n;
+  // On q8_0 pages a k head's rope writes back into x: each pair is one lane's, read before it is written.
+  const bool in_x = Q8 && !is_q;
+  device half* o = is_q ? (device half*)(q + r * a.q_rs) + hh * n
+                        : (device half*)kp + u64(slot) * a.kv_heads * n + kh * n;
   const constant rope_args& p = a.rope;
   for (uint i = lane; i < p.n_dims / 2; i += 32) {
     float theta = float(at<int>(pos, p.pos_rs, r));
@@ -1746,16 +1768,36 @@ kernel void vv_attn_in(bytes_in q_in [[buffer(0)]], device uchar* q [[buffer(1)]
     const float c = precise::cos(t) * p.mscale, s = precise::sin(t) * p.mscale;
     const uint p0 = p.neox ? i : 2 * i, p1 = p.neox ? i + p.n_dims / 2 : p0 + 1;
     const float x0 = x[p0], x1 = x[p1];
-    o[p0] = half(x0 * c - x1 * s);
-    o[p1] = half(x0 * s + x1 * c);
+    const half y0 = half(x0 * c - x1 * s), y1 = half(x0 * s + x1 * c);
+    if (in_x) {
+      x[p0] = y0;
+      x[p1] = y1;
+    } else {
+      o[p0] = y0;
+      o[p1] = y1;
+    }
   }
-  for (uint i = p.n_dims + lane; i < n; i += 32) o[i] = x[i];  // past rope's dims
-  if (!is_q) {
-    device const half* vr = (device const half*)(v + r * a.v_rs) + kh * n;
-    device half* vo = vp + u64(slot) * a.kv_heads * n + kh * n;
+  if (!in_x)
+    for (uint i = p.n_dims + lane; i < n; i += 32) o[i] = x[i];  // past rope's dims
+  if (is_q) return;
+  device const half* vr = (device const half*)(v + r * a.v_rs) + kh * n;
+  if (Q8) {
+    simdgroup_barrier(mem_flags::mem_threadgroup);  // every lane's roped x, before one lane reads 32 of them
+    // A slot row of q8_0 pages is kv_heads * head_dim / 32 blocks of 34 bytes (vv_kv_write_q8).
+    const uint blocks = n / 32;
+    if (lane < blocks) {
+      const u64 b = (u64(slot) * a.kv_heads * blocks + kh * blocks + lane) * 34;
+      q8_block((threadgroup const half*)x + 32 * lane, kp + b);
+      q8_block(vr + 32 * lane, vp + b);
+    }
+  } else {
+    device half* vo = (device half*)vp + u64(slot) * a.kv_heads * n + kh * n;
     for (uint i = lane; i < n; i += 32) vo[i] = vr[i];
   }
 }
+
+template [[host_name("vv_attn_in")]] kernel decltype(attn_in<false>) attn_in<false>;
+template [[host_name("vv_attn_in_q8")]] kernel decltype(attn_in<true>) attn_in<true>;
 
 // layernorm: threadgroup r normalises row r as vv_rmsnorm, around its mean: out = (x - mean) / sqrt(var + eps) * w
 // + b, the mean and var each a sum of its own pass (the reference's order of ggml_norm).
@@ -2211,20 +2253,6 @@ kernel void vv_kv_write(bytes_in k [[buffer(0)]], bytes_in v [[buffer(1)]], byte
   const u64 i = u64(s) * a.cols + g.x;
   kp[i] = ((device const half*)(k + g.y * a.rs0))[g.x];
   vp[i] = ((device const half*)(v + g.y * a.rs1))[g.x];
-}
-
-// One 32-value block of an f16 row into a q8_0 page block, as the CPU reference's kv_from_f32 (ggml's
-// quantize_row_q8_0_ref): amax by its NaN-keeping compare, d = amax / 127 to f16, q = round(x / d) with id = 1 / d
-// unrounded, NaN to 0. precise:: keeps the two divides correctly rounded, so the page is the reference's bit for bit.
-static void q8_block(device const half* x, device uchar* b) {
-  float amax = 0.0f;
-  for (uint j = 0; j < 32; ++j) amax = amax > fabs(float(x[j])) ? amax : fabs(float(x[j]));
-  const float d = precise::divide(amax, 127.0f), id = d != 0.0f ? precise::divide(1.0f, d) : 0.0f;
-  *(device half*)b = half(d);
-  for (uint j = 0; j < 32; ++j) {
-    const float q = round(float(x[j]) * id);
-    b[2 + j] = uchar(char(isnan(q) ? 0.0f : q));
-  }
 }
 
 // vv_kv_write into q8_0 pages (larch.h): thread (c, r) quantizes block c of row r's k and v into slot slots[r]; a
