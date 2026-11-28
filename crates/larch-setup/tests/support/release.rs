@@ -47,6 +47,11 @@ impl Drop for Temp {
         let mut tries = 0;
         while let Err(e) = fs::remove_dir_all(&self.0) {
             tries += 1;
+            // A second panic while the test unwinds aborts the binary (0xc0000409 on Windows, #22)
+            // and hides the first one's message, so a failed test leaves its directory instead.
+            if std::thread::panicking() {
+                return;
+            }
             assert!(
                 e.kind() == std::io::ErrorKind::PermissionDenied && tries < 50,
                 "{}: {e}",
@@ -255,6 +260,10 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        self.worker.take().unwrap().join().unwrap();
+        let worker = self.worker.take().unwrap().join();
+        // A test that panicked holding `files` poisons it and ends the worker; that is not news.
+        if !std::thread::panicking() {
+            worker.unwrap();
+        }
     }
 }

@@ -10,3 +10,10 @@ retries = 0
 # timeout-minutes stops a hung run.
 slow-timeout = { period = "60s" }
 failure-output = "immediate-final"
+
+# These assert the fault path's 20 ms flush budget and 100 ms exit (architecture 9.11). Beside the
+# other test processes on a 4-core windows-2025 runner the flush thread started past the budget
+# (#23's run), so they run with the machine to themselves.
+[[profile.ci.overrides]]
+filter = "package(larch-engine) & (binary(fault_inject) | binary(recovery))"
+threads-required = "num-test-threads"
