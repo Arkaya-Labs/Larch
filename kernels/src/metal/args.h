@@ -177,8 +177,6 @@ static inline u32 st_splits(u32 n, u32 k, u32 cores) {
 /// mul_mv for these formats.
 #define MMVQ1_SG 2
 #define MMVQ1_NR 2
-/// vv_mmvq_m_q3_k: x rows per threadgroup row of the grid.
-#define MMVQ_M 4
 #define MMVQ1N_C 4  // columns per simdgroup of mmvq_id1n (experts under 4 blocks wide)
 
 /// Attention's shape limits, shared so host dispatch and kernel layout agree: one simdgroup serves up to
