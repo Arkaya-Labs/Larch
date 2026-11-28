@@ -881,31 +881,59 @@ struct attn {
 
   // Query row `row` attends to `slots` in order, all heads; softmax in double, with head h's sink as one
   // more logit when there are sinks. The pages are decoded once per row, so every dtype reads alike.
+  // Scratch every row of one call reuses (rows run one after another), so a long prefill allocates it once.
+  mutable std::vector<float> ks, vs, qs;
+  mutable std::vector<double> w, acc;
+
   void attend(int64_t row, const std::vector<int64_t>& slots) const {
     const size_t n = slots.size(), kc = size_t(k.cols);
-    std::vector<float> ks(n * kc), vs(n * kc);
+    ks.resize(n * kc);
+    vs.resize(n * kc);
     for (size_t p = 0; p < n; ++p) {
       k.row_f32(slots[p], ks.data() + p * kc);
       v.row_f32(slots[p], vs.data() + p * kc);
     }
-    std::vector<double> w(n);
+    // The query row once, as q.get gives each value: get is out of line, and the dot reads each value n times.
+    qs.resize(size_t(q.cols));
+    q.row_f32(row, qs.data());
+    w.resize(n);
     for (int64_t h = 0; h < heads; ++h) {
       const int64_t qo = h * hd, ko = h / (heads / kv_heads) * hd;
       const double sink = sinks.buf ? sinks.get(h, 0) : -std::numeric_limits<double>::infinity();
-      double mx = sink;
-      for (size_t p = 0; p < n; ++p) {
-        double dot = 0;
-        for (int64_t d = 0; d < hd; ++d) dot += double(q.get(row, qo + d)) * ks[p * kc + size_t(ko + d)];
-        w[p] = dot * scale;
-        mx = std::max(mx, w[p]);
+      // Each sum keeps its own order (d ascending for a dot, p ascending for an output): only independent sums
+      // interleave, four dots side by side and every output column at once, so the bytes are the serial loops'.
+      // One serial chain per sum was most of a long CPU prefill's time: larch-app's pin_idle test, which reads
+      // 4.6k tokens, took 113 s on 4 cores and now 37.5.
+      const float* qh = qs.data() + qo;
+      size_t p = 0;
+      for (; p + 4 <= n; p += 4) {
+        const float* k0 = ks.data() + p * kc + size_t(ko);
+        double d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+        for (int64_t d = 0; d < hd; ++d) {
+          const double x = qh[d];
+          d0 += x * k0[d];
+          d1 += x * k0[kc + size_t(d)];
+          d2 += x * k0[2 * kc + size_t(d)];
+          d3 += x * k0[3 * kc + size_t(d)];
+        }
+        w[p] = d0 * scale, w[p + 1] = d1 * scale, w[p + 2] = d2 * scale, w[p + 3] = d3 * scale;
       }
+      for (; p < n; ++p) {
+        double dot = 0;
+        for (int64_t d = 0; d < hd; ++d) dot += double(qh[d]) * ks[p * kc + size_t(ko + d)];
+        w[p] = dot * scale;
+      }
+      double mx = sink;
+      for (size_t i = 0; i < n; ++i) mx = std::max(mx, w[i]);
       double sum = sinks.buf ? std::exp(sink - mx) : 0;
       for (double& x : w) sum += x = std::exp(x - mx);
-      for (int64_t d = 0; d < hd; ++d) {
-        double acc = 0;
-        for (size_t p = 0; p < n; ++p) acc += w[p] * vs[p * kc + size_t(ko + d)];
-        out.set(row, qo + d, n ? float(acc / sum) : 0.0f);
+      acc.assign(size_t(hd), 0.0);
+      for (size_t i = 0; i < n; ++i) {
+        const double wi = w[i];
+        const float* vi = vs.data() + i * kc + size_t(ko);
+        for (int64_t d = 0; d < hd; ++d) acc[size_t(d)] += wi * vi[d];
       }
+      for (int64_t d = 0; d < hd; ++d) out.set(row, qo + d, n ? float(acc[size_t(d)] / sum) : 0.0f);
     }
   }
 };
