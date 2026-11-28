@@ -342,3 +342,128 @@ template <bool RAW>
 typedef decltype(mmvq_nax_q3_k<false>) mmvq_nax_q3_k_t;
 template [[host_name("vv_mmvq_nax_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_nax_q3_k<false>;
 template [[host_name("vv_mmvq_nax_raw_q3_k")]] [[kernel]] mmvq_nax_q3_k_t mmvq_nax_q3_k<true>;
+
+// Prototype for metal_perf affine-q3 --layout nax only (no backend path): vv_mmvq_nax_q3_k's plan on Q3_K rewritten
+// exactly into a layout built for NAX fragments, so the decode is masks: (code - 4) sc is a small integer, exact in
+// f16, and d multiplies each block's f32 sum after the matmuls (Splash's epilogue scale). Fragment f of unit u (128
+// inputs) is scale group 8 u + f, lane (fm, fn) holding inputs 16 f + fn .. + 3. A row (a.b_rs apart) holds:
+// - codes q + 4 (0..7): per unit, per item j = fn / 4, three words (12 bytes) with its 32 codes 4 f + e as 16 pairs
+//   P = 2 f + e / 2. Pair P < 15 is at bits 3 (P % 5) and 16 + 3 (P % 5) of word P / 5, so (word >> s) & 0x00070007
+//   or 0x64006400 is the pair as half2 1024 + code. Pair 15's three bits are bit 15 (e = 2) and 31 (e = 3) of the
+//   three words, bit b of the code in word b. k 3 / 8 bytes.
+// - one int8 scale sc - 32 a group (k / 16), then each block's fp16 d (k / 256 x 2).
+// Simdgroup s takes blocks s, s + WK, ...; the host sends k a multiple of 256 and x rows 8-byte aligned. Out f32.
+[[kernel, max_total_threads_per_threadgroup(MMVQ_NAX_WK * 32)]] void vv_mmvq_nax_nq3(
+    const device uchar* w [[buffer(0)]], const device uchar* x [[buffer(1)]], device uchar* out [[buffer(2)]],
+    constant mm_args& a [[buffer(3)]], uint3 tid [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+  using Frag = BaseNAXFrag;
+  using afrag = typename Frag::template dtype_frag_t<half>;
+  using cfrag = typename Frag::template dtype_frag_t<float>;
+  constexpr short E = Frag::kElemsPerFrag;
+  const short2 coord = Frag::get_coord();
+  const uint fm = uint(coord.y), fn = uint(coord.x), j = fn / 4;
+  const uint m = a.m, n = a.n, blocks = a.k / 256, col0 = tid.x * 32;
+  const uint code_bytes = a.k * 3 / 8, d_at = code_bytes + a.k / 16;
+  const device uchar* rows[2][2];
+  STEEL_PRAGMA_UNROLL
+  for (short t = 0; t < 2; t++) {
+    STEEL_PRAGMA_UNROLL
+    for (short r = 0; r < 2; r++) rows[t][r] = w + ulong(min(col0 + 16 * t + 8 * r + fm, n - 1)) * a.b_rs;
+  }
+  const bool x_rows[2] = {fm < m, fm + 8 < m};
+  const device uchar* xr[2] = {x + ulong(fm) * a.a_rs, x + ulong(fm + 8) * a.a_rs};
+  cfrag acc[2] = {cfrag(0), cfrag(0)};
+  for (uint blk = sg; blk < blocks; blk += MMVQ_NAX_WK) {
+    cfrag D[2] = {cfrag(0), cfrag(0)};
+    for (uint uu = 0; uu < 2; uu++) {
+      const uint u = 2 * blk + uu;
+      vec<half, 4> xs[2][8];
+      STEEL_PRAGMA_UNROLL
+      for (short r = 0; r < 2; r++) {
+        STEEL_PRAGMA_UNROLL
+        for (short f = 0; f < 8; f++)
+          xs[r][f] = x_rows[r] ? *(const device vec<half, 4>*)(xr[r] + 2 * (u * 128 + 16 * f + fn)) : vec<half, 4>(0);
+      }
+      uint cw[2][2][3];
+      uint2 sc[2][2];
+      STEEL_PRAGMA_UNROLL
+      for (short t = 0; t < 2; t++) {
+        STEEL_PRAGMA_UNROLL
+        for (short r = 0; r < 2; r++) {
+          const device uint* c = (const device uint*)(rows[t][r] + (u * 4 + j) * 12);
+          cw[t][r][0] = c[0];
+          cw[t][r][1] = c[1];
+          cw[t][r][2] = c[2];
+          sc[t][r] = *(const device uint2*)(rows[t][r] + code_bytes + u * 8);
+        }
+      }
+      STEEL_PRAGMA_UNROLL
+      for (short f = 0; f < 8; f++) {
+        afrag af, bf[2];
+        STEEL_PRAGMA_UNROLL
+        for (short r = 0; r < 2; r++) {
+          STEEL_PRAGMA_UNROLL
+          for (short e = 0; e < 4; e++) af[4 * r + e] = xs[r][f][e];
+        }
+        STEEL_PRAGMA_UNROLL
+        for (short t = 0; t < 2; t++) {
+          STEEL_PRAGMA_UNROLL
+          for (short r = 0; r < 2; r++) {
+            const half s = half(as_type<char4>(f < 4 ? sc[t][r].x : sc[t][r].y)[f % 4]);
+            STEEL_PRAGMA_UNROLL
+            for (short p = 0; p < 2; p++) {
+              const short P = 2 * f + p;
+              uint v;
+              if (P < 15)
+                v = cw[t][r][P / 5] >> (3 * (P % 5)) & 0x00070007u;
+              else
+                v = (cw[t][r][0] >> 15 & 0x00010001u) | (cw[t][r][1] >> 14 & 0x00020002u) |
+                    (cw[t][r][2] >> 13 & 0x00040004u);
+              const half2 h = (as_type<half2>(v | 0x64006400u) - half2(1028.0h)) * s;
+              bf[t][4 * r + 2 * p] = h.x;
+              bf[t][4 * r + 2 * p + 1] = h.y;
+            }
+          }
+        }
+        Frag::mma(D[0], D[1], af, metal::bool_constant<false>{}, bf[0], bf[1], metal::bool_constant<true>{});
+      }
+    }
+    // D's columns (16 t + fn + e % 4) are not the lane's B columns: their d from those rows.
+    STEEL_PRAGMA_UNROLL
+    for (short t = 0; t < 2; t++) {
+      STEEL_PRAGMA_UNROLL
+      for (short q = 0; q < 4; q++) {
+        const device uchar* row = w + ulong(min(col0 + 16 * t + fn + q, n - 1)) * a.b_rs;
+        const float d = float(*(const device half*)(row + d_at + blk * 2));
+        acc[t][q] = fma(d, D[t][q], acc[t][q]);
+        acc[t][q + 4] = fma(d, D[t][q + 4], acc[t][q + 4]);
+      }
+    }
+  }
+  threadgroup float part[(MMVQ_NAX_WK - 1) * 2 * E * 32];
+  if (sg > 0) {
+    STEEL_PRAGMA_UNROLL
+    for (short t = 0; t < 2; t++) {
+      STEEL_PRAGMA_UNROLL
+      for (short e = 0; e < E; e++) part[(((sg - 1) * 2 + t) * E + e) * 32 + lane] = acc[t][e];
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (sg != 0) return;
+  for (uint s = 1; s < MMVQ_NAX_WK; s++) {
+    STEEL_PRAGMA_UNROLL
+    for (short t = 0; t < 2; t++) {
+      STEEL_PRAGMA_UNROLL
+      for (short e = 0; e < E; e++) acc[t][e] += part[(((s - 1) * 2 + t) * E + e) * 32 + lane];
+    }
+  }
+  STEEL_PRAGMA_UNROLL
+  for (short t = 0; t < 2; t++) {
+    STEEL_PRAGMA_UNROLL
+    for (short e = 0; e < E; e++) {
+      const uint r = fm + 8 * (e / 4), c = col0 + 16 * t + fn + e % 4;
+      if (r < m && c < n) ((device float*)(out + r * a.c_rs))[c] = acc[t][e];
+    }
+  }
+}

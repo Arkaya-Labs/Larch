@@ -25,6 +25,8 @@
 
 extern "C" const unsigned char larch_metallib[];
 extern "C" const std::size_t larch_metallib_len;
+extern "C" const unsigned char larch_nax_metallib[];  // attn_full_nax.metal, built for macOS 26.2
+extern "C" const std::size_t larch_nax_metallib_len;
 
 namespace {
 
@@ -53,7 +55,7 @@ void usage() {
   std::puts("  metal_perf repack-id --device ORDINAL --experts COUNT --rows ROWS --slots USED --n COLS --k WIDTH "
             "--weighted 0|1 --iterations COUNT   (Q3_K, k a multiple of 512: the repacked-expert prototype)");
   std::puts("  metal_perf affine-q3 --device ORDINAL --rows ROWS --n COLS --k WIDTH --iterations COUNT   (Q3_K, k a "
-            "multiple of 512: the exact MLX-style affine prototype)");
+            "multiple of 512: the exact MLX-style affine prototype) [--layout affine|nax]");
   std::puts("  metal_perf gemm --device ORDINAL --m ROWS --n COLS --k WIDTH --iterations COUNT");
   std::puts("  metal_perf add --device ORDINAL --d WIDTH --iterations COUNT");
   std::puts("  metal_perf linear --device ORDINAL --format FORMAT --m ROWS --n COLS --k WIDTH --iterations COUNT");
@@ -272,11 +274,13 @@ void wait_for(id<MTLCommandBuffer> command_buffer, const char* operation) {
   }
 }
 
-id<MTLComputePipelineState> metal_pipeline(id<MTLDevice> device, const std::string& name) {
-  static id<MTLLibrary> library = nil;  // loaded once a device: st builds 45 pipelines from it
+id<MTLComputePipelineState> metal_pipeline(id<MTLDevice> device, const std::string& name, bool nax = false) {
+  static id<MTLLibrary> libraries[2] = {nil, nil};  // loaded once a device: st builds 45 pipelines from it
+  id<MTLLibrary>& library = libraries[nax];
   NSError* error = nil;
   if (library.device != device) {
-    dispatch_data_t data = dispatch_data_create(larch_metallib, larch_metallib_len, nullptr, ^{});
+    dispatch_data_t data = nax ? dispatch_data_create(larch_nax_metallib, larch_nax_metallib_len, nullptr, ^{})
+                               : dispatch_data_create(larch_metallib, larch_metallib_len, nullptr, ^{});
     library = [device newLibraryWithData:data error:&error];
     if (!library) {
       const char* detail = error.localizedDescription.UTF8String;
@@ -957,23 +961,72 @@ bytes repack_aq3(const bytes& w, uint64_t rows, uint64_t nb, uint64_t rs) {
   return out;
 }
 
+// Q3_K rows of nb blocks in vv_mmvq_nax_nq3's layout (attn_full_nax.metal): the same int8 scales and fp16 d as
+// repack_aq3, codes q + 4 in per-lane words. Input 128 u + 16 f + 4 j + e of a row is code 4 f + e of item j of
+// unit u, pair P = 2 f + e / 2.
+bytes repack_nq3(const bytes& w, uint64_t rows, uint64_t nb, uint64_t rs) {
+  bytes out = repack_aq3(w, rows, nb, rs);
+  const uint64_t k = nb * 256, code_bytes = k * 3 / 8;
+  for (uint64_t r = 0; r < rows; ++r) {
+    uint8_t* o = out.data() + r * rs;
+    std::memset(o, 0, code_bytes);
+    for (uint64_t b = 0; b < nb; ++b) {
+      const uint8_t* q = w.data() + (r * nb + b) * 110;
+      for (int i = 0; i < 256; ++i) {
+        const int c = i / 32, n = c / 4, u = c % 4, l = i % 32;
+        const uint32_t code = uint32_t(((q[32 + 32 * n + l] >> (2 * u)) & 3) | ((q[l] >> (4 * n + u)) & 1) << 2);
+        const uint64_t unit = b * 2 + i / 128;
+        const int f = (i % 128) / 16, j = (i % 16) / 4, e = i % 4, pair = 2 * f + e / 2;
+        uint32_t words[3];
+        uint8_t* at = o + (unit * 4 + j) * 12;
+        std::memcpy(words, at, 12);
+        if (pair < 15) {
+          words[pair / 5] |= code << (3 * (pair % 5) + 16 * (e % 2));
+        } else {
+          for (int bit = 0; bit < 3; ++bit) words[bit] |= ((code >> bit) & 1) << (15 + 16 * (e % 2));
+        }
+        std::memcpy(at, words, 12);
+      }
+    }
+  }
+  return out;
+}
+
+// Code of input i of a row in repack_nq3's layout, read as vv_mmvq_nax_nq3 reads it.
+int nq3_code(const uint8_t* row, uint64_t i) {
+  const uint64_t unit = i / 128;
+  const int f = int(i % 128) / 16, j = int(i % 16) / 4, e = int(i % 4), pair = 2 * f + e / 2;
+  uint32_t words[3];
+  std::memcpy(words, row + (unit * 4 + j) * 12, 12);
+  uint32_t v;
+  if (pair < 15)
+    v = words[pair / 5] >> (3 * (pair % 5)) & 0x00070007u;
+  else
+    v = (words[0] >> 15 & 0x00010001u) | (words[1] >> 14 & 0x00020002u) | (words[2] >> 13 & 0x00040004u);
+  return int((e % 2 ? v >> 16 : v) & 7);
+}
+
 // metal_perf affine-q3: larch_mmvq on Q3_K blocks (today's kernels) against vv_mmvq_aq3 on the same weights in the
 // exact affine layout, f32 out. First checks every repacked weight equals ggml's Q3_K value bit for bit, then prints
 // both times, the bytes per weight and the largest output difference relative to the output's peak; exits 1 on a
 // weight mismatch or past 1e-3.
 void run_affine_q3(const arguments& parsed) {
-  require_only(parsed, {"--device", "--rows", "--n", "--k", "--iterations"});
+  require_only(parsed, {"--device", "--rows", "--n", "--k", "--iterations", "--layout"});
+  const auto layout_arg = parsed.values.find("--layout");
+  const bool nax = layout_arg != parsed.values.end() && layout_arg->second == "nax";
+  if (layout_arg != parsed.values.end() && !nax && layout_arg->second != "affine") fail("--layout must be affine or nax");
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
   const uint64_t rows = bounded(parsed, "--rows", 1, 64);
   const uint64_t n = bounded(parsed, "--n", 1, kMaxDimension);
   const uint64_t k = bounded(parsed, "--k", 512, kMaxDimension);
   const uint64_t iterations = bounded(parsed, "--iterations", 1, kMaxIterations);
   if (k % 512) fail("--k must be a multiple of 512");
+  if (nax && rows > 16) fail("--layout nax takes at most 16 rows");
   const uint64_t nb = k / 256, code_bytes = k * 3 / 8, groups = k / 16;
   const uint64_t rs = (code_bytes + groups + nb * 2 + 15) / 16 * 16;
   rng g(43);
   const bytes w = quant(LARCH_Q3_K, int64_t(n), int64_t(k), g);
-  const bytes wr = repack_aq3(w, n, nb, rs);
+  const bytes wr = nax ? repack_nq3(w, n, nb, rs) : repack_aq3(w, n, nb, rs);
   uint64_t mismatched = 0;
   for (uint64_t r = 0; r < n; ++r) {
     const uint8_t* o = wr.data() + r * rs;
@@ -985,7 +1038,7 @@ void run_affine_q3(const arguments& parsed) {
       for (int i = 0; i < 256; ++i) {
         const uint64_t e = b * 256 + i, bit = 3 * e;
         const uint32_t word = uint32_t(o[bit / 8]) | (bit / 8 + 1 < code_bytes ? uint32_t(o[bit / 8 + 1]) << 8 : 0);
-        const int code = int(word >> (bit % 8) & 7);
+        const int code = nax ? nq3_code(o, e) : int(word >> (bit % 8) & 7);
         const float s = half_to_float(dh) * float(int8_t(o[code_bytes + e / 16]));
         const float mine = s * float(code - 4);
         if (std::memcmp(&mine, &ref[i], 4)) ++mismatched;
@@ -1015,7 +1068,8 @@ void run_affine_q3(const arguments& parsed) {
   run.sync("affine-q3 reference timing");
 
   id<MTLDevice> device = direct_device(ordinal);
-  id<MTLComputePipelineState> pipe = metal_pipeline(device, "vv_mmvq_aq3");
+  id<MTLComputePipelineState> pipe = nax ? metal_pipeline(device, "vv_mmvq_nax_nq3", true)
+                                         : metal_pipeline(device, "vv_mmvq_aq3");
   id<MTLCommandQueue> queue = [device newCommandQueue];
   id<MTLBuffer> w_buf = [device newBufferWithBytes:wr.data() length:wr.size() options:MTLResourceStorageModeShared];
   id<MTLBuffer> x_buf = [device newBufferWithBytes:x.data() length:x.size() options:MTLResourceStorageModeShared];
@@ -1035,8 +1089,11 @@ void run_affine_q3(const arguments& parsed) {
     [e setBuffer:x_buf offset:0 atIndex:1];
     [e setBuffer:out_buf offset:0 atIndex:2];
     [e setBytes:&a length:sizeof a atIndex:3];
-    [e dispatchThreadgroups:MTLSizeMake(NSUInteger(rows), NSUInteger((n + 7) / 8), 1)
-        threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+    if (nax)
+      [e dispatchThreadgroups:MTLSizeMake(NSUInteger((n + 31) / 32), 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    else
+      [e dispatchThreadgroups:MTLSizeMake(NSUInteger(rows), NSUInteger((n + 7) / 8), 1)
+          threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
   };
   {
     id<MTLCommandBuffer> cb = [queue commandBuffer];
@@ -1060,9 +1117,9 @@ void run_affine_q3(const arguments& parsed) {
   [cb commit];
   wait_for(cb, "affine-q3 timing");
   const double aq_ns = (cb.GPUEndTime - cb.GPUStartTime) * 1e9;
-  std::printf("mode=affine-q3 rows=%llu n=%llu k=%llu iterations=%llu ref_us=%.3f affine_us=%.3f "
+  std::printf("mode=affine-q3 layout=%s rows=%llu n=%llu k=%llu iterations=%llu ref_us=%.3f affine_us=%.3f "
               "q3k_bits_per_weight=%.4f affine_bits_per_weight=%.4f weight_mismatches=%llu max_rel=%.3g %s\n",
-              static_cast<unsigned long long>(rows), static_cast<unsigned long long>(n),
+              nax ? "nax" : "affine", static_cast<unsigned long long>(rows), static_cast<unsigned long long>(n),
               static_cast<unsigned long long>(k), static_cast<unsigned long long>(iterations),
               double(ref_ns) / 1e3 / double(iterations), aq_ns / 1e3 / double(iterations), 110.0 * 8 / 256,
               double(code_bytes + groups + nb * 2) * 8 / double(k), static_cast<unsigned long long>(mismatched), rel,
