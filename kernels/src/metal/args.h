@@ -90,20 +90,15 @@ struct mm_args {
 
 /// mmvq_id: row r's slot j multiplies x's row r (x_slot_rs 0) or (r, j) by row ids[r, j] * n + column of w.
 /// Weighted, out's row r is the slots' sum by wt[r, j]; else out's (r, j) is that slot's product.
-/// sorted (vv_mmvq_id1 and id1n, unweighted only): wt's binding holds vv_moe_group's pair order instead, and
-/// threadgroup row y runs pair order[y].
 struct id_args {
   u64 x_rs, x_slot_rs, w_rs, ids_rs, wt_rs, out_rs, out_slot_rs, bias_rs;
-  u32 n, k, slots, has_bias, out_f32, weighted, experts, rows, sorted;
+  u32 n, k, slots, has_bias, out_f32, weighted, experts, rows;
 };
 
 /// mmvq_id grouped by expert (a prefill): from MOE_GROUP_PAIRS (row, slot) pairs per expert, each simdgroup
 /// decodes one column of an expert once, MOE_GROUP_T sub-blocks per lane (so k up to 1024 MOE_GROUP_T), and
 /// dots it with every pair that chose the expert, where the per-pair kernel decodes it again for each.
 #define MOE_GROUP_PAIRS 4
-/// The per-pair mmvq_id kernels run their pairs in expert order from this many (LARCH_METAL_MOE_SORT): mlx_lm's
-/// SwitchGLU sorts from 64 indices (switch_layers.py `do_sort = indices.size >= 64`).
-#define MOE_SORT_PAIRS 64
 #define MOE_GROUP_T 2
 /// The grouped kernel's weighted f32 partials per call at most (a 1024-row qwen3moe down: 8 x 2048 x 4 bytes a
 /// row); the engine's fit charges it with the pair lists.
