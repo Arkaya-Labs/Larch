@@ -52,6 +52,8 @@ void usage() {
             "--k WIDTH --weighted 0|1 --iterations COUNT");
   std::puts("  metal_perf repack-id --device ORDINAL --experts COUNT --rows ROWS --slots USED --n COLS --k WIDTH "
             "--weighted 0|1 --iterations COUNT   (Q3_K, k a multiple of 512: the repacked-expert prototype)");
+  std::puts("  metal_perf repack-mm --device ORDINAL --rows 1..8 --n COLS --k WIDTH --iterations COUNT   (Q3_K, n a "
+            "multiple of 16: the tiled-plane few-row prototype)");
   std::puts("  metal_perf gemm --device ORDINAL --m ROWS --n COLS --k WIDTH --iterations COUNT");
   std::puts("  metal_perf add --device ORDINAL --d WIDTH --iterations COUNT");
   std::puts("  metal_perf linear --device ORDINAL --format FORMAT --m ROWS --n COLS --k WIDTH --iterations COUNT");
@@ -67,7 +69,7 @@ void usage() {
 arguments parse_arguments(int argc, char** argv) {
   if (argc < 2) fail("missing measurement mode; pass --help for usage");
   arguments parsed{argv[1], {}};
-  if (parsed.mode != "copy" && parsed.mode != "mmvq" && parsed.mode != "st" && parsed.mode != "mmvq-id" && parsed.mode != "repack-id" && parsed.mode != "add" && parsed.mode != "dequant" &&
+  if (parsed.mode != "copy" && parsed.mode != "mmvq" && parsed.mode != "st" && parsed.mode != "mmvq-id" && parsed.mode != "repack-id" && parsed.mode != "repack-mm" && parsed.mode != "add" && parsed.mode != "dequant" &&
       parsed.mode != "attn-decode" &&
       parsed.mode != "attn-prefill" && parsed.mode != "gemm" && parsed.mode != "linear" && parsed.mode != "sample")
     fail("unknown measurement mode '" + parsed.mode + "'");
@@ -759,6 +761,122 @@ bytes repack_q3_k(const bytes& w, uint64_t rows, uint64_t nb, uint64_t rs) {
   return out;
 }
 
+// Q3_K [rows, nb blocks] in vv_mmvq_mmt8_q3_k's tiled planes (ops.metal), bits moved and none changed.
+bytes tile_q3_k(const bytes& w, uint64_t rows, uint64_t nb) {
+  const uint64_t groups = nb * 8;
+  bytes out(size_t(rows * groups * 12 + rows * nb * 16), 0);
+  uint8_t *lo = out.data(), *hi = lo + rows * groups * 8, *meta = lo + rows * groups * 12;
+  for (uint64_t r = 0; r < rows; ++r)
+    for (uint64_t b = 0; b < nb; ++b) {
+      const uint8_t* q = w.data() + (r * nb + b) * 110;
+      for (int i = 0; i < 256; ++i) {
+        const int c = i / 32, n = c / 4, u = c % 4, l = i % 32;
+        const int lb = (q[32 + 32 * n + l] >> (2 * u)) & 3, hb = (q[l] >> (4 * n + u)) & 1;
+        const uint64_t rec = ((r / 8) * groups + b * 8 + uint64_t(c)) * 8 + r % 8;
+        lo[rec * 8 + l / 4] |= uint8_t(lb << (2 * (l % 4)));
+        hi[rec * 4 + l / 8] |= uint8_t(hb << (l % 8));
+      }
+      uint8_t* m = meta + (((r / 8) * nb + b) * 8 + r % 8) * 16;
+      std::memcpy(m, q + 96, 12);
+      std::memcpy(m + 12, q + 108, 2);
+    }
+  return out;
+}
+
+// metal_perf repack-mm: larch_mmvq on Q3_K GGUF rows at 1-8 rows against vv_mmvq_mmt8_q3_k on the same rows in
+// tiled planes, f32 out, each timed on a serial encoder. Prints both times and the largest difference relative to the
+// output's peak; exits 1 past 1e-3.
+void run_repack_mm(const arguments& parsed) {
+  require_only(parsed, {"--device", "--rows", "--n", "--k", "--iterations"});
+  const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
+  const uint64_t rows = bounded(parsed, "--rows", 1, 8);
+  const uint64_t n = bounded(parsed, "--n", 16, kMaxDimension);
+  const uint64_t k = bounded(parsed, "--k", 256, kMaxDimension);
+  const uint64_t iterations = bounded(parsed, "--iterations", 1, kMaxIterations);
+  if (k % 256 || n % 16) fail("--k must be a multiple of 256 and --n of 16");
+  const uint64_t nb = k / 256;
+  rng g(43);
+  const bytes w = quant(LARCH_Q3_K, int64_t(n), int64_t(k), g);
+  const bytes wt = tile_q3_k(w, n, nb);
+  const bytes x = halves(size_t(rows * k), g);
+
+  session run(ordinal);
+  larch_buffer* w_vv = run.allocate(w.size(), "repack-mm weights");
+  larch_buffer* x_vv = run.allocate(x.size(), "repack-mm x");
+  larch_buffer* out_vv = run.allocate(rows * n * 4, "repack-mm output");
+  run.upload(w_vv, w.data(), w.size(), "repack-mm weight upload");
+  run.upload(x_vv, x.data(), x.size(), "repack-mm x upload");
+  run.sync("repack-mm setup");
+  const larch_tensor weight = tensor(w_vv, LARCH_Q3_K, 2, {int64_t(n), int64_t(k)}, {int64_t(nb), 1});
+  const larch_tensor activation = tensor(x_vv, LARCH_F16, 2, {int64_t(rows), int64_t(k)}, {int64_t(k), 1});
+  const larch_tensor output = tensor(out_vv, LARCH_F32, 2, {int64_t(rows), int64_t(n)}, {int64_t(n), 1});
+  check(larch_mmvq(run.stream, &weight, &activation, nullptr, &output), run.device, "repack-mm ref");
+  std::vector<float> ref(static_cast<size_t>(rows * n));
+  check(larch_download(run.stream, out_vv, 0, ref.data(), rows * n * 4), run.device, "repack-mm ref download");
+  run.sync("repack-mm reference");
+  const uint64_t ref_ns = gpu_elapsed(run, [&] {
+    for (uint64_t i = 0; i < iterations; ++i)
+      check(larch_mmvq(run.stream, &weight, &activation, nullptr, &output), run.device, "larch_mmvq");
+  });
+  run.sync("repack-mm reference timing");
+
+  id<MTLDevice> device = direct_device(ordinal);
+  id<MTLComputePipelineState> pipe = metal_pipeline(device, "vv_mmvq_mmt8_q3_k");
+  id<MTLCommandQueue> queue = [device newCommandQueue];
+  id<MTLBuffer> w_buf = [device newBufferWithBytes:wt.data() length:wt.size() options:MTLResourceStorageModeShared];
+  id<MTLBuffer> x_buf = [device newBufferWithBytes:x.data() length:x.size() options:MTLResourceStorageModeShared];
+  id<MTLBuffer> out_buf = [device newBufferWithLength:rows * n * 4 options:MTLResourceStorageModeShared];
+  if (!queue || !w_buf || !x_buf || !out_buf) fail("repack-mm buffers could not be allocated");
+  mm_args a = {};
+  a.a_rs = k * 2;
+  a.c_rs = n * 4;
+  a.m = uint32_t(rows);
+  a.n = uint32_t(n);
+  a.k = uint32_t(k);
+  a.c_f32 = 1;
+  a.alpha = 1.0f;
+  const auto encode = [&](id<MTLComputeCommandEncoder> e) {
+    [e setComputePipelineState:pipe];
+    [e setBuffer:w_buf offset:0 atIndex:0];
+    [e setBuffer:x_buf offset:0 atIndex:1];
+    [e setBuffer:w_buf offset:0 atIndex:2];  // no bias
+    [e setBuffer:out_buf offset:0 atIndex:3];
+    [e setBytes:&a length:sizeof a atIndex:4];
+    [e dispatchThreadgroups:MTLSizeMake(NSUInteger(n / (8 * MMVQ_MMA_NT)), 1, 1)
+        threadsPerThreadgroup:MTLSizeMake(32 * MMVQ_MMA_SG, 1, 1)];
+  };
+  {
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];
+    encode(e);
+    [e endEncoding];
+    [cb commit];
+    wait_for(cb, "repack-mm check");
+  }
+  const auto* mine = static_cast<const float*>(out_buf.contents);
+  double peak = 0, err = 0;
+  for (uint64_t i = 0; i < rows * n; ++i) {
+    peak = std::max(peak, double(std::fabs(ref[size_t(i)])));
+    err = std::max(err, double(std::fabs(mine[i] - ref[size_t(i)])));
+  }
+  const double rel = peak > 0 ? err / peak : err;
+  id<MTLCommandBuffer> cb = [queue commandBuffer];
+  id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];  // serial: each call waits for the one before
+  for (uint64_t i = 0; i < iterations; ++i) encode(e);
+  [e endEncoding];
+  [cb commit];
+  wait_for(cb, "repack-mm timing");
+  const double t_ns = (cb.GPUEndTime - cb.GPUStartTime) * 1e9;
+  const uint64_t read = n * nb * 110;
+  std::printf("mode=repack-mm rows=%llu n=%llu k=%llu iterations=%llu ref_us=%.3f tiled_us=%.3f ref_gbps=%.3f "
+              "tiled_gbps=%.3f max_rel=%.3g %s\n",
+              static_cast<unsigned long long>(rows), static_cast<unsigned long long>(n),
+              static_cast<unsigned long long>(k), static_cast<unsigned long long>(iterations),
+              double(ref_ns) / 1e3 / double(iterations), t_ns / 1e3 / double(iterations),
+              bytes_per_ns(read, ref_ns), double(read) * double(iterations) / t_ns, rel, rel <= 1e-3 ? "pass" : "FAIL");
+  if (rel > 1e-3) std::exit(1);
+}
+
 // metal_perf repack-id: run_mmvq_id's shapes and expert choice on Q3_K, larch_mmvq_id on the GGUF blocks against
 // vv_mmvq_id_rq3 on the same blocks repacked, f32 out. Prints both times and the largest difference relative to
 // the output's peak; exits 1 past 1e-3.
@@ -1199,6 +1317,7 @@ int main(int argc, char** argv) {
       else if (parsed.mode == "st") run_st(parsed);
       else if (parsed.mode == "mmvq-id") run_mmvq_id(parsed);
       else if (parsed.mode == "repack-id") run_repack_id(parsed);
+      else if (parsed.mode == "repack-mm") run_repack_mm(parsed);
       else if (parsed.mode == "add") run_add(parsed);
       else if (parsed.mode == "dequant") run_dequant(parsed);
       else if (parsed.mode == "attn-prefill") run_attention_prefill(parsed);

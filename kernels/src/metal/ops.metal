@@ -747,6 +747,68 @@ kernel void vv_mmvq_mmc8_q3_k(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]]
   }
 }
 
+// Prototype for metal_perf repack-mm only (no backend path yet): vv_mmvq_mma8_q3_k on Q3_K rows that perf.mm's
+// tile_q3_k rearranged losslessly into Splash's tiled planes (runtime/metal/abi/QuantFormat.h): per 8-row tile T and
+// 32-input group G, the 8 rows' low-bit records (8 bytes, input e at bits 2 e) side by side, then the same for the
+// high bits (4 bytes, input e at bit e), then per block the rows' 12 scale bytes and d (16 bytes a row). So the
+// lanes of a step read 128 contiguous bytes of each plane, where the GGUF rows put each lane's bytes a row apart.
+kernel void vv_mmvq_mmt8_q3_k(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in bias [[buffer(2)]],
+                              device uchar* out [[buffer(3)]], constant mm_args& a [[buffer(4)]],
+                              uint tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]],
+                              ushort lane [[thread_index_in_simdgroup]]) {
+  constexpr int NT = MMVQ_MMA_NT;
+  threadgroup float red[MMVQ_MMA_SG * NT * 64];
+  const ushort fm = mma_fm(lane), fn = mma_fn(lane);
+  const uint n0 = tg * 8 * NT, groups = a.k / 32, nb = a.k / 256;
+  bytes_in lo_plane = w, hi_plane = w + u64(a.n) * groups * 8, meta = w + u64(a.n) * groups * 12;
+  device const half* xr[2];
+#pragma clang loop unroll(full)
+  for (int e = 0; e < 2; ++e)
+    xr[e] = (device const half*)(x + u64(min(uint(fn + e), a.m - 1)) * a.a_rs) + 16 * (fm / 2) + 8 * (fm % 2);
+  float2 c[NT];
+#pragma clang loop unroll(full)
+  for (int t = 0; t < NT; ++t) c[t] = 0.0f;
+  for (uint g = sg; g < a.k / 64; g += MMVQ_MMA_SG) {
+    float2 b[8];
+#pragma clang loop unroll(full)
+    for (int i = 0; i < 2; ++i) {
+      const float4 u = float4(half4(((device const packed_half4*)(xr[0] + 64 * g))[i]));
+      const float4 v = float4(half4(((device const packed_half4*)(xr[1] + 64 * g))[i]));
+#pragma clang loop unroll(full)
+      for (int s = 0; s < 4; ++s) b[4 * i + s] = float2(u[s], v[s]);
+    }
+    const uint p = 4 * g + fn / 2, g32 = p / 2, h = p % 2, pi = p % 16;
+#pragma clang loop unroll(full)
+    for (int t = 0; t < NT; ++t) {
+      const uint T = min(n0 / 8 + t, a.n / 8 - 1);  // past n: ignored
+      const u64 rec = (u64(T) * groups + g32) * 8 + fm;
+      const uint lo = *(device const uint*)(lo_plane + rec * 8 + 4 * h);
+      const uint hi = *(device const ushort*)(hi_plane + rec * 4 + 2 * h);
+      bytes_in m = meta + ((u64(T) * nb + p / 16) * 8 + fm) * 16;
+      const int s6 = int((m[pi % 8] >> (4 * (pi / 8)) & 0xF) | (m[8 + pi % 4] >> (2 * (pi / 4)) & 3) << 4) - 32;
+      const float scale = h16(m + 12) * float(s6);
+      float y[16];
+#pragma clang loop unroll(full)
+      for (int l = 0; l < 16; ++l) y[l] = scale * float(int((lo >> (2 * l)) & 3) - ((hi >> l) & 1 ? 0 : 4));
+#pragma clang loop unroll(full)
+      for (int s = 0; s < 8; ++s) mma_acc(c[t], float2(y[s], y[8 + s]), b[s]);
+    }
+  }
+#pragma clang loop unroll(full)
+  for (int t = 0; t < NT; ++t)
+#pragma clang loop unroll(full)
+    for (int e = 0; e < 2; ++e) red[(sg * NT + t) * 64 + 2 * lane + e] = c[t][e];
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint i = sg * 32 + lane; i < NT * 64; i += MMVQ_MMA_SG * 32) {
+    float v = 0;
+#pragma clang loop unroll(full)
+    for (int s = 0; s < MMVQ_MMA_SG; ++s) v += red[s * NT * 64 + i];
+    const ushort l = i % 64 / 2;
+    const uint n = n0 + 8 * (i / 64 % NT) + mma_fm(l), r = mma_fn(l) + i % 2;
+    if (n < a.n && r < a.m) store_c(out, a, bias, r, n, v);
+  }
+}
+
 // mmvq_id: one simdgroup per column n of w's experts, for one (row, slot) pair or, weighted, for one row
 // over its slots in ascending order (the CPU reference's sum, in f32). Each lane decodes sub-blocks lane,
 // lane + 32, ... of the chosen expert's row, as mmvq's one-column kernel does.
