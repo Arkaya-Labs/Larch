@@ -1,0 +1,32 @@
+{"id": "math-0", "kind": "math", "content": "A shop sells pencils at 3 for $1.20. How much do 15 pencils cost, in dollars? Solve it step by step, briefly, then give the final number alone on the last line as 'Answer: <number>'.", "answer": 6}
+{"id": "math-1", "kind": "math", "content": "A train travels 180 km in 2.5 hours. What is its average speed in km/h? Solve it step by step, briefly, then give the final number alone on the last line as 'Answer: <number>'.", "answer": 72}
+{"id": "math-2", "kind": "math", "content": "Maria has 4 boxes with 12 eggs each. She uses 17 eggs. How many eggs are left? Solve it step by step, briefly, then give the final number alone on the last line as 'Answer: <number>'.", "answer": 31}
+{"id": "math-3", "kind": "math", "content": "What is 15% of 240? Solve it step by step, briefly, then give the final number alone on the last line as 'Answer: <number>'.", "answer": 36}
+{"id": "math-4", "kind": "math", "content": "A rectangle is 14 cm long and 9 cm wide. What is its area in square centimeters? Solve it step by step, briefly, then give the final number alone on the last line as 'Answer: <number>'.", "answer": 126}
+{"id": "math-5", "kind": "math", "content": "If 5 workers build a wall in 12 days, how many days do 3 workers need at the same rate? Solve it step by step, briefly, then give the final number alone on the last line as 'Answer: <number>'.", "answer": 20}
+{"id": "math-6", "kind": "math", "content": "The sum of three consecutive integers is 72. What is the largest of them? Solve it step by step, briefly, then give the final number alone on the last line as 'Answer: <number>'.", "answer": 25}
+{"id": "math-7", "kind": "math", "content": "A book costs $18 after a 25% discount. What was the original price in dollars? Solve it step by step, briefly, then give the final number alone on the last line as 'Answer: <number>'.", "answer": 24}
+{"id": "math-8", "kind": "math", "content": "How many minutes are there in 3.75 hours? Solve it step by step, briefly, then give the final number alone on the last line as 'Answer: <number>'.", "answer": 225}
+{"id": "math-9", "kind": "math", "content": "A tank holds 500 liters and is 36% full. How many more liters are needed to fill it? Solve it step by step, briefly, then give the final number alone on the last line as 'Answer: <number>'.", "answer": 320}
+{"id": "prose-0", "kind": "prose", "content": "Explain in two paragraphs why the sky is blue."}
+{"id": "prose-1", "kind": "prose", "content": "Write a short story of about 150 words about a lighthouse keeper who finds a message in a bottle."}
+{"id": "prose-2", "kind": "prose", "content": "What are the main differences between a virus and a bacterium? Answer in a few short paragraphs."}
+{"id": "prose-3", "kind": "prose", "content": "Give me five practical tips for sleeping better, with one sentence of explanation each."}
+{"id": "prose-4", "kind": "prose", "content": "Summarize the causes of the French Revolution in about 120 words."}
+{"id": "prose-5", "kind": "prose", "content": "Write a polite email to a landlord asking them to fix a leaking kitchen tap."}
+{"id": "prose-6", "kind": "prose", "content": "Explain how a refrigerator keeps food cold, for a 12-year-old."}
+{"id": "prose-7", "kind": "prose", "content": "Describe the water cycle in four steps."}
+{"id": "code-0", "kind": "code", "content": "Write a Python function that returns the n-th Fibonacci number iteratively, with a docstring."}
+{"id": "code-1", "kind": "code", "content": "Write a JavaScript function that debounces another function. Include a short usage example."}
+{"id": "code-2", "kind": "code", "content": "Write a SQL query that returns the top 5 customers by total order amount from tables customers(id, name) and orders(id, customer_id, amount)."}
+{"id": "code-3", "kind": "code", "content": "Write a Rust function that reverses the order of the words in a string slice and returns a String."}
+{"id": "code-4", "kind": "code", "content": "Write a bash script that counts the lines in every .txt file in the current folder and prints the total."}
+{"id": "code-5", "kind": "code", "content": "Write a Python class for a stack with push, pop, peek and is_empty methods."}
+{"id": "code-6", "kind": "code", "content": "Explain what this Python code prints and why: print([i*i for i in range(5) if i % 2 == 0])"}
+{"id": "code-7", "kind": "code", "content": "Write a C function that checks whether a string is a palindrome, ignoring case."}
+{"id": "json-0", "kind": "json", "content": "Return a JSON object describing a fictional book with the keys title, author, year, genres (a list) and pages. Output only the JSON."}
+{"id": "json-1", "kind": "json", "content": "Convert this to JSON with the keys name, age and city: 'Sam is 34 and lives in Denver.' Output only the JSON."}
+{"id": "json-2", "kind": "json", "content": "Return a JSON array of three planets, each with name, order_from_sun and has_rings. Output only the JSON."}
+{"id": "json-3", "kind": "json", "content": "Write a JSON schema for a user record with id (integer), email (string) and tags (array of strings). Output only the JSON."}
+{"id": "copy-0", "kind": "copy", "content": "Repeat the following text back exactly, with no other words:\n\nThe old mill stood at the edge of the river for two hundred years. Every spring the water rose and turned its wheel, and every autumn the farmers brought their grain. When the railway came, the mill fell quiet, but the village kept it as a reminder of slower days. Children still climb its stone steps and listen to the river below."}
+{"id": "copy-1", "kind": "copy", "content": "Repeat the following text back exactly, with no other words:\n\nTo install the tool, download the archive, unpack it into a folder of your choice, and add that folder to your PATH. Then open a new terminal and run the version command to check that it works. If the command is not found, close every terminal window and try again, or restart the computer."}
