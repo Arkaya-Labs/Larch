@@ -201,3 +201,131 @@ PAGED_NAX("vv_attn_paged_nax64_hm", 64, 4, 1, true)
 PAGED_NAX("vv_attn_paged_nax128_hm", 128, 4, 1, true)
 PAGED_NAX("vv_attn_paged_nax256_hm", 256, 2, 4, true)
 #pragma clang diagnostic pop
+
+// mmvq at 2 to 16 rows on NAX fragments, Q3_K: MLX's affine_qmv_nax (quantized_nax.h, "few rows of x times
+// transposed weights") with GGUF Q3_K blocks read in place. Threadgroup t takes columns 32 t .. + 31 (two 16-column
+// B fragments); its MMVQ_NAX_WK simdgroups split k's units (half blocks, ST_UNIT inputs), simdgroup s taking units
+// s, s + WK, .... Lane (fm, fn) holds x rows fm and fm + 8 and w columns fm and fm + 8 of each fragment. It decodes
+// item j = fn / 4 of each unit with staged.metal's st_q3_k lanes (bytes 8 j .. + 7 of the half's qs and hmask), so
+// its 32 inputs are 32 u + 8 j .. + 7 for u = 0..3, and it loads the matching x; A and B order k the same way. Each
+// weight is decoded once to the f16 value vv_mmvq_st stages, and meets every row in one 16x32x16 matmul per 16
+// inputs, so 2 rows cost what 16 do in MMA work but the decode is not repeated. The simdgroups' f32 sums add in
+// simdgroup order through threadgroup memory. The host sends k a multiple of 256 and x rows 16-byte aligned.
+#define MMVQ_NAX_WK 8
+
+static inline uint nax_u32_at(const device uchar* p) {  // 4 bytes at a 2-byte aligned p (Q3_K blocks are 110 bytes)
+  const device ushort* h = (const device ushort*)p;
+  return uint(h[0]) | uint(h[1]) << 16;
+}
+
+[[kernel, max_total_threads_per_threadgroup(MMVQ_NAX_WK * 32)]] void vv_mmvq_nax_q3_k(
+    const device uchar* w [[buffer(0)]], const device uchar* x [[buffer(1)]], const device uchar* bias [[buffer(2)]],
+    device uchar* out [[buffer(3)]], constant mm_args& a [[buffer(4)]], uint3 tid [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+  using Frag = BaseNAXFrag;
+  using afrag = typename Frag::template dtype_frag_t<half>;
+  using cfrag = typename Frag::template dtype_frag_t<float>;
+  constexpr short E = Frag::kElemsPerFrag;
+  const short2 coord = Frag::get_coord();
+  const uint fm = uint(coord.y), fn = uint(coord.x), j = fn / 4;
+  const uint m = a.m, n = a.n, units = a.k / 128, col0 = tid.x * 32;
+  const device uchar* rows[2][2];
+  STEEL_PRAGMA_UNROLL
+  for (short t = 0; t < 2; t++) {
+    STEEL_PRAGMA_UNROLL
+    for (short r = 0; r < 2; r++)  // a ragged last tile decodes column n - 1 for the columns past n, stored nowhere
+      rows[t][r] = w + ulong(min(col0 + 16 * t + 8 * r + fm, n - 1)) * a.b_rs;
+  }
+  const bool x_rows[2] = {fm < m, fm + 8 < m};
+  const device uchar* xr[2] = {x + ulong(fm) * a.a_rs, x + ulong(fm + 8) * a.a_rs};
+  cfrag D[2] = {cfrag(0), cfrag(0)};
+  for (uint u = sg; u < units; u += MMVQ_NAX_WK) {
+    vec<half, 8> xs[2][4];
+    STEEL_PRAGMA_UNROLL
+    for (short r = 0; r < 2; r++) {
+      STEEL_PRAGMA_UNROLL
+      for (short i = 0; i < 4; i++)
+        xs[r][i] = x_rows[r] ? *(const device vec<half, 8>*)(xr[r] + 2 * (u * 128 + 32 * i + 8 * j)) : vec<half, 8>(0);
+    }
+    // st_q3_k::load and stage: bit pair i of the qs byte, minus 4 where hmask bit 4 h + i is clear, times
+    // d (scale 8 h + 2 i + j / 2 - 32); fma(code, dl, -4 dl) with code = q + 4.
+    const uint h = u % 2;
+    uint q[2][2][2], hm[2][2][2];
+    float dl[2][2][4];
+    STEEL_PRAGMA_UNROLL
+    for (short t = 0; t < 2; t++) {
+      STEEL_PRAGMA_UNROLL
+      for (short r = 0; r < 2; r++) {
+        const device uchar* b = rows[t][r] + u / 2 * 110;
+        const device uchar *qp = b + 32 + 32 * h + 8 * j, *hp = b + 8 * j;
+        q[t][r][0] = nax_u32_at(qp);
+        q[t][r][1] = nax_u32_at(qp + 4);
+        hm[t][r][0] = nax_u32_at(hp);
+        hm[t][r][1] = nax_u32_at(hp + 4);
+        const uint s0 = nax_u32_at(b + 96), s1 = nax_u32_at(b + 100), s2 = nax_u32_at(b + 104);
+        const float d = float(*(const device half*)(b + 108));
+        STEEL_PRAGMA_UNROLL
+        for (short i = 0; i < 4; i++) {
+          const uint si = 8 * h + 2 * i + j / 2, sb = si % 8;
+          const uint lo = (sb < 4 ? s0 : s1) >> (8 * (sb % 4) + 4 * h) & 0xF;
+          const uint hi = s2 >> (8 * (si % 4) + 2 * (si / 4)) & 3;
+          dl[t][r][i] = d * float(int(lo | hi << 4) - 32);
+        }
+      }
+    }
+    STEEL_PRAGMA_UNROLL
+    for (short f = 0; f < 8; f++) {  // inputs 32 (f / 2) + 8 j + 4 (f % 2) .. + 3
+      const short i = f / 2, word = f % 2;
+      afrag af, bf[2];
+      STEEL_PRAGMA_UNROLL
+      for (short r = 0; r < 2; r++) {
+        STEEL_PRAGMA_UNROLL
+        for (short e = 0; e < 4; e++) af[4 * r + e] = xs[r][i][4 * word + e];
+      }
+      STEEL_PRAGMA_UNROLL
+      for (short t = 0; t < 2; t++) {
+        STEEL_PRAGMA_UNROLL
+        for (short r = 0; r < 2; r++) {
+          const uint c = (q[t][r][word] >> (2 * i) & 0x03030303u) | (hm[t][r][word] >> (4 * h + i) & 0x01010101u) << 2;
+          const float s = dl[t][r][i];
+          const half4 v = half4(fma(float4(as_type<uchar4>(c)), float4(s), float4(-4.0f * s)));
+          STEEL_PRAGMA_UNROLL
+          for (short e = 0; e < 4; e++) bf[t][4 * r + e] = v[e];
+        }
+      }
+      Frag::mma(D[0], D[1], af, metal::bool_constant<false>{}, bf[0], bf[1], metal::bool_constant<true>{});
+    }
+  }
+  threadgroup float part[(MMVQ_NAX_WK - 1) * 2 * E * 32];
+  if (sg > 0) {
+    STEEL_PRAGMA_UNROLL
+    for (short t = 0; t < 2; t++) {
+      STEEL_PRAGMA_UNROLL
+      for (short e = 0; e < E; e++) part[(((sg - 1) * 2 + t) * E + e) * 32 + lane] = D[t][e];
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (sg != 0) return;
+  for (uint s = 1; s < MMVQ_NAX_WK; s++) {
+    STEEL_PRAGMA_UNROLL
+    for (short t = 0; t < 2; t++) {
+      STEEL_PRAGMA_UNROLL
+      for (short e = 0; e < E; e++) D[t][e] += part[(((s - 1) * 2 + t) * E + e) * 32 + lane];
+    }
+  }
+  STEEL_PRAGMA_UNROLL
+  for (short t = 0; t < 2; t++) {
+    STEEL_PRAGMA_UNROLL
+    for (short e = 0; e < E; e++) {
+      const uint r = fm + 8 * (e / 4), c = col0 + 16 * t + fn + e % 4;
+      if (r >= m || c >= n) continue;
+      float v = D[t][e];
+      if (a.has_bias) v += *(const device float*)(bias + c * a.bias_rs);
+      device uchar* o = out + r * a.c_rs;
+      if (a.c_f32)
+        ((device float*)o)[c] = v;
+      else
+        ((device half*)o)[c] = half(v);
+    }
+  }
+}
