@@ -1892,17 +1892,19 @@ static void mmvq_id_mixed() {
 // mmvq_id_mixed gives, per (row, slot), the bytes mmvq_id gives on one tensor holding every expert at the dtype
 // mixed keeps it in: the hot experts' tensor `full` (q) for a hot pair, the cold ones' `full_cold` (Q2_K) for a cold
 // one; weighted, on rows whose slots are all hot or all cold. Run on the CPU reference and on CUDA (larch.h's
-// promise); the fast CPU device's mmvq_id has its own sums.
+// promise); the fast CPU device's mmvq_id has its own sums. k 768 too: 24 units a row, where CUDA's hot pairs take
+// two columns a warp, as mmvq_id's do, beside Q2_K's.
 static int mixed_bytes(const side& x) {
   int wrong = 0;
-  const int64_t experts = 8, n = 33, k = 512, slots = 3;
+  const int64_t experts = 8, n = 33, slots = 3;
   const std::vector<int32_t> cold = {1, 4, 6};
   const auto is_cold = [&](int32_t e) { return std::find(cold.begin(), cold.end(), e) != cold.end(); };
+  for (const int64_t k : {int64_t(512), int64_t(768)})
   for (const larch_dtype q : {LARCH_Q3_K, LARCH_Q4_K})
     for (const int64_t rows : {1, 3, 40})
       for (const bool weighted : {false, true}) {
         const std::string name = std::string("mixed bytes ") + DTYPE[q] + ", " + std::to_string(rows) + " rows" +
-                                 (weighted ? ", weighted" : "");
+                                 (weighted ? ", weighted" : "") + (k == 512 ? "" : ", k " + std::to_string(k));
         rng g = seeded(name);
         const bytes full = quant(q, experts * n, k, g), full_cold = quant(LARCH_Q2_K, experts * n, k, g);
         const mixed_layer m = split_layer(q, full, full_cold, experts, n, k, cold);

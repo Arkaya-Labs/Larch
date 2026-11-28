@@ -1171,7 +1171,7 @@ __device__ __forceinline__ float pair_dot(const uint8_t* w, int units, bool w16,
     }
   }
 #pragma unroll
-  for (int o = G / 2; o > 0; o /= 2) acc += __shfl_xor_sync(0xffffffffu, acc, o);
+  for (int o = G / 2; o > 0; o /= 2) acc += __shfl_xor_sync(VV_FULL_MASK, acc, o);
   return acc;
 }
 
@@ -1197,12 +1197,13 @@ static bool id_aligned(const void* p, int64_t rb) {
   return PAIR_DOT<T> ? (uintptr_t(p) | uint64_t(rb)) % 16 == 0 : uintptr_t(p) % 8 == 0;
 }
 
-// Lanes a column (G) for mmvq_id at T (cold experts TC) over k: 16 where both take pair_dot and a row has under 32
-// units (the hybrid MoE target's down, k 512: no lane idles), else 32. Measured on sm_120 (fused_bench, cold experts).
+// Lanes a column (G) for mmvq_id at T over k: 16 where T takes pair_dot and a row has under 32 units (the hybrid MoE
+// target's down, k 512: no lane idles), else 32; the hot dtype's alone, so mmvq_id_mixed's hot pairs give mmvq_id's
+// bytes beside cold experts of any dtype (a Q2_K one keeps id_dot's warp, mmvq_id_k's cold()). Measured on sm_120 (fused_bench, cold experts).
 // ponytail: measured on sm_120 only; re-measure on the 3050 and 4060.
-template <int T, int TC = T>
+template <int T>
 static int id_group(const stream& s, int64_t k) {
-  return PAIR_DOT<T> && PAIR_DOT<TC> && s.warp == 32 && k / (8 * unit<T>::P) < 32 ? 16 : 32;
+  return PAIR_DOT<T> && s.warp == 32 && k / (8 * unit<T>::P) < 32 ? 16 : 32;
 }
 
 // mmvq_id: a group of G lanes (id_group) per column of the chosen expert, for one (row, slot) pair (blockIdx.x) or, weighted, for one
@@ -1231,9 +1232,25 @@ __global__ void mmvq_id_k(const uint8_t* w, int64_t w_rb, bool w_al, const uint8
     const int64_t row = int64_t(e) * n + col;
     const __half* xr = x + r * x_ld + j * x_slot;
     const int32_t s = table ? table[e] : 0;
+    // A cold expert without pair_dot (Q2_K) keeps id_dot's warp: the warp's columns in turn, each lane keeping its
+    // own, so the pair gives mmvq_id's bytes at its dtype beside hot pairs of any group.
+    const auto cold = [&] {
+      const uint8_t* slot = wc + (-1 - int64_t(s)) * n * wc_rb;
+      if constexpr (PAIR_DOT<TC>) {
+        return id_pair<TC, G, true>(slot + col * wc_rb, wc_al, xr, x16, k, lane);
+      } else {
+        float y = 0;
+        for (int i = 0; i < per; ++i) {
+          const int ci = min(first_col + i, n - 1);
+          const float v = id_dot<TC>(slot + ci * wc_rb, wc_al, xr, k, lane);
+          if (ci == col) y = v;
+        }
+        return y;
+      }
+    };
     float y = !table  ? id_pair<T, G>(w + row * w_rb, w_al, xr, x16, k, lane)
               : s >= 0 ? id_pair<T, G>(w + (int64_t(s) * n + col) * w_rb, w_al, xr, x16, k, lane)
-                       : id_pair<TC, G, true>(wc + ((-1 - int64_t(s)) * n + col) * wc_rb, wc_al, xr, x16, k, lane);
+                       : cold();
     if (bias) y += bias[row * bias_ld];
     if (weighted) {
       sum += wt[r * wt_ld + j] * y;
@@ -1275,7 +1292,7 @@ static void mmvq_id_issue(const stream& s, const view& w, const view& wc, const 
       mmvq_id_grouped<T, TC>(s, w, wc, table, x, ids, b, wt, o))
     return;
 #endif
-  const int G = id_group<T, TC>(s, k);
+  const int G = id_group<T>(s, k);
   const int64_t cols = PAIR_DOT<T> ? warps * (s.warp / G) : warps, x_slot = x.ndim == 3 ? k : 0;
   const bool x16 = (uintptr_t(x.p) | uint64_t(x.ld) * 2 | uint64_t(x_slot) * 2) % 16 == 0;
   // A cold expert at T keeps id_aligned's rule; one at another dtype (Q2_K) takes id_dot's 2-byte loads.
