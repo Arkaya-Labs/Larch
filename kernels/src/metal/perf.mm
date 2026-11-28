@@ -46,7 +46,7 @@ void usage() {
   std::puts("usage:");
   std::puts("  metal_perf copy --device ORDINAL --bytes BYTES --iterations COUNT");
   std::puts("  metal_perf mmvq --device ORDINAL --format FORMAT --rows ROWS --n COLS --k WIDTH --iterations COUNT");
-  std::puts("  metal_perf st --device ORDINAL --format FORMAT|all --n COLS --k WIDTH --iterations COUNT");
+  std::puts("  metal_perf st --device ORDINAL --format FORMAT|all --n COLS --k WIDTH --iterations COUNT [--cold MIB]");
   std::puts("  metal_perf dequant --device ORDINAL --format FORMAT --n ROWS --k WIDTH --iterations COUNT");
   std::puts("  metal_perf mmvq-id --device ORDINAL --format FORMAT --experts COUNT --rows ROWS --slots USED --n COLS "
             "--k WIDTH --weighted 0|1 --iterations COUNT");
@@ -478,12 +478,15 @@ constexpr const char* kStFormats[] = {"q3_k", "q4_k", "q5_k", "q6_k", "q8_0"};
 // larch_mmvq to 1e-2. Then each config is timed at each row count. One line per row count, with design 6.1's rule
 // on rows 1, 2, 4 and 8 (at most 1.01, 1.04, 1.10 and 1.18 times mmvq at 1 row; 1.10 at 8 rows for a vocab-wide
 // lm_head, n of 65536 or more), and a summary of the configs that pass at all four. False when a check failed.
+// --cold MIB: each timed call reads the next of enough copies of w to fill MIB MiB, as a decode step reads each
+// weight from DRAM once, where the warm default reads one copy from cache (the checks use the first copy).
 bool run_st_format(const arguments& parsed, const std::string& name) {
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
   const quant_format qf = format(name);
   const uint64_t n = bounded(parsed, "--n", 1, kMaxDimension);
   const uint64_t k = bounded(parsed, "--k", ST_UNIT, kMaxDimension);
   const uint64_t iterations = bounded(parsed, "--iterations", 1, kMaxIterations);
+  const uint64_t cold_mib = parsed.values.count("--cold") ? bounded(parsed, "--cold", 0, 4096) : 0;
   if (k % ST_UNIT) fail("--k must be a multiple of 128 (the staged tile's unit)");
   id<MTLDevice> device = direct_device(ordinal);
   session run(ordinal);
@@ -495,6 +498,7 @@ bool run_st_format(const arguments& parsed, const std::string& name) {
   rng g(35);
   const bytes w = quant(qf.dtype, int64_t(n), int64_t(k), g);
   const bytes x = halves(kStMaxRows * k, g);
+  const uint64_t copies = cold_mib ? (cold_mib << 20) / w.size() + 1 : 1;
 
   // The reference: larch_mmvq at 1 row on each x row, then its time on row 0.
   larch_buffer* w_vv = run.allocate(w.size(), "st mmvq weights");
@@ -505,6 +509,12 @@ bool run_st_format(const arguments& parsed, const std::string& name) {
   const larch_tensor weight = tensor(w_vv, qf.dtype, 2, {nn, kk}, {kk / int64_t(qf.block_elements), 1});
   const larch_tensor activation = tensor(x_vv, LARCH_F16, 2, {1, kk}, {kk, 1});
   const larch_tensor output = tensor(out_vv, LARCH_F32, 2, {1, nn}, {nn, 1});
+  std::vector<larch_tensor> weights{weight};  // the timed calls' copies of w, the first w_vv itself
+  for (uint64_t c = 1; c < copies; ++c) {
+    larch_buffer* copy = run.allocate(w.size(), "st mmvq weight copy");
+    run.upload(copy, w.data(), w.size(), "st mmvq weight copy upload");
+    weights.push_back(tensor(copy, qf.dtype, 2, {nn, kk}, {kk / int64_t(qf.block_elements), 1}));
+  }
   std::vector<std::vector<float>> ref(kStMaxRows, std::vector<float>(size_t(n)));
   for (uint64_t r = kStMaxRows; r-- > 0;) {  // row 0 last, so it stays in x_vv for the timing
     run.upload(x_vv, x.data() + r * 2 * k, 2 * k, "st mmvq x upload");
@@ -514,7 +524,7 @@ bool run_st_format(const arguments& parsed, const std::string& name) {
   }
   const uint64_t mmvq_ns = gpu_elapsed(run, [&] {
     for (uint64_t i = 0; i < iterations; ++i)
-      check(larch_mmvq(run.stream, &weight, &activation, nullptr, &output), run.device, "larch_mmvq");
+      check(larch_mmvq(run.stream, &weights[i % copies], &activation, nullptr, &output), run.device, "larch_mmvq");
   });
   const double mmvq_us = double(mmvq_ns) / 1e3 / double(iterations);
 
@@ -533,14 +543,19 @@ bool run_st_format(const arguments& parsed, const std::string& name) {
   }
   id<MTLCommandQueue> queue = [device newCommandQueue];
   constexpr uint64_t check_rows = kStMaxRows + 2 + 4 + 8 + 16 + 32;  // each row alone, then each multi-row call
-  id<MTLBuffer> w_buf = [device newBufferWithBytes:w.data() length:w.size() options:MTLResourceStorageModeShared];
+  std::vector<id<MTLBuffer>> w_bufs;  // the timed calls' copies; the checks read the first
+  for (uint64_t c = 0; c < copies; ++c)
+    if (id<MTLBuffer> copy = [device newBufferWithBytes:w.data() length:w.size() options:MTLResourceStorageModeShared])
+      w_bufs.push_back(copy);
+  if (w_bufs.size() != copies) fail("st weight copies could not be allocated");
+  id<MTLBuffer> w_buf = w_bufs[0];
   id<MTLBuffer> x_buf = [device newBufferWithBytes:x.data() length:x.size() options:MTLResourceStorageModeShared];
   id<MTLBuffer> out_buf = [device newBufferWithLength:NSUInteger(check_rows * n * 4)
                                               options:MTLResourceStorageModeShared];
   id<MTLBuffer> parts = [device newBufferWithLength:NSUInteger(splits * kStMaxRows * n * 4)
                                             options:MTLResourceStorageModeShared];
   id<MTLBuffer> counters = [device newBufferWithLength:NSUInteger(tiles * 4) options:MTLResourceStorageModeShared];
-  if (!queue || !w_buf || !x_buf || !out_buf || !parts || !counters) fail("st buffers could not be allocated");
+  if (!queue || !x_buf || !out_buf || !parts || !counters) fail("st buffers could not be allocated");
   std::memset(counters.contents, 0, NSUInteger(tiles * 4));  // the tile keeps them zero between calls
   st_args args = {};
   args.mm.a_rs = k * 2;
@@ -552,11 +567,11 @@ bool run_st_format(const arguments& parsed, const std::string& name) {
   args.mm.alpha = 1.0f;
   args.splits = splits;
   const auto encode = [&](id<MTLComputeCommandEncoder> encoder, int step, bool spread, uint64_t rows, uint64_t x_row,
-                          uint64_t out_row) {
+                          uint64_t out_row, uint64_t copy = 0) {
     args.mm.m = uint32_t(rows);
     args.spread = spread;
     [encoder setComputePipelineState:pipes[step][rows <= 8 ? 0 : rows <= 16 ? 1 : 2]];
-    [encoder setBuffer:w_buf offset:0 atIndex:0];
+    [encoder setBuffer:w_bufs[copy] offset:0 atIndex:0];
     [encoder setBuffer:x_buf offset:NSUInteger(x_row * k * 2) atIndex:1];
     [encoder setBuffer:w_buf offset:0 atIndex:2];  // no bias (has_bias 0): any bound buffer
     [encoder setBuffer:out_buf offset:NSUInteger(out_row * n * 4) atIndex:3];
@@ -608,7 +623,7 @@ bool run_st_format(const arguments& parsed, const std::string& name) {
       wait_for(warm, "st warmup");
       id<MTLCommandBuffer> timed = [queue commandBuffer];
       encoder = [timed computeCommandEncoder];
-      for (uint64_t i = 0; i < iterations; ++i) encode(encoder, c % 3, c < 3, kStRows[ri], 0, 0);
+      for (uint64_t i = 0; i < iterations; ++i) encode(encoder, c % 3, c < 3, kStRows[ri], 0, 0, i % copies);
       [encoder endEncoding];
       [timed commit];
       wait_for(timed, "st timing");
@@ -626,9 +641,10 @@ bool run_st_format(const arguments& parsed, const std::string& name) {
     const bool ruled = ri < std::size(limits);
     for (int c = 0; ruled && c < configs; ++c) passing[c] = passing[c] && us[c][ri] <= limits[ri] * mmvq_us;
     rows_ok = rows_ok && !unequal[ri];
-    std::printf("mode=st format=%s n=%llu k=%llu rows=%llu cores=%u splits=%u mmvq_us=%.3f", name.c_str(),
-                static_cast<unsigned long long>(n), static_cast<unsigned long long>(k),
-                static_cast<unsigned long long>(kStRows[ri]), cores, splits, mmvq_us);
+    std::printf("mode=st format=%s n=%llu k=%llu rows=%llu cores=%u splits=%u cold_mib=%llu mmvq_us=%.3f",
+                name.c_str(), static_cast<unsigned long long>(n), static_cast<unsigned long long>(k),
+                static_cast<unsigned long long>(kStRows[ri]), cores, splits,
+                static_cast<unsigned long long>(cold_mib), mmvq_us);
     for (int c = 0; c < configs; ++c) std::printf(" %s_us=%.3f", config_name(c).c_str(), us[c][ri]);
     const double ratio = us[best][ri] / mmvq_us;
     std::printf(" best=%s ratio=%.3f", config_name(best).c_str(), ratio);
@@ -651,7 +667,7 @@ bool run_st_format(const arguments& parsed, const std::string& name) {
 // metal_perf st: run_st_format on --format, or on each of the five with --format all. Exits 1 when a row check
 // failed, 77 (ctest's skip) without an Apple GPU family 10 device: the tile needs the tensor API.
 void run_st(const arguments& parsed) {
-  require_only(parsed, {"--device", "--format", "--n", "--k", "--iterations"});
+  require_only(parsed, {"--device", "--format", "--n", "--k", "--iterations", "--cold"});
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
   NSArray<id<MTLDevice>>* devices = direct_devices();
   if (ordinal >= devices.count || ![devices[NSUInteger(ordinal)] supportsFamily:MTLGPUFamilyApple10]) {
