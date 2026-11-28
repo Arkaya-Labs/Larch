@@ -1685,9 +1685,10 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
         if let (Some(m), Some(hist)) = (moe, plan_from(start.as_ref())) {
             let dynamic = cache == Some(true);
             // Only dynamic residency records (see `cache`), so only it has a route log.
-            let log = match dynamic {
-                true => Transformer::route_log_bytes(&c, m, rows),
-                false => 0,
+            let log = if dynamic {
+                Transformer::route_log_bytes(&c, m, rows)
+            } else {
+                0
             };
             let tensors = header.tensors.len() as u64;
             // Its check allows the swing, which the plan keeps free as whole layers' does; its
@@ -2022,7 +2023,7 @@ fn plan_from(start: Option<&Histogram>) -> Option<&Histogram> {
 /// shortfall and `margin` reserved. A per-expert plan leaves under one expert's bytes unused, so
 /// the shortfall alone fits only when the second plan's slack is at least the first's; `margin`,
 /// the largest expert, makes it fit by construction. A first plan charges what the check finds
-/// missing ([`split_uncounted`]) and this margin, so this second load runs only where that
+/// missing ([`first_charge`]) and this margin, so this second load runs only where that
 /// figure is short (another card).
 fn replan_on_shortfall<T>(
     reserve: u64,
@@ -2361,29 +2362,24 @@ fn load_check_need(
     }
 }
 
-/// What a per-expert load takes on `backend` past its plan's terms, which the check after the load
-/// finds missing: on the 5070 Ti the hybrid MoE target's first plans at 4 and 8 state slots came
-/// 173,162,418 and 173,470,819 B short (27 Nov), [`FREE_SWING`] of it the reserve's (now kept)
-/// and 101.9 to 102.2 MB this. Its whole-layer loads miss as much past their ledger, inside a
-/// layer's rounding.
+/// What a per-expert load's first plan charges on `backend` past its own terms: what the check
+/// after the load finds missing, and the re-plan's `margin` ([`replan_margin`]), whose swing
+/// covers a low reading at the check. On the 5070 Ti the hybrid MoE target's first plans at 4
+/// and 8 state slots came 173,162,418 and 173,470,819 B short (27 Nov): [`FREE_SWING`] of it the
+/// reserve's (now kept), 101.9 to 102.2 MB what the load takes past its terms (98 MiB here). Its
+/// whole-layer loads miss as much past their ledger, inside a layer's rounding.
 // ponytail: an allowance measured on one card, and charged only on CUDA, where it was. Find what
 // the load allocates past its ledger and charge that instead, if another card's first plan
 // re-plans (`larch_expert_cache_plan` twice in the fit diagnostics).
-fn split_uncounted(backend: larch_kernels::Backend) -> u64 {
-    match backend {
-        larch_kernels::Backend::Cuda => 98 << 20,
-        _ => 0,
-    }
-}
-
-/// What a per-expert load's first plan charges past its own terms: [`split_uncounted`] and the
-/// re-plan's `margin` ([`replan_margin`]), whose swing covers a low reading at the check.
 fn first_charge(backend: larch_kernels::Backend, margin: u64) -> u64 {
     #[cfg(test)]
     if let Some(fake) = FAKE_FIRST_CHARGE.get() {
         return fake;
     }
-    split_uncounted(backend) + margin
+    match backend {
+        larch_kernels::Backend::Cuda => (98 << 20) + margin,
+        _ => margin,
+    }
 }
 
 /// The re-plan's margin past the shortfall on `backend`, for `largest`-byte experts: one expert,

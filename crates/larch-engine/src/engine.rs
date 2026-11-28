@@ -9214,18 +9214,9 @@ mod tests {
         beside: Option<&larch_model::Histogram>,
         shipped: Option<(&larch_model::Histogram, u64)>,
     ) -> (u32, u64, u32) {
-        let (props, c, bytes, l, slot) = fake_cuda_terms();
-        let need = |beside, seats| {
-            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
-        };
-        let four = need(reserve_at(&l, slot, 4), 4) + crate::FREE_SWING;
         let file = tiny::gguf(Arch::Qwen35Moe, 3);
         let g = larch_model::gguf::Gguf::parse(&file).unwrap();
-        let layer: u64 = (g.tensors.iter())
-            .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
-            .map(|t| t.bytes)
-            .sum();
-        let short = bytes - layer + four + split_room();
+        let short = short_card(split_room());
         let model = fake_cuda_path(short, None);
         let hist = larch_model::Histogram::path(&model);
         if let Some(h) = beside {
@@ -9256,28 +9247,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_static_split_load_writes_no_histogram() {
-        use larch_model::{Histogram, MoeCfg};
         use std::os::unix::fs::MetadataExt;
-        let file = tiny::gguf(Arch::Qwen35Moe, 3);
-        let g = larch_model::gguf::Gguf::parse(&file).unwrap();
-        let c = ModelConfig::from_gguf(&g).unwrap();
-        let m = MoeCfg::from_gguf(&g, c.arch).unwrap().unwrap();
-        let mut hot = Histogram::uniform(file.len() as u64, c.n_layers, m.experts);
-        for (i, n) in hot.counts.iter_mut().enumerate() {
-            *n = (i % m.experts as usize) as u64;
-        }
-        let (props, c, bytes, l, slot) = fake_cuda_terms();
-        let need = |beside, seats| {
-            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
-        };
-        let layer: u64 = (g.tensors.iter())
-            .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
-            .map(|t| t.bytes)
-            .sum();
-        let short =
-            bytes - layer + need(reserve_at(&l, slot, 4), 4) + crate::FREE_SWING + split_room();
+        let short = short_card(split_room());
         let hist = larch_model::Histogram::path(&fake_cuda_path(short, None));
-        hot.write(&hist).unwrap();
+        hot().write(&hist).unwrap();
         let (bytes_before, ino) = (
             std::fs::read(&hist).unwrap(),
             hist.metadata().unwrap().ino(),
@@ -9303,16 +9276,7 @@ mod tests {
     /// model, so the next load plans as this one did. Only `=1` and `=2` record whole layers.
     #[test]
     fn a_plain_whole_layer_load_writes_no_histogram() {
-        let (props, c, bytes, l, slot) = fake_cuda_terms();
-        let need = |beside, seats| {
-            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
-        };
-        let g = larch_model::gguf::Gguf::parse(&tiny::gguf(Arch::Qwen35Moe, 3)).unwrap();
-        let layer: u64 = (g.tensors.iter())
-            .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
-            .map(|t| t.bytes)
-            .sum();
-        let short = bytes - layer + need(reserve_at(&l, slot, 4), 4) + crate::FREE_SWING;
+        let short = short_card(0);
         let hist = larch_model::Histogram::path(&fake_cuda_path(short, None));
         let load = |cache| {
             crate::FAKE_CACHE.set(Some(cache));
@@ -9332,41 +9296,49 @@ mod tests {
     /// of [`crate::first_charge`] (98 MiB and the swing are past all its weights): a quarter of
     /// its first layer's experts (one expert), which [`fake_cuda_seats`] sets.
     fn split_room() -> u64 {
-        let g = larch_model::gguf::Gguf::parse(&tiny::gguf(Arch::Qwen35Moe, 3)).unwrap();
-        let layer: u64 = (g.tensors.iter())
-            .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
-            .map(|t| t.bytes)
-            .sum();
-        layer / 4
+        layer0() / 4
     }
 
-    /// On a card that reads as a real one after the load (one that takes past the plan's terms what
-    /// the first plan charges for, [`crate::first_charge`]), a split load plans once: the first plan charges what the check
-    /// after the load would find missing (on the 5070 Ti the hybrid MoE target's first plan came
-    /// 173 MB short and planned again, 15 split layers becoming 20).
-    #[test]
-    fn a_split_load_plans_once() {
-        use larch_model::{Histogram, MoeCfg};
+    /// The tiny hybrid MoE's first layer's routed expert bytes.
+    fn layer0() -> u64 {
+        let g = larch_model::gguf::Gguf::parse(&tiny::gguf(Arch::Qwen35Moe, 3)).unwrap();
+        (g.tensors.iter())
+            .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
+            .map(|t| t.bytes)
+            .sum()
+    }
+
+    /// Free memory on a fake CUDA card a layer short of the tiny hybrid MoE's weights at 4 slots,
+    /// and `extra` more.
+    fn short_card(extra: u64) -> u64 {
+        let (props, c, bytes, l, slot) = fake_cuda_terms();
+        let beside = reserve_at(&l, slot, 4);
+        let four = crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, 4);
+        bytes - layer0() + four + crate::FREE_SWING + extra
+    }
+
+    /// The tiny hybrid MoE's histogram: each layer's expert `i` routed `i` times.
+    fn hot() -> larch_model::Histogram {
         let file = tiny::gguf(Arch::Qwen35Moe, 3);
         let g = larch_model::gguf::Gguf::parse(&file).unwrap();
         let c = ModelConfig::from_gguf(&g).unwrap();
-        let m = MoeCfg::from_gguf(&g, c.arch).unwrap().unwrap();
-        let mut hot = Histogram::uniform(file.len() as u64, c.n_layers, m.experts);
-        for (i, n) in hot.counts.iter_mut().enumerate() {
+        let m = larch_model::MoeCfg::from_gguf(&g, c.arch).unwrap().unwrap();
+        let mut h = larch_model::Histogram::uniform(file.len() as u64, c.n_layers, m.experts);
+        for (i, n) in h.counts.iter_mut().enumerate() {
             *n = (i % m.experts as usize) as u64;
         }
-        let (props, c, bytes, l, slot) = fake_cuda_terms();
-        let need = |beside, seats| {
-            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
-        };
-        let layer: u64 = (g.tensors.iter())
-            .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
-            .map(|t| t.bytes)
-            .sum();
-        let short =
-            bytes - layer + need(reserve_at(&l, slot, 4), 4) + crate::FREE_SWING + split_room();
+        h
+    }
+
+    /// On a card that reads as a real one after the load (one that takes past the plan's terms what
+    /// the first plan charges for, [`crate::first_charge`]), a split load plans once: the first
+    /// plan charges what the check after the load would find missing (on the 5070 Ti the hybrid MoE target's first plan came
+    /// 173 MB short and planned again, 15 split layers becoming 20).
+    #[test]
+    fn a_split_load_plans_once() {
+        let short = short_card(split_room());
         let hist = larch_model::Histogram::path(&fake_cuda_path(short, None));
-        hot.write(&hist).unwrap();
+        hot().write(&hist).unwrap();
         crate::FAKE_CACHE.set(Some(None));
         // The plan's own slack on this card: what the check finds spare when nothing is taken and
         // the first plan charges nothing.
@@ -9399,26 +9371,12 @@ mod tests {
     /// from the shipped profile too.
     #[test]
     fn a_plain_load_splits_from_its_shipped_profile() {
-        use larch_model::{Histogram, MoeCfg};
-        let file = tiny::gguf(Arch::Qwen35Moe, 3);
-        let g = larch_model::gguf::Gguf::parse(&file).unwrap();
-        let c = ModelConfig::from_gguf(&g).unwrap();
-        let m = MoeCfg::from_gguf(&g, c.arch).unwrap().unwrap();
-        let len = file.len() as u64;
-        let mut hot = Histogram::uniform(len, c.n_layers, m.experts);
-        for (i, n) in hot.counts.iter_mut().enumerate() {
-            *n = (i % m.experts as usize) as u64;
-        }
-        let even = Histogram {
+        let hot = hot();
+        let even = larch_model::Histogram {
             counts: vec![5; hot.counts.len()],
             ..hot.clone()
         };
-        crate::FAKE_POOL.set(Some(
-            (g.tensors.iter())
-                .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
-                .map(|t| t.bytes)
-                .sum(),
-        ));
+        crate::FAKE_POOL.set(Some(layer0()));
         let whole = plan_with(Some("0"), None, None);
         let split = plan_with(None, None, Some((&hot, 0)));
         let got = [
