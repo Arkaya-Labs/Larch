@@ -458,6 +458,60 @@ kernel void vv_mmvq1_q3_k(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], by
   }
 }
 
+// mmvq for Q3_K at 2-8 rows on MLX qmv's plan (mlx quantized.h qmv_impl): vv_mmvq1_q3_k's lanes and loads, with each
+// weight decoded to a float once and then one multiply-add per row of x, so the rows past the first cost a
+// multiply-add a weight. The MMA tile does 8 rows of work at any row count (about 2x the 1-row kernel from 2 rows,
+// M5, 28 Nov), and vv_mmvq1_q3_k's masked sums repeat their bit work for every row.
+kernel void vv_mmvq_qmv_q3_k(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in bias [[buffer(2)]],
+                             device uchar* out [[buffer(3)]], constant mm_args& a [[buffer(4)]],
+                             uint tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]],
+                             ushort lane [[thread_index_in_simdgroup]]) {
+  constexpr short NR = MMVQ1_NR, M = 8;
+  const uint n0 = (tg * MMVQ1_SG + sg) * NR;
+  if (n0 >= a.n) return;  // the whole simdgroup
+  const short ix = lane / 8, hn = lane % 8 / 4, j = lane % 4;
+  float acc[M][NR] = {};
+  for (uint ib = ix; ib < a.k / 256; ib += 4) {
+    uint2 qv[NR], hv[NR];
+    float d[NR];
+    bytes_in sb[NR];
+    for (short r = 0; r < NR; ++r) {
+      bytes_in b = w + min(n0 + r, a.n - 1) * a.b_rs + ib * 110;  // a ragged tail recomputes column n - 1
+      const ushort4 q4 = ushort4(*(device const packed_ushort4*)(b + 32 + 32 * hn + 8 * j));  // 2-byte aligned
+      const ushort4 h4 = ushort4(*(device const packed_ushort4*)(b + 8 * j));
+      qv[r] = uint2(uint(q4.x) | uint(q4.y) << 16, uint(q4.z) | uint(q4.w) << 16);
+      hv[r] = uint2(uint(h4.x) | uint(h4.y) << 16, uint(h4.z) | uint(h4.w) << 16);
+      d[r] = h16(b + 108);
+      sb[r] = b + 96;
+    }
+    for (short u = 0; u < 4; ++u) {
+      float wv[NR][8];
+      for (short r = 0; r < NR; ++r) {
+        const short i = 8 * hn + 2 * u + j / 2;  // the scale of these 8 weights' 16
+        const float scale = d[r] * float(int((sb[r][i % 8] >> (4 * (i / 8)) & 0xF) | (sb[r][8 + i % 4] >> (2 * (i / 4)) & 3) << 4) - 32);
+        for (short l = 0; l < 8; ++l) {
+          const uint qb = (l < 4 ? qv[r].x : qv[r].y) >> (8 * (l % 4)), hb = (l < 4 ? hv[r].x : hv[r].y) >> (8 * (l % 4));
+          wv[r][l] = scale * float(int((qb >> (2 * u)) & 3) - ((hb >> (4 * hn + u)) & 1 ? 0 : 4));
+        }
+      }
+      for (short m = 0; m < M; ++m) {
+        if (uint(m) >= a.m) break;  // uniform
+        device const half* y = (device const half*)(x + m * a.a_rs) + 256 * ib + 128 * hn + 32 * u + 8 * j;
+        const float4 y0 = float4(half4(((device const packed_half4*)y)[0])), y1 = float4(half4(((device const packed_half4*)y)[1]));
+        for (short r = 0; r < NR; ++r)
+          acc[m][r] += wv[r][0] * y0.x + wv[r][1] * y0.y + wv[r][2] * y0.z + wv[r][3] * y0.w + wv[r][4] * y1.x +
+                       wv[r][5] * y1.y + wv[r][6] * y1.z + wv[r][7] * y1.w;
+      }
+    }
+  }
+  for (short m = 0; m < M; ++m)
+    for (short r = 0; r < NR; ++r) {
+      if (uint(m) >= a.m) break;
+      const float v = simd_sum(acc[m][r]);
+      if (!lane && n0 + r < a.n) store_c(out, a, bias, m, n0 + r, v);
+    }
+}
+
 // mmvq for 5-16 rows, the way llama.cpp's mul_mm does it: a threadgroup of 4 simdgroups owns 32 columns of
 // w. Per 128-deep step, each thread decodes one 32-element sub-block of one column into threadgroup memory
 // (as f16: ops.cpp's mmvq tolerance allows rounding w to f16) and x's rows are staged beside it, zero past
