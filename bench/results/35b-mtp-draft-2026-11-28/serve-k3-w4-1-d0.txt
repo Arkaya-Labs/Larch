@@ -1,0 +1,31 @@
+rounds 2341 a_i 0.865 0.757 0.744 kept/round 2.005
+first16 a_i 1.000 1.000 1.000 | rest a_i 0.861 0.747 0.730
+propose n=1 count=3 us: wall 1318.1 block 611.8 head 555.7 argmax 84.8 download 65.7
+propose n=2 count=6 us: wall 2839.7 block 1441.6 head 1155.8 argmax 177.9 download 64.1
+propose n=3 count=2332 us: wall 4406.6 block 2327.4 head 1699.0 argmax 306.1 download 73.3
+observe k=1 count=324 us 745.7
+observe k=2 count=495 us 733.4
+observe k=3 count=395 us 762.4
+observe k=4 count=1136 us 772.6
+observe k=16 count=1 us 718.9
+observe k=63 count=1 us 1170.9
+observe k=77 count=1 us 1186.6
+observe k=79 count=1 us 3350.2
+observe k=94 count=1 us 1303.7
+observe k=101 count=1 us 3609.3
+observe k=108 count=1 us 3462.3
+observe k=155 count=1 us 1548.3
+observe k=171 count=1 us 1712.7
+observe k=173 count=1 us 3435.9
+observe k=186 count=1 us 3274.9
+observe k=210 count=1 us 3382.2
+observe k=225 count=1 us 3808.5
+observe k=230 count=1 us 3445.7
+observe k=244 count=1 us 3211.6
+observe k=251 count=1 us 1910.2
+observe k=271 count=1 us 3838.9
+observe k=286 count=1 us 3893.8
+observe k=328 count=1 us 3534.3
+observe k=414 count=1 us 3972.0
+observe k=491 count=1 us 3138.3
+observe k=512 count=15 us 3943.0

@@ -1,0 +1,13 @@
+tokdump,3072 tokens,30.95 s,99.3 tok/s,guesses: 0 rounds · 0 tried · 0 kept · 0.00 kept/round · k
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+decode1                      replay     3060       0.10        8.80     8.96    27.43
+prefill p23                  eager         2     318.16        0.94   323.98     0.65
+prefill p20                  eager         2     117.36        0.63   123.20     0.25
+prefill p22                  eager         2      93.51        0.64    99.60     0.20
+prefill p24                  eager         2      72.07        0.65    76.30     0.15
+prefill p28                  eager         1      52.85        0.83    58.76     0.06
+prefill p26                  eager         1      50.60        0.62    53.90     0.05
+prefill p21                  eager         1      36.02        0.70    39.41     0.04
+prefill p19                  eager         1      35.96        0.62    39.31     0.04
+rounds 0 a_i  kept/round 0.000
+first16 a_i  | rest a_i 

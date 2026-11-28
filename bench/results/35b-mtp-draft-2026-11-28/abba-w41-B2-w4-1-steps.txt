@@ -1,0 +1,25 @@
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+prefill p2                   replay     1803       0.10        7.74     7.90    14.24
+decode1                      replay     1280       0.11        5.71     5.88     7.53
+prefill p3                   replay      619       0.09        9.76     9.91     6.14
+prefill p5                   replay      225       0.12       14.54    14.75     3.32
+prefill chunk>=256           eager        20     132.66        0.52   135.51     2.71
+prefill p16                  eager         1     705.99        1.10   710.56     0.71
+prefill p225                 eager         1     118.88        0.74   122.38     0.12
+prefill p251                 eager         1     113.50        0.56   114.13     0.11
+prefill p101                 eager         1     100.28        0.77   106.39     0.11
+prefill p230                 eager         1      92.62        0.55    96.80     0.10
+prefill p186                 eager         1      92.85        0.56    95.99     0.10
+prefill p210                 eager         1      90.28        0.56    90.86     0.09
+prefill p244                 eager         1      89.30        0.57    89.91     0.09
+prefill p171                 eager         1      88.58        0.89    89.53     0.09
+prefill p77                  eager         1      77.84        0.62    81.05     0.08
+prefill p155                 eager         1      61.85        0.95    65.39     0.07
+prefill p173                 eager         1      60.90        0.93    64.40     0.06
+prefill p94                  eager         1      58.76        0.55    59.37     0.06
+prefill p63                  eager         1      51.54        0.55    57.45     0.06
+prefill p108                 eager         1      50.52        0.70    53.78     0.05
+prefill p79                  eager         1      48.54        0.79    49.35     0.05
+prefill p5                   eager         1       7.31       10.11    17.44     0.02
+prefill p3                   eager         1       6.38        7.38    13.79     0.01
+prefill p2                   eager         1       4.35        6.87    11.24     0.01

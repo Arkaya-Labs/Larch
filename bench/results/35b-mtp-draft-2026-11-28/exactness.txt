@@ -1,0 +1,57 @@
+A plain vs drafting-load plain (chat):
+prompts 12 identical 7 diverge 5 (tokens 3072 / 3072)
+  chat-01 first diff at 151: margin 0.0064 / 0.0369
+  chat-05 first diff at 118: margin 0.0636 / 0.0305
+  chat-06 first diff at 76: margin 0.0339 / 0.0006
+  chat-07 first diff at 29: margin 0.0266 / 0.1564
+  chat-11 first diff at 27: margin 0.0009 / 0.1021
+margin (larger side) min 0.0339 median 0.0636 max 0.1564; above 0.5: 0
+drafting-load plain vs forced K=1 (chat):
+prompts 12 identical 12 diverge 0 (tokens 3072 / 3072)
+drafting-load plain vs forced K=2 (chat):
+prompts 12 identical 12 diverge 0 (tokens 3072 / 3072)
+drafting-load plain vs forced K=3 (chat):
+prompts 12 identical 12 diverge 0 (tokens 3072 / 3072)
+drafting-load plain vs forced K=4 (chat):
+prompts 12 identical 12 diverge 0 (tokens 3072 / 3072)
+drafting-load plain vs forced K=4 acceptance run (chat):
+prompts 12 identical 12 diverge 0 (tokens 3072 / 3072)
+A vs A rerun (chat):
+prompts 12 identical 12 diverge 0 (tokens 3072 / 3072)
+A vs A attn_splits=16 (chat):
+prompts 12 identical 12 diverge 0 (tokens 3072 / 3072)
+A 4 seats vs A 8 seats, no drafter (code_edit):
+prompts 12 identical 5 diverge 7 (tokens 3072 / 3072)
+  code_edit-00 first diff at 55: margin 0.0156 / 0.0201
+  code_edit-04 first diff at 0: margin 0.3439 / 0.0025
+  code_edit-06 first diff at 129: margin 0.0230 / 0.0407
+  code_edit-07 first diff at 28: margin 0.0323 / 0.0831
+  code_edit-09 first diff at 0: margin 0.0848 / 0.0831
+  code_edit-10 first diff at 137: margin 0.0098 / 0.0862
+  code_edit-11 first diff at 70: margin 0.0228 / 0.0420
+margin (larger side) min 0.0201 median 0.0831 max 0.3439; above 0.5: 0
+A vs suffix-guessing load (code_edit):
+prompts 12 identical 4 diverge 8 (tokens 3072 / 3072)
+  code_edit-00 first diff at 73: margin 0.0183 / 0.0483
+  code_edit-03 first diff at 70: margin 0.1116 / 0.1830
+  code_edit-05 first diff at 122: margin 0.1019 / 0.0204
+  code_edit-06 first diff at 129: margin 0.0230 / 0.0075
+  code_edit-07 first diff at 28: margin 0.0323 / 0.0183
+  code_edit-09 first diff at 0: margin 0.0848 / 0.0813
+  code_edit-10 first diff at 112: margin 0.0258 / 0.0343
+  code_edit-11 first diff at 70: margin 0.0228 / 0.0619
+margin (larger side) min 0.0230 median 0.0619 max 0.1830; above 0.5: 0
+A vs drafted K=4 (code_edit):
+prompts 12 identical 4 diverge 8 (tokens 3072 / 3072)
+A vs drafted K=4 (code_gen):
+prompts 12 identical 5 diverge 7 (tokens 3072 / 3072)
+A vs drafted K=4 (chat):
+prompts 12 identical 7 diverge 5 (tokens 3072 / 3072)
+A vs drafted K=4 (agent):
+prompts 12 identical 3 diverge 9 (tokens 2030 / 2020)
+A vs drafted K=4 (doc_qa):
+prompts 12 identical 6 diverge 6 (tokens 3072 / 3072)
+A vs drafted K=4 (math):
+prompts 12 identical 9 diverge 3 (tokens 3072 / 3072)
+A vs drafted K=4 (w4):
+prompts 12 identical 4 diverge 8 (tokens 3072 / 3072)

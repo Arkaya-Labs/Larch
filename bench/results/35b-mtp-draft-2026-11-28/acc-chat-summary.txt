@@ -1,0 +1,25 @@
+tokdump,3072 tokens,33.34 s,92.1 tok/s,guesses: 892 rounds · 3551 tried · 2166 kept · 2.43 kept/round · k 1:3 2:2 3:4 4:883
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+prefill p5                   replay      882       0.11       30.96    31.15    27.47
+prefill p23                  eager         2     236.62        0.93   240.69     0.48
+prefill p20                  eager         2      98.62        0.63   103.20     0.21
+prefill p24                  eager         2      79.14        0.63    85.91     0.17
+prefill p22                  eager         2      80.90        0.62    85.54     0.17
+prefill p28                  eager         1     110.38        0.56   116.16     0.12
+prefill p4                   replay        3       0.15       28.73    30.10     0.09
+prefill p19                  eager         1      85.77        0.55    89.26     0.09
+prefill p26                  eager         1      77.27        0.55    82.21     0.08
+prefill p21                  eager         1      36.70        0.64    39.96     0.04
+prefill p4                   eager         1       7.02       32.68    39.73     0.04
+prefill p3                   replay        1       0.50       28.47    36.40     0.04
+prefill p2                   replay        2       0.20       14.71    17.97     0.04
+prefill p3                   eager         1       4.75       20.61    25.38     0.03
+decode1                      replay        2       0.21        8.63    12.29     0.02
+prefill p5                   eager         1       7.12       16.74    23.97     0.02
+prefill p2                   eager         1       5.01       10.74    15.80     0.02
+rounds 892 a_i 0.855 0.776 0.770 0.800 kept/round 2.428
+first16 a_i 0.977 0.952 0.950 0.895 | rest a_i 0.849 0.766 0.757 0.791
+propose n=1 count=3 us: wall 1292.1 block 0.0 head 0.0 argmax 0.0 download 1292.3
+propose n=2 count=2 us: wall 2353.7 block 0.0 head 0.0 argmax 0.0 download 2353.8
+propose n=3 count=4 us: wall 2836.3 block 0.0 head 0.0 argmax 0.0 download 2836.5
+propose n=4 count=883 us: wall 3903.3 block 0.0 head 0.0 argmax 0.0 download 3903.5

@@ -1,0 +1,24 @@
+tokdump,3072 tokens,20.51 s,149.8 tok/s,guesses: 963 rounds · 3829 tried · 2094 kept · 2.17 kept/round · k 1:4 2:4 3:3 4:952
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+prefill p5                   replay      951       0.10       13.71    13.87    13.19
+prefill chunk>=256           eager        13     159.47        0.60   162.23     2.11
+prefill p91                  eager         2      89.13        0.62    92.81     0.19
+prefill p241                 eager         1     128.24        0.56   134.30     0.13
+prefill p211                 eager         1      92.22        1.07    93.36     0.09
+prefill p65                  eager         1      71.60        0.62    78.27     0.08
+prefill p190                 eager         1      72.81        0.93    73.81     0.07
+prefill p176                 eager         1      61.16        0.92    64.78     0.06
+prefill p2                   replay        3       0.21        8.92    12.02     0.04
+prefill p3                   replay        3       0.25        9.69    11.14     0.03
+prefill p4                   replay        2       0.36       11.64    14.85     0.03
+decode1                      replay        3       0.11        6.21     8.17     0.02
+prefill p3                   eager         1      16.42        7.76    24.29     0.02
+prefill p5                   eager         1       5.86       11.70    17.60     0.02
+prefill p4                   eager         1       6.67       10.33    17.03     0.02
+prefill p2                   eager         1       8.09        7.16    15.35     0.02
+rounds 963 a_i 0.815 0.749 0.716 0.738 kept/round 2.174
+first16 a_i 1.000 1.000 1.000 1.000 | rest a_i 0.808 0.737 0.698 0.713
+propose n=1 count=4 us: wall 1778.1 block 0.0 head 0.0 argmax 0.0 download 1778.2
+propose n=2 count=4 us: wall 2770.4 block 0.0 head 0.0 argmax 0.0 download 2770.6
+propose n=3 count=3 us: wall 3539.8 block 0.0 head 0.0 argmax 0.0 download 3540.0
+propose n=4 count=952 us: wall 3809.4 block 0.0 head 0.0 argmax 0.0 download 3809.6

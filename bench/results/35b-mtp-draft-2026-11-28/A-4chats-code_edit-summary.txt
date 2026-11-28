@@ -1,0 +1,14 @@
+tokdump,3072 tokens,11.25 s,273.1 tok/s,guesses: 0 rounds · 0 tried · 0 kept · 0.00 kept/round · k
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+decode4                      replay      757       0.10       11.79    11.96     9.05
+mixed d2+chunk>=256          eager         5     163.61        0.61   168.86     0.84
+prefill chunk>=256           eager         1     481.04        1.05   484.60     0.48
+mixed d1+chunk>=256          eager         2     182.85        0.64   188.44     0.38
+mixed d3+p76                 eager         1     127.04        0.57   127.73     0.13
+mixed d2+p251                eager         1     109.74        0.63   115.37     0.12
+mixed d3+p236                eager         1     106.83        0.64   109.85     0.11
+decode3                      replay        3       0.12       13.22    13.40     0.04
+decode2                      replay        1       0.36        7.67    10.50     0.01
+decode1                      replay        1       0.30        6.07     9.89     0.01
+rounds 0 a_i  kept/round 0.000
+first16 a_i  | rest a_i 

@@ -1,0 +1,137 @@
+diff --git a/crates/larch-engine/src/sched.rs b/crates/larch-engine/src/sched.rs
+index f2ff13a..17dab50 100644
+--- a/crates/larch-engine/src/sched.rs
++++ b/crates/larch-engine/src/sched.rs
+@@ -272,6 +272,12 @@ fn by_confidence() -> bool {
+     *ON.get_or_init(|| !std::env::var("LARCH_DRAFT_CONF").is_ok_and(|v| v == "0"))
+ }
+ 
++/// D0 bench only (not committed): LARCH_D0_FORCE=k checks k guesses every decode step a drafter serves.
++fn d0_force() -> usize {
++    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
++    *N.get_or_init(|| std::env::var("LARCH_D0_FORCE").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
++}
++
+ fn blocks_for(tokens: usize) -> usize {
+     tokens.div_ceil(BLOCK_TOKENS)
+ }
+@@ -1991,7 +1997,7 @@ impl Scheduler {
+         if max == 0
+             || r.seq.n_kv < r.prompt_len.max(r.redo)
+             || !r.may_draft()
+-            || !r.hits.may_guess()
++            || (d0_force() == 0 && !r.hits.may_guess())
+         {
+             return 0;
+         }
+@@ -2000,6 +2006,9 @@ impl Scheduler {
+             (self.costs).pick(plan.decoding, plan.guessed, plan.gain, a, max, explore)
+         };
+         let mut k = pick(a, max, plan.explore);
++        if d0_force() > 0 {
++            k = d0_force().min(max);
++        }
+         // Acceptance only moves by checking, so a sequence left plain could never show it guesses
+         // well. One guess, by turns, on an exploring step, only where what it can show would flip
+         // the pick; the rows round up to their bucket's, so a check is not credited with rows the
+@@ -2052,6 +2061,7 @@ impl Scheduler {
+             let text = (self.draft.iter()).take_while(|&&t| t & IMAGE_TOKEN == 0);
+             let got = text.count();
+             k = match (probe, self.draft_conf.is_empty()) {
++                _ if d0_force() > 0 => got.min(want),
+                 (true, _) => got.min(want),
+                 (false, true) => pick(a, got.min(want), plan.explore),
+                 (false, false) => {
+@@ -2664,6 +2674,10 @@ impl Scheduler {
+                 .take_while(|(t, g)| t == *g)
+                 .count();
+             r.hits.round(r.guesses as u32, kept as u32);
++            if d0_force() > 0 {
++                let ids: Vec<String> = r.seq.tokens[start + 1..start + 1 + kept].iter().map(|t| t.to_string()).collect();
++                eprintln!("larch_d0_round,{id},{},{kept},{},{}", r.guesses, (start + 1).saturating_sub(r.prompt_len), ids.join(" "));
++            }
+             r.hits.scored(&r.conf[..r.conf.len().min(kept + 1)]);
+             self.tot.guess_rounds += 1;
+             self.tot.guesses_tried += r.guesses as u64;
+diff --git a/crates/larch-model/src/qwen35_mtp.rs b/crates/larch-model/src/qwen35_mtp.rs
+index b128f06..85fb17e 100644
+--- a/crates/larch-model/src/qwen35_mtp.rs
++++ b/crates/larch-model/src/qwen35_mtp.rs
+@@ -21,6 +21,18 @@ pub(super) struct Nextn {
+     pub layer: Layer,
+ }
+ 
++/// D0 bench only (not committed): LARCH_D0_DPROF=1 syncs and times each propose stage and observe.
++fn d0_dprof() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var("LARCH_D0_DPROF").is_ok_and(|v| v == "1"))
++}
++
++/// D0 bench only: LARCH_D0_LOG=1 logs each propose's wall time.
++fn d0_log() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var("LARCH_D0_LOG").is_ok_and(|v| v == "1") || d0_dprof())
++}
++
+ /// Positions per page of an [`MtpCache`].
+ const PAGE: u32 = 16;
+ /// The most guesses one [`MtpDrafter::propose`] makes.
+@@ -325,7 +337,15 @@ impl MtpDrafter {
+         };
+         let cat = Tensor::new(&self.cat, 0, DType::F16, &[k, 2 * d])?;
+         let iota = Tensor::new(&self.iota, 0, DType::I32, &[r])?;
++        if d0_dprof() {
++            s.sync()?;
++        }
++        let tick = std::time::Instant::now();
+         t.nextn_block(s, &b, &self.pool(t, c), &cat, &iota)?;
++        if d0_dprof() {
++            s.sync()?;
++            eprintln!("larch_d0_observe,{k},{}", tick.elapsed().as_nanos());
++        }
+         c.len += k as u32;
+         Ok(())
+     }
+@@ -370,6 +390,20 @@ impl MtpDrafter {
+             repeat_penalty: 1.0,
+             penalty_window: 0,
+         };
++        let prof = d0_dprof();
++        let mut ns = [0u128; 4];
++        // Slot 3 takes the sync before the first guess (the step's queued work), never reported.
++        let mut tick = std::time::Instant::now();
++        let mut lap = |s: &Stream, j: usize| -> Result<(), KError> {
++            if prof {
++                s.sync()?;
++                ns[j] += tick.elapsed().as_nanos();
++                tick = std::time::Instant::now();
++            }
++            Ok(())
++        };
++        lap(s, 3)?;
++        let wall = std::time::Instant::now();
+         for i in 0..i64::from(n) {
+             let hin = Tensor::new(&t.sc.t, 0, DType::F32, &[1, d])?;
+             // The first step pairs with the target's hidden state, each later one with its own.
+@@ -401,13 +435,21 @@ impl MtpDrafter {
+                 check: false,
+             };
+             t.nextn_block(s, &b, &pool, &cat, &iota)?;
++            lap(s, 0)?;
+             t.nextn_head(s, &logits)?;
++            lap(s, 1)?;
+             let vals = Tensor::new(&self.top, 4 * 64 * i as u64, DType::F32, &[1, 64])?;
+             let lse = Tensor::new(&self.top, 4 * (128 * g + i) as u64, DType::F32, &[1])?;
+             ops::sample_prep(s, &logits, &[p], None, &vals, &ids(i)?, &lse)?;
++            lap(s, 2)?;
+         }
+         let mut got = vec![0i32; 64 * n as usize];
+         s.download(&self.top, 4 * 64 * g as u64, &mut got)?;
++        if d0_log() {
++            let w = wall.elapsed().as_nanos();
++            let (b, h, a) = (ns[0], ns[1], ns[2]);
++            eprintln!("larch_d0_propose,{n},{w},{b},{h},{a},{}", tick.elapsed().as_nanos());
++        }
+         Ok(got.chunks(64).map(|r| r[0] as u32).collect())
+     }
+ 

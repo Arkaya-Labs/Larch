@@ -1,0 +1,31 @@
+tokdump,3072 tokens,29.89 s,102.8 tok/s,guesses: 1188 rounds · 2373 tried · 1865 kept · 1.57 kept/round · k 1:3 2:1185
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+prefill p3                   replay     1183       0.10       19.94    20.11    23.79
+prefill p23                  eager         2     162.95        1.04   168.54     0.34
+prefill p20                  eager         2     113.68        0.63   118.42     0.24
+prefill p22                  eager         2      76.86        0.62    81.65     0.16
+prefill p24                  eager         2      75.07        0.57    78.39     0.16
+prefill p21                  eager         1     121.19        0.57   127.42     0.13
+prefill p28                  eager         1     117.05        0.55   125.10     0.13
+prefill p26                  eager         1      91.46        0.56    94.78     0.09
+prefill p3                   eager         2      42.95        3.57    46.63     0.09
+decode1                      replay        6       1.99        7.16    10.69     0.06
+prefill p19                  eager         1      56.55        0.61    63.31     0.06
+prefill p2                   replay        2       0.22       17.53    20.28     0.04
+prefill p2                   eager         1       5.71        9.46    15.19     0.02
+decode1                      eager         1       3.14        6.66     9.84     0.01
+rounds 1188 a_i 0.867 0.813 kept/round 1.570
+first16 a_i 0.985 0.922 | rest a_i 0.860 0.806
+propose n=1 count=3 us: wall 939.4 block 283.2 head 546.5 argmax 67.3 download 42.2
+propose n=2 count=1185 us: wall 2776.6 block 1397.9 head 1120.7 argmax 190.2 download 67.5
+observe k=1 count=165 us 631.8
+observe k=2 count=195 us 671.6
+observe k=3 count=835 us 702.4
+observe k=19 count=1 us 829.4
+observe k=20 count=2 us 3115.9
+observe k=21 count=1 us 3142.0
+observe k=22 count=2 us 2014.2
+observe k=23 count=2 us 966.6
+observe k=24 count=2 us 2014.4
+observe k=26 count=1 us 3259.9
+observe k=28 count=1 us 3299.6

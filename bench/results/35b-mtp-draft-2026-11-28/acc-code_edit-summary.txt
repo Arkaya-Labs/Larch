@@ -1,0 +1,21 @@
+tokdump,3072 tokens,25.52 s,120.4 tok/s,guesses: 856 rounds · 3408 tried · 2198 kept · 2.57 kept/round · k 1:1 2:5 3:3 4:847
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+prefill p5                   replay      846       0.11       21.05    21.23    17.96
+prefill chunk>=256           eager         8     296.65        0.67   301.58     2.41
+prefill p236                 eager         1     215.56        0.62   221.51     0.22
+prefill p239                 eager         1     199.21        0.56   204.97     0.20
+prefill p251                 eager         1     198.93        0.56   202.28     0.20
+prefill p216                 eager         1     194.63        0.61   200.37     0.20
+prefill p3                   replay        4       0.26       15.48    16.53     0.07
+prefill p4                   eager         1      47.89        7.71    55.71     0.06
+decode1                      replay        6       0.22        7.12     8.42     0.05
+prefill p4                   replay        2       0.31       16.66    19.58     0.04
+prefill p3                   eager         1      11.66       10.70    22.46     0.02
+prefill p5                   eager         1       6.30       12.99    19.33     0.02
+prefill p2                   eager         1       6.09       10.94    17.07     0.02
+rounds 856 a_i 0.860 0.815 0.801 0.805 kept/round 2.568
+first16 a_i 0.936 0.864 0.816 1.000 | rest a_i 0.855 0.812 0.800 0.791
+propose n=1 count=1 us: wall 765.8 block 0.0 head 0.0 argmax 0.0 download 765.9
+propose n=2 count=5 us: wall 2632.0 block 0.0 head 0.0 argmax 0.0 download 2632.2
+propose n=3 count=3 us: wall 3822.6 block 0.0 head 0.0 argmax 0.0 download 3822.8
+propose n=4 count=847 us: wall 3897.7 block 0.0 head 0.0 argmax 0.0 download 3898.0
