@@ -3749,12 +3749,16 @@ impl Model for Transformer {
         self.alloc_check_slots(s, spares)
     }
 
+    fn check_spares_free(&self) -> Option<u32> {
+        self.states.as_ref().map(qwen35::States::spares_free)
+    }
+
     fn begin_check(&mut self, _s: &Stream, slot: u32, rows: u32) -> Result<(), KError> {
         self.check_begin(slot, rows)
     }
 
-    fn end_check(&mut self, _s: &Stream, slot: u32, kept: u32) -> Result<(), KError> {
-        self.check_end(slot, kept)
+    fn end_check(&mut self, s: &Stream, slot: u32, kept: u32) -> Result<(), KError> {
+        self.check_end(s, slot, kept)
     }
 
     fn route_table(&mut self, s: &Stream, slots: &[i32], lens: &[i32]) -> Result<(), KError> {

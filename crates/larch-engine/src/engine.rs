@@ -53,9 +53,8 @@ use sha2::{Digest, Sha256};
 const GUESS_SPLITS: u32 = 16;
 
 /// The most guesses a check of a load with `opts` tries: `drafted` (the drafter's, see
-/// [`crate::guess::drafted`]), else `guesses`. A `recurrent` model's check snapshots a row a guess
-/// into its spares, one more taken while its sequence lives in a spare, so it allocates a spare a
-/// guess and one ([`Model::alloc_checks`]), at most [`Transformer::CHECK_SLOTS`].
+/// [`crate::guess::drafted`]), else `guesses`; a `recurrent` model's check holds at most
+/// [`Transformer::CHECK_ROWS`] rows.
 pub(crate) fn guess_count(opts: &EngineOptions, drafted: Option<u32>, recurrent: bool) -> u32 {
     let n = match drafted {
         Some(d) => d,
@@ -63,20 +62,21 @@ pub(crate) fn guess_count(opts: &EngineOptions, drafted: Option<u32>, recurrent:
     };
     let spares = match recurrent {
         false => MAX_GUESSES,
-        true => Transformer::CHECK_SLOTS - 1,
+        true => Transformer::CHECK_ROWS - 1,
     };
     n.min(MAX_GUESSES).min(spares)
 }
 
-/// The check spares a load with `opts` allocates ([`guess_count`] and one) and the check-step
-/// graph slots it reserves, its drafter DFlash with `block` rows or else the MTP block or plain
-/// guesses; 0 when it does not guess.
+/// The check-step graph slots a load with `opts` reserves ([`guess_count`] and one) and the check
+/// spares it asks for (a recurrent model holds at most [`Transformer::CHECK_SLOTS`] of them), its
+/// drafter DFlash with `block` rows or else the MTP block or plain guesses; 0 when it does not
+/// guess.
 pub(crate) fn check_spares(opts: &EngineOptions, block: Option<u32>) -> u32 {
     if !opts.guessing() {
         return 0;
     }
     let drafted = (block.is_some() || opts.mtp()).then(|| drafted(opts.drafter_guesses, block));
-    (guess_count(opts, drafted, true) + 1).min(Transformer::CHECK_SLOTS)
+    (guess_count(opts, drafted, true) + 1).min(Transformer::CHECK_ROWS)
 }
 
 /// [`guess_count`] for a loaded model.
@@ -116,11 +116,11 @@ fn decodes_as_check(
         && !plan.decode.is_empty()
 }
 
-/// LARCH_VERIFY_TIME=1: each pure decode or check step prints its rows, guessed rows, whether it ran
-/// the check kernels, its wall and GPU time and the last one-row plain step's wall time
-/// (`larch_verify_time,...` on stderr), so a run reads a check step's cost in plain steps; and
-/// each step that may guess, the guess counters so far and its draft forward's time
-/// (`larch_guesses,...`).
+/// LARCH_VERIFY_TIME=1: each pure decode or check step prints its rows, chats, checking chats,
+/// guessed rows, whether it ran the check kernels, its wall and GPU time and the last one-row
+/// plain step's wall time (`larch_verify_time,...` on stderr), so a run reads a check step's cost
+/// in plain steps; and each step that may guess, the guess counters so far and its draft forward's
+/// time (`larch_guesses,...`).
 fn verify_time_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("LARCH_VERIFY_TIME").is_ok_and(|v| v == "1"))
@@ -136,8 +136,14 @@ fn verify_time(plan: &StepPlan, check: bool, wall_ns: u64, gpu_ns: Option<u64>) 
         PLAIN1.store(wall_ns, Ordering::Relaxed);
     }
     eprintln!(
-        "larch_verify_time,rows={rows},chats={},guessed={},check={},wall_us={},gpu_us={},plain1_us={}",
+        "larch_verify_time,rows={rows},chats={},checks={},guessed={},check={},wall_us={},gpu_us={},plain1_us={}",
         plan.decode.len() + plan.prefill.len(),
+        // A step that checks feeds no prompt: its prefill rows are its checks.
+        if plan.guessed > 0 {
+            plan.prefill.len()
+        } else {
+            0
+        },
         plan.guessed,
         u8::from(check),
         wall_ns / 1000,
@@ -4162,6 +4168,7 @@ impl Engine {
             loaded.graphs.retain(|k, _| !k.taps);
             loaded.draft = None;
         }
+        self.sched.check_spares = loaded.model.check_spares_free().map(|n| n as usize);
         let mut plan = match &loaded.draft {
             Some(draft) => {
                 let mut d = DraftStep {
@@ -4191,8 +4198,8 @@ impl Engine {
             plan.cap_blocked = self.sched.cap_blocked(&lim);
         }
         let loaded = self.loaded.as_mut().expect("loaded engine");
-        // A rewound slot that sits this step out (parked, freed or waiting) goes home, so only the
-        // last checker can still hold a spare and guesses + 1 of them always suffice.
+        // A rewound slot that sits this step out (parked, freed or waiting) goes home, so a spare
+        // holds only a sequence that steps (and goes home unless it checks again) or a snapshot.
         if loaded.model.state_slots() > 0 && self.opts.guessing() {
             let seqs = plan.decode.iter().chain(plan.prefill.iter().map(|p| &p.0));
             let stepped: Vec<u32> = seqs
@@ -11440,9 +11447,9 @@ mod tests {
             assert!(guessed[3].usage.cached_tokens > 0);
         }
 
-        /// A recurrent model checks with its state rewound to the kept rows (one check a step),
-        /// and a backend that refuses check steps decodes plainly, recurrent or not: either way
-        /// the output is unchanged.
+        /// A recurrent model checks with its state rewound to the kept rows, and a backend that
+        /// refuses check steps decodes plainly, recurrent or not: either way the output is
+        /// unchanged.
         #[test]
         fn recurrent_models_rewind_and_refused_checks_decode() {
             for seed in 0..2 {
@@ -11465,6 +11472,24 @@ mod tests {
                 let (out, stats) = run(Arch::Llama, true, 8, Box::new(PromptLookup), &reqs);
                 same(&out, &plain);
                 assert!(unchecked(stats), "{stats:?}");
+            }
+        }
+
+        /// Several sequences of a recurrent model check in one step, within its spares, each
+        /// rewound to its own kept rows: the output is unchanged.
+        #[test]
+        fn recurrent_checks_share_a_step() {
+            for seed in 0..2 {
+                let reqs = prompts(seed);
+                let (plain, _) = run(Arch::Qwen35, false, 0, Box::new(PromptLookup), &reqs);
+                let refs = refs(&reqs, &plain);
+                let (mut e, h) = engine(Arch::Qwen35, 8, Box::new(Oracle(refs, seed)), 0, false);
+                let hs: Vec<_> = reqs.iter().map(|r| h.submit(r.clone()).unwrap()).collect();
+                let outs = drive(&mut e, &hs);
+                same(&outs, &plain);
+                let stats = h.guess_stats();
+                assert!(stats.kept > 0 && stats.kept < stats.tried, "{stats:?}");
+                assert!(e.sched.most_checks >= 2, "{}", e.sched.most_checks);
             }
         }
 
@@ -12133,17 +12158,20 @@ mod tests {
             }
         }
 
-        /// A guessing hybrid holds a spare state slot for each guess its checks try and one for
-        /// the sequence living in a spare, never more than [`Transformer::CHECK_SLOTS`]: 3 guesses
-        /// take 4 rows' snapshots (a check of 5 rows), not 5.
+        /// A guessing hybrid holds a spare state slot for each row its checks try past the first,
+        /// never more than [`Transformer::CHECK_SLOTS`], and a check takes one whatever its rows,
+        /// up to [`Transformer::CHECK_ROWS`]: 3 guesses hold 4 spares, 8 hold the most.
         #[test]
-        fn a_guessing_hybrid_holds_a_spare_a_guess_and_one() {
+        fn a_guessing_hybrid_check_takes_one_spare() {
             for (guesses, spares) in [(3, 4), (8, Transformer::CHECK_SLOTS)] {
                 let (mut e, _h) = engine(Arch::Qwen35, guesses, Box::new(PromptLookup), 0, false);
                 let model = &mut e.loaded.as_mut().unwrap().model;
-                assert_eq!(model.begin_check(&e.s, 0, spares + 1), Ok(()), "{guesses}");
+                assert_eq!(model.check_spares_free(), Some(spares), "{guesses}");
+                let rows = Transformer::CHECK_ROWS;
+                assert_eq!(model.begin_check(&e.s, 0, rows), Ok(()), "{guesses}");
+                assert_eq!(model.check_spares_free(), Some(spares - 1), "{guesses}");
                 model.end_check(&e.s, 0, 1).unwrap_err();
-                let more = model.begin_check(&e.s, 0, spares + 2);
+                let more = model.begin_check(&e.s, 0, rows + 1);
                 assert_eq!(more, Err(KError::Unsupported), "{guesses}");
             }
         }

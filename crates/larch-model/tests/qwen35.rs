@@ -538,8 +538,8 @@ fn a_grown_state_runs_on_as_before() {
     for run in [&mut a, &mut b] {
         run.sequence(0, &p, 10);
         run.sequence(1, &q[..4], 0);
-        // Slot 0 keeps 2 of 4 rows: it lives in a spare until a step moves it home.
-        check(run, 10, &g, 2, &[]);
+        // Slot 0 keeps 1 of 4 rows: it lives in a spare until a step moves it home.
+        check(run, 10, &g, 1, &[]);
     }
     let state = |run: &Run, slot| run.model.state_bytes(&run.s, slot).unwrap();
     let before = [state(&a, 0), state(&a, 1)];
@@ -559,15 +559,15 @@ fn a_grown_state_runs_on_as_before() {
     a.model.end_check(&a.s, 1, 1).unwrap_err();
     for i in 0..2 {
         let parts = [
-            Part::decode(0, 12 + i, q[4 + i as usize]),
+            Part::decode(0, 11 + i, q[4 + i as usize]),
             Part::decode(1, 4 + i, q[4 + i as usize]),
         ];
         same(&b.step(&parts), &a.step(&parts), "after the grow");
     }
     // A check after the grow still finds its spares.
     same(
-        &check(&mut b, 14, &g[..3], 1, &[]),
-        &check(&mut a, 14, &g[..3], 1, &[]),
+        &check(&mut b, 13, &g[..3], 1, &[]),
+        &check(&mut a, 13, &g[..3], 1, &[]),
         "a check after the grow",
     );
 }
@@ -686,6 +686,211 @@ fn a_check_beside_another_sequence() {
     }
     same(&want, &got, "the checked sequence");
     same(&alone_b[4..], &got_b, "the one beside it");
+}
+
+/// Two sequences check in one step and rewind apart: each to its own kept rows, every pair of kept
+/// counts. Each then answers as a run that only saw its kept rows, through decode steps of both
+/// that move them home, bit for bit; the spares all come back.
+#[test]
+fn two_checks_in_one_step_rewind_apart() {
+    let path = model_file(Arch::Qwen35Moe, "q35-two-checks");
+    let dev = Device::open(CPU).unwrap();
+    let mut run = Run::new(&path, &dev, 4);
+    std::fs::remove_file(&path).unwrap();
+    let (pa, pb) = (tokens(10, 13), tokens(7, 14));
+    let (ga, gb, next) = (tokens(4, 15), tokens(5, 16), tokens(3, 17));
+    let free = run.model.check_spares_free();
+    for ka in 1..=ga.len() {
+        for kb in 1..=gb.len() {
+            let what = format!("{ka} and {kb} kept");
+            // Slots 2 and 3 run only what slots 0 and 1 keep, as prefill chunks.
+            let (aa, ab) = (10 + ka as i32, 7 + kb as i32);
+            for slot in 0..4 {
+                run.model.reset_state(&run.s, slot).unwrap();
+            }
+            run.sequence(2, &pa, 10);
+            run.sequence(3, &pb, 7);
+            let mut want_a = run.step(&[Part::prefill(2, 10, &ga[..ka])]);
+            let mut want_b = run.step(&[Part::prefill(3, 7, &gb[..kb])]);
+            for (i, &t) in next.iter().enumerate() {
+                let i = i as i32;
+                let both = run.step(&[Part::decode(2, aa + i, t), Part::decode(3, ab + i, t)]);
+                want_a.push(both[0].clone());
+                want_b.push(both[1].clone());
+            }
+            run.sequence(0, &pa, 10);
+            run.sequence(1, &pb, 7);
+            run.model.begin_check(&run.s, 0, ga.len() as u32).unwrap();
+            run.model.begin_check(&run.s, 1, gb.len() as u32).unwrap();
+            run.check = true;
+            let two = run.step(&[Part::prefill(0, 10, &ga), Part::prefill(1, 7, &gb)]);
+            run.check = false;
+            run.model.end_check(&run.s, 0, ka as u32).unwrap();
+            run.model.end_check(&run.s, 1, kb as u32).unwrap();
+            let mut got_a = two[..ka].to_vec();
+            let mut got_b = two[ga.len()..ga.len() + kb].to_vec();
+            for (i, &t) in next.iter().enumerate() {
+                let i = i as i32;
+                let both = run.step(&[Part::decode(0, aa + i, t), Part::decode(1, ab + i, t)]);
+                got_a.push(both[0].clone());
+                got_b.push(both[1].clone());
+            }
+            same(&want_a, &got_a, &format!("{what}: the first"));
+            same(&want_b, &got_b, &format!("{what}: the second"));
+            assert_eq!(run.model.check_spares_free(), free, "{what}: spares back");
+        }
+    }
+}
+
+/// Two sequences that check in one step give each row, bit for bit, the logits of checking alone,
+/// and after their rewinds (to each pair of `kept`) decode as if each had checked alone, on the
+/// check kernels as a guessing load decodes on Metal. Slots 2 and 3 check alone, 0 and 1 together.
+fn two_checks_match_alone(run: &mut Run, what: &str) {
+    let (pa, pb) = (tokens(10, 13), tokens(7, 14));
+    let (ga, gb, next) = (tokens(4, 15), tokens(5, 16), tokens(3, 17));
+    run.splits = 2;
+    for (ka, kb) in [(1, 5), (2, 3), (4, 1), (4, 5)] {
+        let what = format!("{what}: {ka} and {kb} kept");
+        let (aa, ab) = (10 + ka as i32, 7 + kb as i32);
+        for slot in 0..4 {
+            run.model.reset_state(&run.s, slot).unwrap();
+        }
+        for (a, b) in [(0, 1), (2, 3)] {
+            run.sequence(a, &pa, 10);
+            run.sequence(b, &pb, 7);
+        }
+        let alone = |run: &mut Run, slot: i32, at: i32, g: &[i32], kept: usize| {
+            run.model
+                .begin_check(&run.s, slot as u32, g.len() as u32)
+                .unwrap();
+            run.check = true;
+            let out = run.step(&[Part::prefill(slot, at, g)]);
+            run.model
+                .end_check(&run.s, slot as u32, kept as u32)
+                .unwrap();
+            out
+        };
+        let mut want_a = alone(run, 2, 10, &ga, ka);
+        let mut want_b = alone(run, 3, 7, &gb, kb);
+        // Rewound slots that sit the next step out go home, as the engine moves them, freeing
+        // their spares.
+        for slot in [2, 3] {
+            run.model.copy_state(&run.s, slot, slot).unwrap();
+        }
+        run.model.begin_check(&run.s, 0, ga.len() as u32).unwrap();
+        run.model.begin_check(&run.s, 1, gb.len() as u32).unwrap();
+        let two = run.step(&[Part::prefill(0, 10, &ga), Part::prefill(1, 7, &gb)]);
+        run.model.end_check(&run.s, 0, ka as u32).unwrap();
+        run.model.end_check(&run.s, 1, kb as u32).unwrap();
+        let (mut got_a, mut got_b) = (two[..ga.len()].to_vec(), two[ga.len()..].to_vec());
+        for (i, &t) in next.iter().enumerate() {
+            let i = i as i32;
+            let alone = run.step(&[Part::decode(2, aa + i, t), Part::decode(3, ab + i, t)]);
+            let both = run.step(&[Part::decode(0, aa + i, t), Part::decode(1, ab + i, t)]);
+            want_a.push(alone[0].clone());
+            want_b.push(alone[1].clone());
+            got_a.push(both[0].clone());
+            got_b.push(both[1].clone());
+        }
+        run.check = false;
+        same(&want_a, &got_a, &format!("{what}: the first"));
+        same(&want_b, &got_b, &format!("{what}: the second"));
+    }
+}
+
+#[test]
+fn two_checks_in_one_step_match_alone() {
+    for arch in [Arch::Qwen35, Arch::Qwen35Moe] {
+        let what = format!("{arch:?}");
+        let path = model_file(arch, &format!("q35-two-alone-{what}"));
+        let dev = Device::open(CPU).unwrap();
+        let mut run = Run::new(&path, &dev, 4);
+        std::fs::remove_file(&path).unwrap();
+        two_checks_match_alone(&mut run, &what);
+    }
+}
+
+/// [`two_checks_match_alone`] on a real hybrid GGUF and device (a Mac's Metal is device 0):
+///   LARCH_CHECK_GGUF=<model.gguf> cargo test --release -p larch-model --test qwen35 -- --ignored --nocapture two_checks_on
+#[test]
+#[ignore = "needs a hybrid GGUF: LARCH_CHECK_GGUF, LARCH_CHECK_DEVICE (default 0)"]
+fn two_checks_on_a_device() {
+    let path = PathBuf::from(std::env::var("LARCH_CHECK_GGUF").unwrap());
+    let mut run = Run::new(&path, &check_device(), 4);
+    two_checks_match_alone(&mut run, &path.display().to_string());
+}
+
+/// Checks share the spares, one a check whatever its rows: once they are all taken another check
+/// is refused and takes nothing, and a check of one row, which never rewinds, needs none.
+#[test]
+fn checks_share_the_spares() {
+    let path = model_file(Arch::Qwen35, "q35-spares");
+    let dev = Device::open(CPU).unwrap();
+    let spares = Transformer::CHECK_SLOTS;
+    let mut run = Run::new(&path, &dev, spares + 1);
+    std::fs::remove_file(&path).unwrap();
+    let (m, s) = (&mut run.model, &run.s);
+    assert_eq!(m.check_spares_free(), Some(spares));
+    m.begin_check(s, 0, Transformer::CHECK_ROWS).unwrap();
+    assert_eq!(m.check_spares_free(), Some(spares - 1));
+    for slot in 1..spares {
+        m.begin_check(s, slot, 2).unwrap();
+    }
+    assert_eq!(m.check_spares_free(), Some(0));
+    assert_eq!(m.begin_check(s, spares, 2), Err(KError::Unsupported));
+    m.begin_check(s, spares, 1).unwrap();
+    assert_eq!(m.check_spares_free(), Some(0));
+}
+
+/// A check rewound to each `kept` of 8 rows leaves the state those rows alone leave: its rows and
+/// the decode rows after it match decoding only the kept rows, one a step, bit for bit, on the
+/// check kernels (a check row is a decode row there). Slot 0 checks, slot 1 decodes.
+fn rewinds_match_decode(run: &mut Run, what: &str) {
+    let (p, g, next) = (tokens(10, 5), tokens(8, 6), tokens(3, 7));
+    run.splits = 2;
+    for kept in 1..=g.len() {
+        let what = format!("{what}: {kept} of {} kept", g.len());
+        for slot in 0..2 {
+            run.model.reset_state(&run.s, slot).unwrap();
+            run.sequence(slot as i32, &p, 10);
+        }
+        run.check = true;
+        let at = 10 + kept as i32;
+        let mut want: Vec<_> = (0..kept)
+            .flat_map(|i| run.step(&[Part::decode(1, 10 + i as i32, g[i])]))
+            .collect();
+        let mut got = check(run, 10, &g, kept, &[]);
+        run.check = true;
+        got.truncate(kept);
+        for (i, &t) in next.iter().enumerate() {
+            want.extend(run.step(&[Part::decode(1, at + i as i32, t)]));
+            got.extend(run.step(&[Part::decode(0, at + i as i32, t)]));
+        }
+        run.check = false;
+        same(&want, &got, &what);
+    }
+}
+
+#[test]
+fn a_rewound_check_is_decode_bit_for_bit() {
+    for arch in [Arch::Qwen35, Arch::Qwen35Moe] {
+        let what = format!("{arch:?}");
+        let path = model_file(arch, &format!("q35-rewind-{what}"));
+        let dev = Device::open(CPU).unwrap();
+        let mut run = Run::new(&path, &dev, 2);
+        std::fs::remove_file(&path).unwrap();
+        rewinds_match_decode(&mut run, &what);
+    }
+}
+
+/// [`rewinds_match_decode`] on a real hybrid GGUF and device (a Mac's Metal is device 0):
+///   LARCH_CHECK_GGUF=<model.gguf> cargo test --release -p larch-model --test qwen35 -- --ignored --nocapture rewinds_on
+#[test]
+#[ignore = "needs a hybrid GGUF: LARCH_CHECK_GGUF, LARCH_CHECK_DEVICE (default 0)"]
+fn rewinds_on_a_device() {
+    let path = PathBuf::from(std::env::var("LARCH_CHECK_GGUF").unwrap());
+    let mut run = Run::new(&path, &check_device(), 2);
+    rewinds_match_decode(&mut run, &path.display().to_string());
 }
 
 /// Check steps give each row, bit for bit, the logits of decoding it alone at the same attention
@@ -1318,8 +1523,8 @@ impl Tap {
     }
 }
 
-/// What a check refuses: more rows than spares, a second begin, an end without its step or with
-/// `kept` out of range; a model without recurrent state has no checks.
+/// What a check refuses: more than [`Transformer::CHECK_ROWS`] rows, a second begin, an end without
+/// its step or with `kept` out of range; a model without recurrent state has no checks.
 #[test]
 fn a_check_refuses_what_it_cannot_rewind() {
     let path = model_file(Arch::Qwen35, "q35-check3");
@@ -1327,8 +1532,8 @@ fn a_check_refuses_what_it_cannot_rewind() {
     let mut run = Run::new(&path, &dev, 1);
     std::fs::remove_file(&path).unwrap();
     let (m, s) = (&mut run.model, &run.s);
-    let spares = Transformer::CHECK_SLOTS;
-    assert_eq!(m.begin_check(s, 0, spares + 2), Err(KError::Unsupported));
+    let most = Transformer::CHECK_ROWS;
+    assert_eq!(m.begin_check(s, 0, most + 1), Err(KError::Unsupported));
     assert_eq!(m.begin_check(s, 1, 2), Err(KError::InvalidArg));
     assert_eq!(m.begin_check(s, 0, 0), Err(KError::InvalidArg));
     assert_eq!(m.end_check(s, 0, 1), Err(KError::InvalidArg));
@@ -1396,12 +1601,19 @@ fn hybrid_bytes_counts_what_the_load_takes() {
     let two = bytes(Arch::Qwen35Moe, &[("full_attention_interval", 3)], 3).unwrap();
     assert_eq!(two - one, slots * slot);
     assert_eq!(bytes(Arch::Qwen3Moe, &[], 3).unwrap(), 0);
-    let spares = |arch| {
+    let spares = |arch, n| {
         let (g, c) = header(arch, &[]);
-        Transformer::check_bytes(&g, &c, 4).unwrap()
+        Transformer::check_bytes(&g, &c, n).unwrap()
     };
-    assert_eq!(spares(Arch::Qwen35Moe), 4 * slot);
-    assert_eq!(spares(Arch::Qwen3Moe), 0);
+    // The spares, at most CHECK_SLOTS, and the record of a step's layer inputs: 64 rows of the
+    // one recurrent layer's f16 conv input and f32 alpha and beta (to 256 bytes), then the
+    // replay's three i32 tables of 64.
+    let record = (2 * 64 * ch + 2 * 4 * 64 * GDN_V_HEADS).next_multiple_of(256) + 3 * 4 * 64;
+    assert_eq!(spares(Arch::Qwen35Moe, 4), 4 * slot + record);
+    let most = u64::from(Transformer::CHECK_SLOTS);
+    assert_eq!(spares(Arch::Qwen35Moe, 9), most * slot + record);
+    assert_eq!(spares(Arch::Qwen35Moe, 0), 0);
+    assert_eq!(spares(Arch::Qwen3Moe, 4), 0);
     let huge = [
         ("ssm.group_count", 1),
         ("ssm.time_step_rank", 1),

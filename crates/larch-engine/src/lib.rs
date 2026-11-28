@@ -1958,6 +1958,20 @@ fn row_terms(
             max_context,
             draft_seats,
         );
+    // What guessing adds to the reserve, by part (the ledger shows only its sum).
+    if (spares > 0 || drafter.is_some() || mtp_weights.is_some())
+        && std::env::var("LARCH_FIT_DIAGNOSTICS").is_ok_and(|v| v == "1")
+    {
+        let ctx = max_context.min(c.ctx_train);
+        let (load, caches, positions) = drafter.map_or((0, 0, 0), |d| {
+            let caches = fit::drafter_bytes(d, c.d_model, rows as usize, ctx, draft_seats);
+            (d.load_bytes(), caches, d.cache_positions(ctx))
+        });
+        eprintln!(
+            "larch_guess_bytes,rows={rows},draft_seats={draft_seats},check_spares={checks},spare_bytes={spares},drafter_load={load},drafter_caches={caches},cache_positions={positions},mtp_weights={}",
+            mtp_weights.unwrap_or(0)
+        );
+    }
     // A hybrid's own scratch, and the recurrent state each slot adds to it.
     let hybrid_base = Transformer::hybrid_bytes(header, c, rows, 0)?;
     let slot_bytes = Transformer::hybrid_bytes(header, c, rows, 1)? - hybrid_base;
