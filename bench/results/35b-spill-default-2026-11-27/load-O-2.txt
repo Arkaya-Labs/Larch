@@ -1,0 +1,7 @@
+0.473 larch_expert_cache_plan,15,9502,15631122432,17066033152,15890541056,577490095,2560,0.85,576
+4.677 larch_split_decode,mapped=1,layers=15
+4.710 larch_expert_cache_load,15,291905536,452607922,4
+5.049 larch_expert_cache_plan,19,9330,15631122432,17066033152,15890541056,810986593,2560,0.85,576
+7.979 larch_split_decode,mapped=1,layers=19
+8.011 larch_expert_cache_load,19,524689408,452607922,4
+8.020 larch_context_fit,2560,free=524689408,scratch=68520704,vision=0,kv_blocks=671,graph_bytes=12582912,graphs=true

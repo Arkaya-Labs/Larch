@@ -1,0 +1,20 @@
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+decode4                      replay     1588       0.11       11.18    11.36    18.03
+mixed d3+chunk>=256          eager        19     132.32        1.79   136.09     2.59
+decode1                      replay      266       0.08        5.60     5.79     1.54
+decode3                      replay       89       0.12       15.98    16.18     1.44
+prefill p16                  eager         1     339.40        1.02   346.24     0.35
+mixed d1+chunk>=256          eager         2     150.37        0.58   157.94     0.32
+decode2                      replay       33       0.08        7.57     7.79     0.26
+prefill p225                 eager         1     126.67        0.66   132.07     0.13
+mixed d3+p230                eager         1     115.95        1.15   122.35     0.12
+mixed d3+p251                eager         1     103.62        1.15   104.87     0.10
+mixed d3+p171                eager         1     103.29        1.32   104.71     0.10
+mixed d3+p94                 eager         1      97.79        1.14    98.97     0.10
+mixed d3+p101                eager         1      85.09        0.82    90.21     0.09
+mixed d3+p244                eager         1      89.43        0.58    90.05     0.09
+mixed d3+p108                eager         1      81.55        1.18    85.29     0.09
+mixed d3+p186                eager         1      79.13        0.58    82.39     0.08
+mixed d3+p173                eager         1      68.20        1.35    72.48     0.07
+mixed d3+p63                 eager         1      49.57        1.02    55.82     0.06
+mixed d3+p77                 eager         1      48.94        0.94    52.43     0.05

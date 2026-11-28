@@ -1,0 +1,3 @@
+0.489 larch_host_experts_plan,4,15631122432,17066033152,15890541056,648016256,2560,0.85,576,318767104,true
+4.146 larch_host_experts_load,4,751181824,637157298,4
+4.154 larch_context_fit,2560,free=751181824,scratch=68520704,vision=0,kv_blocks=780,graph_bytes=12582912,graphs=true

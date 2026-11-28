@@ -1,0 +1,19 @@
+shape                        graph     steps cpu fwd ms gpu wait ms  step ms  total s
+decode1                      replay     7043       0.09        5.44     5.60    39.46
+prefill chunk>=256           eager        20     124.38        1.30   128.04     2.56
+prefill p16                  eager         1     445.90        1.02   452.92     0.45
+prefill p108                 eager         1     113.86        0.81   119.78     0.12
+prefill p101                 eager         1     113.28        0.80   118.43     0.12
+prefill p173                 eager         1     104.30        0.97   110.57     0.11
+prefill p230                 eager         1      93.68        1.12    98.66     0.10
+prefill p186                 eager         1      95.30        0.56    98.63     0.10
+prefill p210                 eager         1      96.99        0.56    97.66     0.10
+prefill p79                  eager         1      87.36        0.55    88.02     0.09
+prefill p225                 eager         1      83.69        1.09    87.82     0.09
+prefill p63                  eager         1      79.91        1.04    83.56     0.08
+prefill p251                 eager         1      81.41        1.07    82.51     0.08
+prefill p244                 eager         1      81.54        0.56    82.20     0.08
+prefill p171                 eager         1      74.55        1.30    75.95     0.08
+prefill p155                 eager         1      60.31        1.29    64.26     0.06
+prefill p94                  eager         1      46.96        1.09    48.08     0.05
+prefill p77                  eager         1      43.22        0.83    46.73     0.05
