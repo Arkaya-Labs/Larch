@@ -361,6 +361,27 @@ pub(crate) fn draft_fits(
     std::iter::once((rows, seats)).chain(fewer)
 }
 
+/// The (rows, draft seats) attempts of [`draft_fits`], those whose plan keeps the most state slots
+/// (`slots` of each, 0 where it moves a host layer) first, in their own order on a tie. A chat that
+/// waits for a slot costs more than a smaller prompt chunk or fewer draft seats (24 GB M5, 27 Nov:
+/// the hybrid MoE target's drafter load took the 2048-row chunk and 1 state slot, and 8 chats ran
+/// at 40.4 tok/s against 77.2 on the 8 slots of the load without it).
+pub(crate) fn most_slots_first<E>(
+    tries: impl Iterator<Item = (u32, u32)>,
+    mut slots: impl FnMut(u32, u32) -> Result<u32, E>,
+) -> Result<Vec<(u32, u32)>, E> {
+    let mut ranked = Vec::new();
+    for (rows, seats) in tries {
+        ranked.push((std::cmp::Reverse(slots(rows, seats)?), rows, seats));
+    }
+    // Stable: a tie keeps draft_fits' order.
+    ranked.sort_by_key(|r| r.0);
+    Ok(ranked
+        .into_iter()
+        .map(|(_, rows, seats)| (rows, seats))
+        .collect())
+}
+
 /// What a plan leaves the chats: host expert layers, a hybrid's state slots (0 for another
 /// model) and KV blocks.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -913,6 +934,30 @@ mod tests {
             [(big, 2), (big, 1)]
         );
         assert_eq!(tries(true, small, 1).collect::<Vec<_>>(), [(small, 1)]);
+    }
+
+    /// A drafter's attempts go most state slots first, draft_fits' order on a tie, and the first
+    /// refusal of the plan stops the ranking.
+    #[test]
+    fn a_drafter_tries_the_most_state_slots_first() {
+        let (big, small) = (64 + 2048, 64 + 1024);
+        let slots = |t: (u32, u32)| match t {
+            (r, _) if r == big => 1,
+            (_, 4) => 2,
+            (_, 3 | 2) => 3,
+            _ => 0,
+        };
+        let ranked = super::most_slots_first(draft_fits(true, big, Some(small), 4), |r, s| {
+            Ok::<_, ()>(slots((r, s)))
+        });
+        assert_eq!(
+            ranked.unwrap(),
+            [(small, 3), (small, 2), (small, 4), (big, 4), (small, 1)]
+        );
+        let refused = super::most_slots_first(draft_fits(true, big, Some(small), 4), |r, _| {
+            if r == small { Err("refused") } else { Ok(1) }
+        });
+        assert_eq!(refused, Err("refused"));
     }
 
     /// An automatic drafter stays at the plain load's host layers and state slots, whatever its
