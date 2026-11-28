@@ -36,7 +36,7 @@ struct kernels {
   id<MTLComputePipelineState> mmvq_mm[2][LARCH_Q3_K + 1];  // up to 8 and up to 16 rows
   id<MTLComputePipelineState> mmvq_ext[2][LARCH_Q3_K + 1];  // up to 4 and up to 8 rows
   id<MTLComputePipelineState> mmvq1[LARCH_Q3_K + 1];        // 1 row: Q3_K, Q4_K, Q5_K and Q6_K, nil for the others
-  id<MTLComputePipelineState> mmvq_mma[2][LARCH_Q3_K + 1];  // up to 8 and up to 16 rows: Q4_K and Q6_K
+  id<MTLComputePipelineState> mmvq_mma[2][LARCH_Q3_K + 1];  // up to 8 and up to 16 rows: the K-quants
   // mmvq_verify's staged tile at 8, 16 and 32 rows (vv_mmvq_st, staged.metal): Q3_K to Q8_0 on Apple GPU family 10,
   // nil elsewhere
   id<MTLComputePipelineState> mmvq_st[3][LARCH_Q3_K + 1];
@@ -51,8 +51,11 @@ struct kernels {
   id<MTLComputePipelineState> attn_flash_sg[3];  // head_dim up to 64, 128 and 256
   id<MTLComputePipelineState> gemm, gemv, gemm_tensor, gemm_tensor_deep, rmsnorm, qk_norm, rope, silu_mul, add, kv_write, attn, attn_split,
       attn_split_reduce, sp_copy, sp_penalty, sp_part, sp_merge, moe_route, moe_group, moe_gather, moe_reduce,
-      sigmoid_mul, gdn_conv, gdn, gdn1, layernorm, gelu, rope_multi, draft_conv;
+      sigmoid_mul, gdn_conv, gdn, gdn1, layernorm, gelu, rope_multi, draft_conv, attn_in;
   id<MTLComputePipelineState> attn_full_sg[2], attn_full_nax;  // head_dim 64 and 72; NAX 64, nil without the tensor API
+  // Paged prefill attention on NAX fragments, head_dim exactly 64, 128 and 256 (attn_full_nax.metal); nil without
+  // macOS 26.2 and the tensor API, or with LARCH_METAL_ATTN_NAX=0
+  id<MTLComputePipelineState> attn_paged_nax[3];
   id<MTLComputePipelineState> gdn_chunk[2];  // head_dim 64 and 128; nil when LARCH_METAL_GDN_CHUNK=0
 };
 // How a device's streams feed the GPU, read from the environment at device_open, which rejects a value other
@@ -77,9 +80,16 @@ struct kernels {
 //   at a time on simdgroup matrices (MLX's chunked delta rule); 0 keeps vv_gdn's row-by-row walk, for A/B timing.
 // LARCH_METAL_MOE_NARROW (default 1): mmvq_id at decode and check row counts on experts under 1024 wide takes
 //   vv_mmvq_id1n, which keeps all 32 lanes busy; 0 keeps vv_mmvq_id1, for A/B timing.
+// LARCH_METAL_MOE_SPLIT (default 1): weighted mmvq_id at decode and check row counts runs each (row, slot) pair in
+//   its own threadgroups into f32 partials, then vv_moe_reduce, as MLX's gather_qmv and its separate sum do; 0 keeps
+//   one threadgroup walking a row's slots in turn, for A/B timing. Both sum the slots in the same order.
+// LARCH_METAL_ATTN_NAX (default 1): flash prefill at head_dim 64, 128 or 256 takes vv_attn_paged_nax (MLX's NAX
+//   attention over the paged pool, macOS 26.2 and the tensor API); 0 keeps vv_attn_flash, for A/B timing.
+// LARCH_METAL_ATTN_NAX_HM (default 0): 1 launches vv_attn_paged_nax with the q head as grid x (the _hm kernels),
+//   for A/B timing at long contexts.
 struct feed {
   bool concurrent = true, commit = true, profile = false, simd_kernels = true, moe_prefetch = true, gdn_wide = true,
-       moe_narrow = true, gdn_chunk = true;
+       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false, moe_split = true;
 };
 static constexpr uint32_t first_commit = 32, commit_every = 128;
 struct mtl_device : larch_device {
@@ -158,7 +168,10 @@ static larch_status read_feed(feed* f) {
                                  std::pair{"LARCH_METAL_MOE_PREFETCH", &f->moe_prefetch},
                                  std::pair{"LARCH_METAL_GDN_WIDE", &f->gdn_wide},
                                  std::pair{"LARCH_METAL_MOE_NARROW", &f->moe_narrow},
-                                 std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk}}) {
+                                 std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk},
+                                 std::pair{"LARCH_METAL_ATTN_NAX", &f->attn_nax},
+                                 std::pair{"LARCH_METAL_ATTN_NAX_HM", &f->attn_nax_hm},
+                                 std::pair{"LARCH_METAL_MOE_SPLIT", &f->moe_split}}) {
     const char* c = std::getenv(name);
     if (c && std::strcmp(c, "0") && std::strcmp(c, "1"))
       return vv_fail(LARCH_ERR_INVALID_ARG, std::string(name) + " must be 0 or 1");
@@ -414,7 +427,8 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
                                32);
         if (!st_tiles[0][t] || !st_tiles[1][t] || !st_tiles[2][t]) st_tiles[0][t] = st_tiles[1][t] = st_tiles[2][t] = nil;
       }
-      for (int wide = 0; wide < 2 && (t == LARCH_Q4_K || t == LARCH_Q6_K); ++wide)  // nil keeps the others
+      const bool k_quant = t == LARCH_Q3_K || t == LARCH_Q4_K || t == LARCH_Q5_K || t == LARCH_Q6_K;
+      for (int wide = 0; wide < 2 && k_quant; ++wide)  // nil keeps the others
         k.mmvq_mma[wide][t] =
             opt(std::string(wide ? "vv_mmvq_mma16_" : "vv_mmvq_mma8_") + dtype_name[t], 32 * MMVQ_MMA_SG);
       for (int wide = 0; wide < 2; ++wide)
@@ -456,6 +470,7 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
     k.gelu = pipe("vv_gelu", 256);  // each
     k.rope_multi = pipe("vv_rope_multi", 256);  // each
     k.draft_conv = pipe("vv_draft_conv", 256);  // each
+    k.attn_in = pipe("vv_attn_in", 256);
     // MLX attention's constants: no mask, causal, sinks, window or lse; unaligned, so the last query and key
     // blocks always take the bounds-checked loads (a uniform branch per block, nothing on whole blocks).
     MTLFunctionConstantValues* dense = [MTLFunctionConstantValues new];
@@ -471,6 +486,9 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
         from = [dev newLibraryWithData:nax error:&err];
         if (!from) return vv_fail(LARCH_ERR_DRIVER, std::string("larch_nax.metallib: ") + err.localizedDescription.UTF8String);
         k.attn_full_nax = opt("vv_attn_full_nax64", 32 * ATTN_FULL_SG, dense);
+        for (int wide = 0; wide < 3 && fed.attn_nax; ++wide)  // 4, 4 and 2 x 4 simdgroups (attn_full_nax.metal)
+          k.attn_paged_nax[wide] = opt("vv_attn_paged_nax" + std::to_string(64 << wide) + (fed.attn_nax_hm ? "_hm" : ""),
+                                       wide == 2 ? 256 : 128);
         from = lib;
       }
     }
@@ -1016,25 +1034,30 @@ larch_status rmsnorm(larch_stream* vs, const larch_tensor* x, const larch_tensor
   });
 }
 
+// vv_rope's arguments: ggml's rope_yarn constants, computed as the CPU reference computes them.
+rope_args rope_arguments(const cpu::rope_checked& c, const larch_rope_params* p) {
+  const view q = c.qk, pos = c.pos, ff = c.freq_factors;
+  const int64_t nd = p->n_dims;
+  const auto corr_dim = [&](float n_rot) {
+    return float(nd) * logf(float(p->n_ctx_orig) / (n_rot * 2 * float(M_PI))) / (2 * logf(p->freq_base));
+  };
+  const float lo = std::max(0.0f, floorf(corr_dim(p->beta_fast)));
+  const float hi = std::min(float(nd - 1), ceilf(corr_dim(p->beta_slow)));
+  float mscale = p->attn_factor;
+  if (p->ext_factor != 0.0f) mscale *= 1.0f + 0.1f * logf(1.0f / p->freq_scale);
+  return rope_args{q.rs, pos.rs, ff.rs, u32(q.shape[1]), u32(q.shape[2]), u32(nd), p->neox ? 1u : 0u,
+                   p->freq_factors ? 1u : 0u, powf(p->freq_base, -2.0f / float(nd)), p->freq_scale,
+                   p->ext_factor, mscale, lo, hi};
+}
+
 larch_status rope(larch_stream* vs, const larch_tensor* qk, const larch_tensor* pos_i32,
                    const larch_rope_params* p) {
   return run("rope", [&] {
     const auto checked = cpu::check_rope(sizer(vs), qk, pos_i32, p);
     const view q = checked.qk, pos = checked.pos, ff = checked.freq_factors;
-    const int64_t nd = p->n_dims;
     writable(q);
-    // ggml's rope_yarn constants, computed as the CPU reference computes them.
-    const auto corr_dim = [&](float n_rot) {
-      return float(nd) * logf(float(p->n_ctx_orig) / (n_rot * 2 * float(M_PI))) / (2 * logf(p->freq_base));
-    };
-    const float lo = std::max(0.0f, floorf(corr_dim(p->beta_fast)));
-    const float hi = std::min(float(nd - 1), ceilf(corr_dim(p->beta_slow)));
-    float mscale = p->attn_factor;
-    if (p->ext_factor != 0.0f) mscale *= 1.0f + 0.1f * logf(1.0f / p->freq_scale);
-    const rope_args a{q.rs, pos.rs, ff.rs, u32(q.shape[1]), u32(q.shape[2]), u32(nd), p->neox ? 1u : 0u,
-                      p->freq_factors ? 1u : 0u, powf(p->freq_base, -2.0f / float(nd)), p->freq_scale,
-                      p->ext_factor, mscale, lo, hi};
-    each(static_cast<mtl_stream*>(vs), ks(vs).rope, {at(q), input(pos), input_or(ff, at(pos))}, a, nd / 2, q.shape[1], q.rows);
+    each(static_cast<mtl_stream*>(vs), ks(vs).rope, {at(q), input(pos), input_or(ff, at(pos))},
+         rope_arguments(checked, p), p->n_dims / 2, q.shape[1], q.rows);
   });
 }
 
@@ -1122,9 +1145,11 @@ void mmvq_rows(larch_stream* vs, const view& w, const view& x, const view& b, co
            32 * MMVQ1_SG);
     return;
   }
-  // Q4_K and Q6_K from 3 rows: the few-row MMA kernel beat the others at every m1 shape and row count (M5,
-  // 10 Oct: 8 rows of 14336 x 4096 Q4_K 473 to 318 us, llama.cpp 319). At 2 rows the shared-x kernel won.
-  if (x.rows >= 3 && ks(vs).mmvq_mma[x.rows > 8][w.dtype]) {
+  // The K-quants from 3 rows (Q3_K from 2): the few-row MMA kernel beat the others at every m1 shape and row count
+  // (M5, 10 Oct: 8 rows of 14336 x 4096 Q4_K 473 to 318 us, llama.cpp 319). At 2 rows the shared-x kernel won
+  // for Q4_K, Q5_K and Q6_K (Q5_K 12288 x 2048: 140 vs 168 us), but on Q3_K it took 361 us to the MMA kernel's 138
+  // (M5, 27 Nov; 8 rows 467 to 139).
+  if (x.rows >= (w.dtype == LARCH_Q3_K ? 2 : 3) && ks(vs).mmvq_mma[x.rows > 8][w.dtype]) {
     const int64_t cols = 8 * MMVQ_MMA_NT;
     groups(stream, ks(vs).mmvq_mma[x.rows > 8][w.dtype], {input(w), input(x), input_or(b, at(w)), at(o)}, a,
            (w.rows + cols - 1) / cols, 32 * MMVQ_MMA_SG);
@@ -1264,7 +1289,26 @@ larch_status mmvq_id(larch_stream* vs, const larch_tensor* w_quant, const larch_
     if (s->check || pairs < MOE_GROUP_PAIRS * experts || experts > MOE_ROUTE_MAX || w.cols > 1024 * MOE_GROUP_T) {
       id<MTLComputePipelineState> narrow = w.cols < 1024 ? ks(vs).mmvq_id1n[w.dtype] : nil;
       const int64_t cols = MMVQ1_SG * (narrow ? MMVQ1N_C : MMVQ1_NR);
-      if (id<MTLComputePipelineState> one = narrow ? narrow : ks(vs).mmvq_id1[w.dtype])
+      id<MTLComputePipelineState> one = narrow ? narrow : ks(vs).mmvq_id1[w.dtype];
+      const uint64_t parts = uint64_t(pairs * n) * 4;
+      if (one && weighted && s->dev->fed.moe_split && parts <= MOE_PARTIAL_BYTES) {
+        // A pair's sum to f32 partial (row, slot), then each row's slots summed in ascending order by their weights.
+        if (s->moe_scratch.length < parts) {  // work queued with the old one keeps it alive
+          s->moe_scratch = [s->dev->dev newBufferWithLength:parts options:MTLResourceStorageModePrivate];
+          if (!s->moe_scratch) throw std::bad_alloc();
+        }
+        const arg part{s->moe_scratch, 0, parts};
+        id_args ap = a;
+        ap.weighted = 0;
+        ap.out_f32 = 1;
+        ap.out_rs = uint64_t(slots * n) * 4;
+        ap.out_slot_rs = uint64_t(n) * 4;
+        groups(s, one, {input(w), input(x), input(ids), input_or(b, at(w)), input(wt), part}, ap, (n + cols - 1) / cols,
+               32 * MMVQ1_SG, pairs);
+        each(s, ks(vs).moe_reduce, {input(part), input(wt), at(o)}, a, n, x.rows);
+        return;
+      }
+      if (one)
         groups(s, one, {input(w), input(x), input(ids), input_or(b, at(w)), input_or(wt, at(w)), at(o)}, a, (n + cols - 1) / cols,
                32 * MMVQ1_SG, weighted ? x.rows : pairs);
       else
@@ -1555,6 +1599,32 @@ larch_status kv_write(larch_stream* vs, const larch_tensor* k, const larch_tenso
   });
 }
 
+// The gated split, both norms, rope and the KV write in one vv_attn_in, which takes each step's arithmetic, so its
+// bytes are the sequence's. Head dims past ATTN_IN_HD answer UNSUPPORTED.
+larch_status fused_attn_in(larch_stream* vs, const larch_tensor* q_in, const larch_tensor* k, const larch_tensor* v,
+                            const larch_tensor* q_norm, const larch_tensor* k_norm, float eps,
+                            const larch_tensor* pos, const larch_rope_params* p, const larch_tensor* slots,
+                            const larch_kv_pool* pool, const larch_tensor* q, const larch_tensor* gate) {
+  return run("fused_attn_in", [&] {
+    const auto c = cpu::check_fused_attn_in(sizer(vs), q_in, k, v, q_norm, k_norm, pos, p, slots, pool, q, gate);
+    const view qi = c.q_in, qo = c.q_rope.qk, g = c.gate, kv = c.kv.k, vv = c.kv.v, sl = c.kv.slots, pk = c.kv.pool_k,
+               pv = c.kv.pool_v, ps = c.q_rope.pos, ff = c.q_rope.freq_factors, qn = c.q_norm.w, kn = c.k_norm.w;
+    writable(qo);
+    if (gate) writable(g);
+    need(!pk.b->readonly && !pv.b->readonly, "the pool is a read-only wrapped buffer");
+    const int64_t heads = qo.shape[1], kv_heads = kv.shape[1], hd = qo.shape[2];
+    if (hd > ATTN_IN_HD) throw unsupported("head_dim past " + std::to_string(ATTN_IN_HD));
+    const attn_in_args a{qi.rs, qo.rs, g.rs, kv.rs, vv.rs, sl.rs, qn.rs, kn.rs, u32(heads), u32(kv_heads), u32(hd),
+                         gate ? 1u : 0u, q_norm ? 1u : 0u, eps, rope_arguments(c.q_rope, p)};
+    // As qk_norm: a simdgroup a head, one a threadgroup under 16 rows, up to 8 from 16.
+    const int64_t total = heads + kv_heads, per = qo.rows < 16 ? 1 : std::min<int64_t>(total, 8);
+    groups(static_cast<mtl_stream*>(vs), ks(vs).attn_in,
+           {input(qi), at(qo), at_or(g, at(qo)), input(kv), input(vv), input(sl), input(ps), input_or(ff, at(ps)),
+            input_or(qn, at(ps)), input_or(kn, at(ps)), at(pk), at(pv)},
+           a, qo.rows * ((total + per - 1) / per), NSUInteger(per * 32));
+  });
+}
+
 // Both attention ops use the same Metal views of the shared checker's result.
 struct attn_view {
   view q, out, table, k, v, start, lens;
@@ -1593,6 +1663,17 @@ void attend(larch_stream* vs, const attn_view& a, const larch_kv_pool* pool, uin
   if (prefill && flash_ok && flash && pool->block_tokens == ATTN_FLASH_BLOCK && pool->head_dim % 8 == 0 && !(a.k.off % 16) &&
       !(a.v.off % 16)) {
     // Each sequence's rows in tiles: at most one partial tile per sequence.
+    // head_dim exactly 64, 128 or 256 on NAX: 64 q rows a tile (32 at 256), K and V read in place, no staging.
+    // At 512 rows and 8,192 positions vv_attn_flash took 3.2x MLX's time (21.1 vs 6.5 ms at 16 q / 2 kv heads,
+    // d256, M5, 27 Nov).
+    if (const id<MTLComputePipelineState> nax = ks(vs).attn_paged_nax[wide];
+        nax && pool->head_dim == (64u << wide) && !(a.q.rs % 2) && !(a.out.rs % 2)) {
+      const int64_t tile = wide == 2 ? 32 : 64;
+      const int64_t tiles = (a.q.rows + tile - 1) / tile + a.table.rows;
+      const bool hm = stream->dev->fed.attn_nax_hm;
+      groups(stream, nax, bufs, args, hm ? a.q.shape[1] : tiles, wide == 2 ? 256 : 128, hm ? tiles : a.q.shape[1]);
+      return;
+    }
     const int64_t tile = wide == 2 && flash == ks(vs).attn_flash[wide] ? ATTN_FLASH_ROWS256 : ATTN_FLASH_ROWS;
     groups(stream, flash, bufs, args, (a.q.rows + tile - 1) / tile + a.table.rows, ATTN_FLASH_SG * 32,
            a.q.shape[1]);
@@ -1811,6 +1892,7 @@ static const vv_ops table = {
     .gelu = gelu,
     .attn_full = attn_full,
     .rope_multi = rope_multi,
+    .fused_attn_in = fused_attn_in,
     .draft_conv = draft_conv,
 };
 

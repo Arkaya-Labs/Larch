@@ -31,6 +31,16 @@ struct rope_args {
   float theta_scale, freq_scale, ext_factor, mscale, lo, hi;
 };
 
+/// fused_attn_in: q's heads then k's, each one head_dim wide (at most ATTN_IN_HD), with rope_args' constants
+/// (its rs, heads and hd unused).
+#define ATTN_IN_HD 512
+struct attn_in_args {
+  u64 q_in_rs, q_rs, gate_rs, k_rs, v_rs, slots_rs, qn_rs, kn_rs;
+  u32 heads, kv_heads, hd, gated, norm;
+  float eps;
+  rope_args rope;
+};
+
 /// layernorm: rms_args' row of n, minus its mean first, plus an optional bias.
 struct ln_args {
   u64 x_rs, w_rs, b_rs, out_rs;

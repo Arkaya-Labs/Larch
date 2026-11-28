@@ -1011,7 +1011,7 @@ impl Transformer {
         let eps = self.cfg.rms_eps;
         let w = |w: W| self.t(w);
         let (dt, a, cw) = (w(l.dt)?, w(l.a)?, w(l.conv)?);
-        if self.fusing(FUSED.gdn) {
+        if self.fusing(self.fused_on.gdn) {
             let (state, nw) = ((gs, l.layer), w(l.norm)?);
             let r = self.fused_call(|| {
                 let ab = [alpha, beta, &dt, &a];
@@ -1115,7 +1115,7 @@ impl Transformer {
     /// Whether Gated DeltaNet layer `l`'s norm and in-projections at `rows` rows take `fused_gdn_in`: outside check
     /// steps, its quantized projections on mmvq (an f16 alpha or beta takes gemm, which the entry replaces).
     pub(super) fn gdn_in_fusable(&self, l: &Gdn, rows: i64) -> bool {
-        self.fusing(FUSED.gdn_in)
+        self.fusing(self.fused_on.gdn_in)
             && !self.check.get()
             && [l.qkv, l.z, l.alpha, l.beta]
                 .iter()

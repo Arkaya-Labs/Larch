@@ -220,11 +220,11 @@ kernel void dequant(bytes_in w [[buffer(0)]], device uchar* out [[buffer(1)]], c
 
 // mmvq: one simdgroup per output column n. Lane l decodes sub-blocks l, l + 32, ... of w's row n once
 // and multiplies each into every x row (rows <= 16). a = x, b = w, c = out.
-// Each column reads all of x again, so backend.mm sends 1 row of Q4_K and Q6_K to vv_mmvq1_*, 3-16 rows of
-// them to mmvq_mma, and more rows of the other formats, or 2 rows, to mmvq_ext and mmvq_mm below.
-// ponytail: mmvq_mma decodes Q4_K and Q6_K only. Q5_K, Q8_0, Q4_0 and Q5_0 keep mmvq_ext and mmvq_mm (Q8_0
+// Each column reads all of x again, so backend.mm sends 1 row to vv_mmvq1_*, 2-16 rows of the K-quants to
+// mmvq_mma (Q4_K, Q5_K and Q6_K from 3), and the other rows and formats to mmvq_ext and mmvq_mm below.
+// ponytail: mmvq_mma decodes the K-quants only. Q8_0, Q4_0 and Q5_0 keep mmvq_ext and mmvq_mm (Q8_0
 // 14336 x 4096 at 8 rows: 548 us, llama.cpp 541, M5, 10 Oct). Give mmvq_mma a 16-weight decoder for a format
-// when a model with it shows mmvq in W2.
+// when a model with it shows mmvq in W2 (Q3_K and Q5_K: the 35B's 8-chat decode, 27 Nov).
 template <int QK, int BYTES, deq_fn F>
 kernel void mmvq(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in bias [[buffer(2)]],
                  device uchar* out [[buffer(3)]], constant mm_args& a [[buffer(4)]],
@@ -555,8 +555,19 @@ kernel void mmvq_ext(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
   }
 }
 
-// 16 weights, piece p (0-15) of a 256-weight Q4_K or Q6_K block, for mmvq_mma.
+// 16 weights, piece p (0-15) of a 256-weight K-quant block (elements 16 p to 16 p + 15), for mmvq_mma.
 typedef void (*deq16_fn)(bytes_in b, int p, thread float* y);
+void deq16p_q3_k(bytes_in b, int p, thread float* y) { deq16_q3_k(b, p / 2, p % 2, y); }
+void deq16_q5_k(bytes_in b, int p, thread float* y) {
+  const int c = p / 2, h = p % 2;
+  float sc, m;
+  scale_min_k4(c, b + 4, sc, m);
+  const float d = h16(b) * sc, mn = h16(b + 2) * m;
+  bytes_in qh = b + 16 + 16 * h, ql = b + 48 + 32 * (c / 2) + 16 * h;
+  const uchar u = uchar(1 << c);
+#pragma clang loop unroll(full)
+  for (int l = 0; l < 16; ++l) y[l] = d * float((c & 1 ? ql[l] >> 4 : ql[l] & 0xF) + (qh[l] & u ? 16 : 0)) - mn;
+}
 void deq16_q4_k(bytes_in b, int p, thread float* y) {
   const int c = p / 2;
   float sc, m;
@@ -577,7 +588,7 @@ void deq16_q6_k(bytes_in b, int p, thread float* y) {
   }
 }
 
-// mmvq for 3-16 rows of Q4_K and Q6_K on simdgroup matrices, after llama.cpp's few-row MMA kernel (mul_mv_mma):
+// mmvq for 2-16 rows of the K-quants on simdgroup matrices, after llama.cpp's few-row MMA kernel (mul_mv_mma):
 // a threadgroup owns 8 NT columns of w and all 8 RT rows of x, and its MMVQ_MMA_SG simdgroups split k in 64-wide
 // steps. A lane decodes the 16 weights its A fragments hold straight into registers and loads the x values of
 // its B fragments, so threadgroup memory only sums the simdgroups' partial tiles at the end. The loops must be
@@ -746,6 +757,77 @@ kernel void mmvq_id1(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
     }
   }
   for (short c = 0; a.weighted && !lane && c < MMVQ1_NR && n0 + c < a.n; ++c) {
+    device uchar* o = out + r * a.out_rs;
+    if (a.out_f32)
+      ((device float*)o)[n0 + c] = acc[c];
+    else
+      ((device half*)o)[n0 + c] = half(acc[c]);
+  }
+}
+
+// Prototype for metal_perf repack-id only (no backend path yet): mmvq_id per (row, slot) pair on Q3_K experts that
+// perf.mm's repack_q3_k rearranged losslessly, on MLX's affine_gather_qmv_fast plan (qmv_fast_impl, mlx
+// quantized.h: 2 simdgroups, 4 rows of the expert each, 16 consecutive weights a lane, 512 of k a step).
+// A repacked row of nb blocks holds, at 16-byte-aligned stride a.w_rs: the 2-bit low parts of weights 4 m .. 4 m + 3
+// in byte m (nb x 64 bytes), then their high bits, 8 a byte (nb x 32), then each block's 12 scale bytes and its
+// fp16 d as GGUF has them. So a lane's 16 weights are one 4-byte and one 2-byte load, as in MLX's 3-bit packing,
+// and piece p's scale is sub-scale p of the block. Weighted, one row over its slots in ascending order.
+kernel void vv_mmvq_id_rq3(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in ids [[buffer(2)]],
+                           bytes_in bias [[buffer(3)]], bytes_in wt [[buffer(4)]], device uchar* out [[buffer(5)]],
+                           constant id_args& a [[buffer(6)]], uint2 tg [[threadgroup_position_in_grid]],
+                           ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+  constexpr short RS = 4;
+  const uint n0 = (tg.x * 2 + sg) * RS;
+  if (n0 >= a.n) return;  // the whole simdgroup
+  const uint r = a.weighted ? tg.y : tg.y / a.slots, first = a.weighted ? 0 : tg.y % a.slots;
+  const uint last = a.weighted ? a.slots : first + 1, nb = a.k / 256;
+  float acc[RS] = {};
+  for (uint j = first; j < last; ++j) {
+    const uint e = uint(at<int>(ids + r * a.ids_rs, 4, j));
+    bytes_in we = w + u64(e) * a.n * a.w_rs;
+    device const half* xr = (device const half*)(x + r * a.x_rs + j * a.x_slot_rs);
+    bytes_in wr[RS];
+#pragma clang loop unroll(full)
+    for (short c = 0; c < RS; ++c) wr[c] = we + u64(min(n0 + c, a.n - 1)) * a.w_rs;  // a ragged tail recomputes n - 1
+    float sum[RS] = {};
+    for (uint k0 = 16 * lane; k0 < a.k; k0 += 512) {
+      float xv[16];
+#pragma clang loop unroll(full)
+      for (short i = 0; i < 4; ++i) {  // packed: larch.h promises x 2-byte alignment only
+        const float4 u = float4(half4(((device const packed_half4*)(xr + k0))[i]));
+#pragma clang loop unroll(full)
+        for (short l = 0; l < 4; ++l) xv[4 * i + l] = u[l];
+      }
+      const uint blk = k0 / 256, p = k0 % 256 / 16;
+#pragma clang loop unroll(full)
+      for (short c = 0; c < RS; ++c) {
+        const uint lo = *(device const uint*)(wr[c] + blk * 64 + 4 * p);
+        const uint hi = *(device const ushort*)(wr[c] + nb * 64 + blk * 32 + 2 * p);
+        bytes_in sc = wr[c] + nb * 96 + blk * 12;
+        const int s = int((p < 8 ? sc[p] & 0xF : sc[p - 8] >> 4) | (sc[8 + p % 4] >> (2 * (p / 4)) & 3) << 4) - 32;
+        float t = 0;
+#pragma clang loop unroll(full)
+        for (short l = 0; l < 16; ++l) t += xv[l] * float(int((lo >> (2 * l)) & 3) - ((hi >> l) & 1 ? 0 : 4));
+        sum[c] += h16(wr[c] + nb * 108 + blk * 2) * float(s) * t;
+      }
+    }
+#pragma clang loop unroll(full)
+    for (short c = 0; c < RS; ++c) {
+      const uint n = min(n0 + c, a.n - 1);
+      float v = simd_sum(sum[c]);
+      if (a.has_bias) v += at<float>(bias, a.bias_rs, e * a.n + n);
+      if (a.weighted) {
+        acc[c] += at<float>(wt + r * a.wt_rs, 4, j) * v;
+      } else if (!lane && n0 + c < a.n) {
+        device uchar* o = out + r * a.out_rs + j * a.out_slot_rs;
+        if (a.out_f32)
+          ((device float*)o)[n] = v;
+        else
+          ((device half*)o)[n] = half(v);
+      }
+    }
+  }
+  for (short c = 0; a.weighted && !lane && c < RS && n0 + c < a.n; ++c) {
     device uchar* o = out + r * a.out_rs;
     if (a.out_f32)
       ((device float*)o)[n0 + c] = acc[c];
@@ -989,6 +1071,10 @@ template [[host_name("vv_mmvq_id1n_q3_k")]] kernel decltype(mmvq_id1n<110>) mmvq
 template [[host_name("vv_mmvq_id1n_q4_k")]] kernel decltype(mmvq_id1n<144>) mmvq_id1n<144>;
 template [[host_name("vv_mmvq_id1n_q5_k")]] kernel decltype(mmvq_id1n<176>) mmvq_id1n<176>;
 template [[host_name("vv_mmvq_id1n_q6_k")]] kernel decltype(mmvq_id1n<210>) mmvq_id1n<210>;
+template [[host_name("vv_mmvq_mma8_q3_k")]] kernel mmvq_mma_t mmvq_mma<110, deq16p_q3_k, 1>;
+template [[host_name("vv_mmvq_mma16_q3_k")]] kernel mmvq_mma_t mmvq_mma<110, deq16p_q3_k, 2>;
+template [[host_name("vv_mmvq_mma8_q5_k")]] kernel mmvq_mma_t mmvq_mma<176, deq16_q5_k, 1>;
+template [[host_name("vv_mmvq_mma16_q5_k")]] kernel mmvq_mma_t mmvq_mma<176, deq16_q5_k, 2>;
 template [[host_name("vv_mmvq_mma8_q4_k")]] kernel mmvq_mma_t mmvq_mma<144, deq16_q4_k, 1>;
 template [[host_name("vv_mmvq_mma16_q4_k")]] kernel mmvq_mma_t mmvq_mma<144, deq16_q4_k, 2>;
 template [[host_name("vv_mmvq_mma8_q6_k")]] kernel mmvq_mma_t mmvq_mma<210, deq16_q6_k, 1>;
@@ -1605,6 +1691,70 @@ kernel void vv_rope(device uchar* qk [[buffer(0)]], bytes_in pos [[buffer(1)]], 
   const float x0 = x[p0], x1 = x[p1];
   x[p0] = half(x0 * c - x1 * s);
   x[p1] = half(x0 * s + x1 * c);
+}
+
+// fused_attn_in: simdgroup s of threadgroup g takes head (g % per_row) * simdgroups + s of row g / per_row, counting
+// q's heads then k's. A q head: its half of q_in (the other half to gate), vv_qk_norm, vv_rope, to q. A k head, where
+// the row's slot is not negative: the same from k (left as it was) to the pool, and v's head to the pool. Each step
+// is its own kernel's arithmetic, rounded to half where that kernel stores, so the result is the sequence's bytes.
+kernel void vv_attn_in(bytes_in q_in [[buffer(0)]], device uchar* q [[buffer(1)]], device uchar* gate [[buffer(2)]],
+                       bytes_in k [[buffer(3)]], bytes_in v [[buffer(4)]], bytes_in slots [[buffer(5)]],
+                       bytes_in pos [[buffer(6)]], bytes_in ff [[buffer(7)]], bytes_in qn [[buffer(8)]],
+                       bytes_in kn [[buffer(9)]], device half* kp [[buffer(10)]], device half* vp [[buffer(11)]],
+                       constant attn_in_args& a [[buffer(12)]], uint g [[threadgroup_position_in_grid]],
+                       ushort sg [[simdgroup_index_in_threadgroup]], ushort nsg [[simdgroups_per_threadgroup]],
+                       ushort lane [[thread_index_in_simdgroup]]) {
+  threadgroup half heads[8 * ATTN_IN_HD];
+  const uint total = a.heads + a.kv_heads, per_row = (total + nsg - 1) / nsg, r = g / per_row,
+             hh = g % per_row * nsg + sg, n = a.hd;
+  if (hh >= total) return;  // the whole simdgroup
+  const bool is_q = hh < a.heads;
+  const uint kh = hh - a.heads;
+  const int slot = at<int>(slots, a.slots_rs, r);
+  if (!is_q && slot < 0) return;
+  device const half* src = is_q ? (device const half*)(q_in + r * a.q_in_rs) + hh * (a.gated ? 2 * n : n)
+                                : (device const half*)(k + r * a.k_rs) + kh * n;
+  threadgroup half* x = heads + sg * ATTN_IN_HD;
+  float ss = 0;
+  for (uint i = lane; i < n; i += 32) {
+    x[i] = src[i];
+    ss += float(x[i]) * float(x[i]);
+  }
+  if (is_q && a.gated) {
+    device half* gr = (device half*)(gate + r * a.gate_rs) + hh * n;
+    for (uint i = lane; i < n; i += 32) gr[i] = src[n + i];
+  }
+  if (a.norm) {
+    bytes_in w = is_q ? qn : kn;
+    const u64 w_rs = is_q ? a.qn_rs : a.kn_rs;
+    const float scale = 1.0f / precise::sqrt(simd_sum(ss) / float(n) + a.eps);
+    for (uint i = lane; i < n; i += 32) x[i] = half(float(x[i]) * scale * at<float>(w, w_rs, i));
+  }
+  simdgroup_barrier(mem_flags::mem_threadgroup);  // every lane's x, before rope pairs them across lanes
+  device half* o = is_q ? (device half*)(q + r * a.q_rs) + hh * n : kp + u64(slot) * a.kv_heads * n + kh * n;
+  const constant rope_args& p = a.rope;
+  for (uint i = lane; i < p.n_dims / 2; i += 32) {
+    float theta = float(at<int>(pos, p.pos_rs, r));
+    for (uint j = 0; j < i; ++j) theta *= p.theta_scale;
+    const float extrap = theta / (p.has_ff ? at<float>(ff, p.ff_rs, i) : 1.0f), interp = p.freq_scale * extrap;
+    float t = interp;
+    if (p.ext_factor != 0.0f) {
+      const float y = (float(i) - p.lo) / max(0.001f, p.hi - p.lo);
+      const float mix = (1 - min(1.0f, max(0.0f, y))) * p.ext_factor;
+      t = interp * (1 - mix) + extrap * mix;
+    }
+    const float c = precise::cos(t) * p.mscale, s = precise::sin(t) * p.mscale;
+    const uint p0 = p.neox ? i : 2 * i, p1 = p.neox ? i + p.n_dims / 2 : p0 + 1;
+    const float x0 = x[p0], x1 = x[p1];
+    o[p0] = half(x0 * c - x1 * s);
+    o[p1] = half(x0 * s + x1 * c);
+  }
+  for (uint i = p.n_dims + lane; i < n; i += 32) o[i] = x[i];  // past rope's dims
+  if (!is_q) {
+    device const half* vr = (device const half*)(v + r * a.v_rs) + kh * n;
+    device half* vo = vp + u64(slot) * a.kv_heads * n + kh * n;
+    for (uint i = lane; i < n; i += 32) vo[i] = vr[i];
+  }
 }
 
 // layernorm: threadgroup r normalises row r as vv_rmsnorm, around its mean: out = (x - mean) / sqrt(var + eps) * w
