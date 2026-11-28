@@ -523,14 +523,14 @@ static void deferred_dequant() {
 static void mmvq_rows() {
   constexpr int64_t n = 67;
   for (const int64_t k : {256, 768}) {
-    for (const larch_dtype q : {LARCH_Q4_K, LARCH_Q6_K}) {
+    for (const larch_dtype q : {LARCH_Q3_K, LARCH_Q4_K, LARCH_Q5_K, LARCH_Q6_K}) {
       const both w = up(make(q, {n, k}, 2)), bias = up(make(LARCH_F32, {n}, 3));
       for (int64_t rows = 1; rows <= 16; ++rows) {
         const both x = up(make(LARCH_F16, {rows, k}, 5));
         for (const larch_dtype out_type : {LARCH_F16, LARCH_F32}) {
           for (const bool with_bias : {false, true}) {
             const both out = up(make(out_type, {rows, n}, 7));
-            const std::string name = "mmvq " + std::string(q == LARCH_Q4_K ? "q4_k" : "q6_k") + " k " +
+            const std::string name = "mmvq " + std::string(q == LARCH_Q3_K ? "q3_k" : q == LARCH_Q4_K ? "q4_k" : q == LARCH_Q5_K ? "q5_k" : "q6_k") + " k " +
                                      std::to_string(k) + ", " + std::to_string(rows) + " rows " +
                                      (out_type == LARCH_F16 ? "f16" : "f32") +
                                      (with_bias ? " bias" : " no bias");
@@ -559,7 +559,7 @@ static void mmvq_tiles() {
   for (const auto& [q, format] : formats) {
     const int64_t k = block_of(q) == 256 ? 768 : 96;
     const both w = up(make(q, {n, k}, 2)), bias = up(make(LARCH_F32, {n}, 3));
-    // Q4_K and Q6_K from 3 rows: mmvq_mma. The others at 2-4: the shared-x kernel (4 its widest one-tile case);
+    // The K-quants from 3 rows (Q3_K and Q5_K from 2): mmvq_mma. The others at 2-4: the shared-x kernel (4 its widest one-tile case);
     // 5 and 8: the 1-tile kernel (8 fills it); 9 and 16: 2
     for (const int64_t rows : {2, 3, 4, 5, 8, 9, 16}) {
       const both x = up(make(LARCH_F16, {rows, k}, 5));

@@ -36,7 +36,7 @@ struct kernels {
   id<MTLComputePipelineState> mmvq_mm[2][LARCH_Q3_K + 1];  // up to 8 and up to 16 rows
   id<MTLComputePipelineState> mmvq_ext[2][LARCH_Q3_K + 1];  // up to 4 and up to 8 rows
   id<MTLComputePipelineState> mmvq1[LARCH_Q3_K + 1];        // 1 row: Q3_K, Q4_K, Q5_K and Q6_K, nil for the others
-  id<MTLComputePipelineState> mmvq_mma[2][LARCH_Q3_K + 1];  // up to 8 and up to 16 rows: Q4_K and Q6_K
+  id<MTLComputePipelineState> mmvq_mma[2][LARCH_Q3_K + 1];  // up to 8 and up to 16 rows: the K-quants
   // mmvq_verify's staged tile at 8, 16 and 32 rows (vv_mmvq_st, staged.metal): Q3_K to Q8_0 on Apple GPU family 10,
   // nil elsewhere
   id<MTLComputePipelineState> mmvq_st[3][LARCH_Q3_K + 1];
@@ -423,7 +423,8 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
                                32);
         if (!st_tiles[0][t] || !st_tiles[1][t] || !st_tiles[2][t]) st_tiles[0][t] = st_tiles[1][t] = st_tiles[2][t] = nil;
       }
-      for (int wide = 0; wide < 2 && (t == LARCH_Q4_K || t == LARCH_Q6_K); ++wide)  // nil keeps the others
+      const bool k_quant = t == LARCH_Q3_K || t == LARCH_Q4_K || t == LARCH_Q5_K || t == LARCH_Q6_K;
+      for (int wide = 0; wide < 2 && k_quant; ++wide)  // nil keeps the others
         k.mmvq_mma[wide][t] =
             opt(std::string(wide ? "vv_mmvq_mma16_" : "vv_mmvq_mma8_") + dtype_name[t], 32 * MMVQ_MMA_SG);
       for (int wide = 0; wide < 2; ++wide)
@@ -1134,9 +1135,11 @@ void mmvq_rows(larch_stream* vs, const view& w, const view& x, const view& b, co
            32 * MMVQ1_SG);
     return;
   }
-  // Q4_K and Q6_K from 3 rows: the few-row MMA kernel beat the others at every m1 shape and row count (M5,
-  // 10 Oct: 8 rows of 14336 x 4096 Q4_K 473 to 318 us, llama.cpp 319). At 2 rows the shared-x kernel won.
-  if (x.rows >= 3 && ks(vs).mmvq_mma[x.rows > 8][w.dtype]) {
+  // The K-quants from 3 rows (Q3_K and Q5_K from 2): the few-row MMA kernel beat the others at every m1 shape and
+  // row count (M5, 10 Oct: 8 rows of 14336 x 4096 Q4_K 473 to 318 us, llama.cpp 319). At 2 rows the shared-x
+  // kernel won for Q4_K and Q6_K, but on Q3_K it took 4.8x one row's time (M5, 27 Nov: 12288 x 2048, 75 to 361 us).
+  const bool low_bits = w.dtype == LARCH_Q3_K || w.dtype == LARCH_Q5_K;
+  if (x.rows >= (low_bits ? 2 : 3) && ks(vs).mmvq_mma[x.rows > 8][w.dtype]) {
     const int64_t cols = 8 * MMVQ_MMA_NT;
     groups(stream, ks(vs).mmvq_mma[x.rows > 8][w.dtype], {input(w), input(x), input_or(b, at(w)), at(o)}, a,
            (w.rows + cols - 1) / cols, 32 * MMVQ_MMA_SG);
