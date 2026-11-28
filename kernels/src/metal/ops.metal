@@ -719,29 +719,29 @@ kernel void mmvq_id(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in
 // over MMVQ1_NR columns of the chosen expert per simdgroup, for one (row, slot) pair or, weighted, one row over
 // its slots in ascending order. mmvq_id's one column per simdgroup decodes byte by byte, and at qwen3moe's
 // down projection (k = 768) leaves 8 of 32 lanes idle.
-template <int BYTES>
+template <int BYTES, short NR = MMVQ1_NR>
 kernel void mmvq_id1(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in ids [[buffer(2)]],
                      bytes_in bias [[buffer(3)]], bytes_in wt [[buffer(4)]], device uchar* out [[buffer(5)]],
                      constant id_args& a [[buffer(6)]], uint2 tg [[threadgroup_position_in_grid]],
                      ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
-  const uint n0 = (tg.x * MMVQ1_SG + sg) * MMVQ1_NR;
+  const uint n0 = (tg.x * MMVQ1_SG + sg) * NR;
   if (n0 >= a.n) return;  // the whole simdgroup
   const uint r = a.weighted ? tg.y : tg.y / a.slots, first = a.weighted ? 0 : tg.y % a.slots;
   const uint last = a.weighted ? a.slots : first + 1;
-  float acc[MMVQ1_NR] = {};
+  float acc[NR] = {};
   for (uint j = first; j < last; ++j) {
     const uint e = uint(at<int>(ids + r * a.ids_rs, 4, j));
     bytes_in we = w + u64(e) * a.n * a.w_rs, xr = x + r * a.x_rs + j * a.x_slot_rs;
-    float sum[MMVQ1_NR] = {};
+    float sum[NR] = {};
     if (BYTES == 110)
-      mmvq1_q3_k_sum(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
+      mmvq1_q3_k_sum<NR>(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
     else if (BYTES == 144)
-      mmvq1_q4_k_sum(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
+      mmvq1_q4_k_sum<NR>(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
     else if (BYTES == 176)
-      mmvq1_q5_k_sum(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
+      mmvq1_q5_k_sum<NR>(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
     else
-      mmvq1_q6_k_sum(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
-    for (short c = 0; c < MMVQ1_NR; ++c) {
+      mmvq1_q6_k_sum<NR>(we, a.w_rs, n0, a.n, a.k, xr, lane, sum);
+    for (short c = 0; c < NR; ++c) {
       const uint n = min(n0 + c, a.n - 1);
       float v = simd_sum(sum[c]);
       if (a.has_bias) v += at<float>(bias, a.bias_rs, e * a.n + n);
@@ -756,7 +756,7 @@ kernel void mmvq_id1(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
       }
     }
   }
-  for (short c = 0; a.weighted && !lane && c < MMVQ1_NR && n0 + c < a.n; ++c) {
+  for (short c = 0; a.weighted && !lane && c < NR && n0 + c < a.n; ++c) {
     device uchar* o = out + r * a.out_rs;
     if (a.out_f32)
       ((device float*)o)[n0 + c] = acc[c];
@@ -771,12 +771,11 @@ kernel void mmvq_id1(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
 // g, g + groups, ... of its columns' MMVQ1N_C x k / 256, so every group gets k / 256 units at any k. A unit runs
 // mmvq1's sum on one block of one column, with the lane's place in its group as mmvq1 gives it. As in MLX's
 // gather_qmv, all 32 lanes work at any expert width.
-template <int BYTES>
+template <int BYTES, short C = MMVQ1N_C>
 kernel void mmvq_id1n(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in ids [[buffer(2)]],
                       bytes_in bias [[buffer(3)]], bytes_in wt [[buffer(4)]], device uchar* out [[buffer(5)]],
                       constant id_args& a [[buffer(6)]], uint2 tg [[threadgroup_position_in_grid]],
                       ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
-  constexpr short C = MMVQ1N_C;
   // Lane groups and a lane's place in its group, as each format's sum reads them (its block stride, then the
   // lane with that stride's bits cleared, so the sum starts at block 0).
   constexpr short G = BYTES == 210 ? 2 : 4;
@@ -1000,6 +999,14 @@ template [[host_name("vv_mmvq_id1n_q3_k")]] kernel decltype(mmvq_id1n<110>) mmvq
 template [[host_name("vv_mmvq_id1n_q4_k")]] kernel decltype(mmvq_id1n<144>) mmvq_id1n<144>;
 template [[host_name("vv_mmvq_id1n_q5_k")]] kernel decltype(mmvq_id1n<176>) mmvq_id1n<176>;
 template [[host_name("vv_mmvq_id1n_q6_k")]] kernel decltype(mmvq_id1n<210>) mmvq_id1n<210>;
+template [[host_name("vv_mmvq_id1w_q3_k")]] kernel decltype(mmvq_id1<110, 2 * MMVQ1_NR>) mmvq_id1<110, 2 * MMVQ1_NR>;
+template [[host_name("vv_mmvq_id1w_q4_k")]] kernel decltype(mmvq_id1<144, 2 * MMVQ1_NR>) mmvq_id1<144, 2 * MMVQ1_NR>;
+template [[host_name("vv_mmvq_id1w_q5_k")]] kernel decltype(mmvq_id1<176, 2 * MMVQ1_NR>) mmvq_id1<176, 2 * MMVQ1_NR>;
+template [[host_name("vv_mmvq_id1w_q6_k")]] kernel decltype(mmvq_id1<210, 2 * MMVQ1_NR>) mmvq_id1<210, 2 * MMVQ1_NR>;
+template [[host_name("vv_mmvq_id1nw_q3_k")]] kernel decltype(mmvq_id1n<110, 2 * MMVQ1N_C>) mmvq_id1n<110, 2 * MMVQ1N_C>;
+template [[host_name("vv_mmvq_id1nw_q4_k")]] kernel decltype(mmvq_id1n<144, 2 * MMVQ1N_C>) mmvq_id1n<144, 2 * MMVQ1N_C>;
+template [[host_name("vv_mmvq_id1nw_q5_k")]] kernel decltype(mmvq_id1n<176, 2 * MMVQ1N_C>) mmvq_id1n<176, 2 * MMVQ1N_C>;
+template [[host_name("vv_mmvq_id1nw_q6_k")]] kernel decltype(mmvq_id1n<210, 2 * MMVQ1N_C>) mmvq_id1n<210, 2 * MMVQ1N_C>;
 template [[host_name("vv_mmvq_mma8_q3_k")]] kernel mmvq_mma_t mmvq_mma<110, deq16p_q3_k, 1>;
 template [[host_name("vv_mmvq_mma16_q3_k")]] kernel mmvq_mma_t mmvq_mma<110, deq16p_q3_k, 2>;
 template [[host_name("vv_mmvq_mma8_q5_k")]] kernel mmvq_mma_t mmvq_mma<176, deq16_q5_k, 1>;
