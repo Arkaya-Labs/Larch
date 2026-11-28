@@ -1970,7 +1970,7 @@ static const vv_ops table = {
     .qk_norm = qk_norm,
     .sample_prep = sample_prep,
     // ponytail: no Q2_K kernels; add them to the per-dtype kernels when a mixed-expert file must run on Metal.
-    .no_weights = 1u << LARCH_Q2_K,
+    .no_weights = 1u << LARCH_Q2_K | 1u << LARCH_NVFP4,
     .mmvq_verify = mmvq_verify,
     .mmvq_id = mmvq_id,
     .sigmoid_mul = sigmoid_mul,

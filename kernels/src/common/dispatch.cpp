@@ -655,12 +655,11 @@ larch_status larch_depth_mix(larch_stream* s, const larch_tensor* states_f32, co
 }
 
 larch_status larch_loop_gate(larch_stream* s, const larch_tensor* x_f32, const larch_tensor* msg_f32,
-                               const larch_tensor* gain_f16, const larch_tensor* forget_f16, const larch_tensor* out) {
+                               const larch_tensor* gain, const larch_tensor* forget, const larch_tensor* out) {
   if (s && !s->ops->loop_gate)
-    return unsupported("loop_gate", s, NO_OP, [&](const cpu::sizer& b) {
-      cpu::check_loop_gate(b, x_f32, msg_f32, gain_f16, forget_f16, out);
-    });
-  VV_FORWARD(s, loop_gate, s, x_f32, msg_f32, gain_f16, forget_f16, out);
+    return unsupported("loop_gate", s, NO_OP,
+                       [&](const cpu::sizer& b) { cpu::check_loop_gate(b, x_f32, msg_f32, gain, forget, out); });
+  VV_FORWARD(s, loop_gate, s, x_f32, msg_f32, gain, forget, out);
 }
 
 larch_status larch_situ_mul(larch_stream* s, const larch_tensor* gate_up, const larch_tensor* ids_i32,

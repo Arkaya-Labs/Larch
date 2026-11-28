@@ -3752,21 +3752,25 @@ fn loads(t: &TensorInfo) -> bool {
 
 /// Whether the engine built for `backend` loads tensor `t`'s type: Q2_K only as routed experts
 /// (`larch repack`'s) and only where CUDA or the CPU runs them; no GPU has a Q2_K kernel for the
-/// other matrices, and Metal and HIP refuse Q2_K at load (`no_weights`).
+/// other matrices, and Metal and HIP refuse Q2_K at load (`no_weights`). NVFP4 only on the CPU,
+/// whose devices alone decode it so far.
 fn loads_on(t: &TensorInfo, backend: &str) -> bool {
-    gguf::dtype(t.ggml_type).is_ok_and(|d| {
-        d != larch_kernels::DType::Q2K
-            || (t.name.ends_with("_exps.weight") && matches!(backend, "cuda" | "cpu"))
+    gguf::dtype(t.ggml_type).is_ok_and(|d| match d {
+        larch_kernels::DType::Q2K => {
+            t.name.ends_with("_exps.weight") && matches!(backend, "cuda" | "cpu")
+        }
+        larch_kernels::DType::Nvfp4 => backend == "cpu",
+        _ => true,
     })
 }
 
 /// GGML's type names, by id; "" for retired ids.
 #[rustfmt::skip]
-const GGML_NAMES: [&str; 40] = [
+const GGML_NAMES: [&str; 41] = [
     "F32", "F16", "Q4_0", "Q4_1", "", "", "Q5_0", "Q5_1", "Q8_0", "Q8_1", "Q2_K", "Q3_K", "Q4_K",
     "Q5_K", "Q6_K", "Q8_K", "IQ2_XXS", "IQ2_XS", "IQ3_XXS", "IQ1_S", "IQ4_NL", "IQ3_S", "IQ2_S",
     "IQ4_XS", "I8", "I16", "I32", "I64", "F64", "IQ1_M", "BF16", "", "", "", "TQ1_0", "TQ2_0", "",
-    "", "", "MXFP4",
+    "", "", "MXFP4", "NVFP4",
 ];
 
 /// The tensor types among `tensors` the engine cannot load, by GGML name, each once in id order;

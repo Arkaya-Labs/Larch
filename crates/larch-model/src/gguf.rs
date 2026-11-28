@@ -116,7 +116,7 @@ pub struct Gguf {
 }
 
 /// GGML type id ↔ larch dtype, for the types the ops take (architecture 6.1).
-const GGML_TYPES: [(u32, DType); 10] = [
+const GGML_TYPES: [(u32, DType); 11] = [
     (0, DType::F32),
     (1, DType::F16),
     (2, DType::Q4_0),
@@ -127,7 +127,11 @@ const GGML_TYPES: [(u32, DType); 10] = [
     (12, DType::Q4K),
     (13, DType::Q5K),
     (14, DType::Q6K),
+    (40, DType::Nvfp4),
 ];
+
+/// GGML's bf16 type id: no op takes it, so it has no larch dtype here, but [`Gguf::read`] sizes it.
+pub const BF16: u32 = 30;
 
 /// The larch dtype of a GGML type id, or `UnsupportedQuant`.
 pub fn dtype(ggml_type: u32) -> Result<DType, LoadError> {
@@ -278,6 +282,8 @@ impl Gguf {
                     .checked_mul(t.block_bytes())
                     .ok_or(bad)?,
                 Ok(_) => return Err(bad),
+                // bf16, which no op takes and loaders convert: its size still bounds the table.
+                Err(_) if ggml_type == BF16 => elems.checked_mul(2).ok_or(bad)?,
                 Err(_) => 0, // unknown types are rejected when the model asks for the tensor
             };
             tensors.push(TensorInfo {
