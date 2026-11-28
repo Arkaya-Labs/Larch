@@ -598,22 +598,38 @@ void deq16_q6_k(bytes_in b, int p, thread float* y) {
 inline ushort mma_fm(ushort l) { return ((l / 4) & 4) + ((l / 2) % 4); }
 inline ushort mma_fn(ushort l) { return ((l / 4) & 2) * 2 + (l % 2) * 2; }
 
-// mmvq_mma's k loop: simdgroup sg's 64-wide steps of the NT 8-column tiles at wr (lane l's row fm of each) times
-// the RT 8-row tiles of x at xr[2 rt + e] (lane l's rows fn + e, already offset to the lane's k position).
 template <int BYTES, deq16_fn F, int RT>
-static void mma_steps(thread const bytes_in* wr, device const half* thread const* xr, uint k, ushort sg, ushort fn,
-                      thread simdgroup_float8x8* c) {
+kernel void mmvq_mma(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in bias [[buffer(2)]],
+                     device uchar* out [[buffer(3)]], constant mm_args& a [[buffer(4)]],
+                     uint tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]],
+                     ushort lane [[thread_index_in_simdgroup]]) {
   constexpr int NT = MMVQ_MMA_NT;
+  threadgroup float red[MMVQ_MMA_SG * RT * NT * 64];
+  const ushort fm = mma_fm(lane), fn = mma_fn(lane);
+  const uint n0 = tg * 8 * NT;
+  bytes_in wr[NT];
 #pragma clang loop unroll(full)
-  for (int i = 0; i < RT * NT; ++i) c[i] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
-  for (uint g = sg; g < k / 64; g += MMVQ_MMA_SG) {
+  for (int t = 0; t < NT; ++t) wr[t] = w + u64(min(n0 + 8 * t + fm, a.n - 1)) * a.b_rs;  // past n: ignored
+  device const half* xr[RT][2];
+#pragma clang loop unroll(full)
+  for (int rt = 0; rt < RT; ++rt)
+#pragma clang loop unroll(full)
+    for (int e = 0; e < 2; ++e)
+      xr[rt][e] = (device const half*)(x + u64(min(uint(8 * rt + fn + e), a.m - 1)) * a.a_rs) + 16 * (fm / 2) +
+                  8 * (fm % 2);
+  simdgroup_float8x8 c[RT][NT];
+#pragma clang loop unroll(full)
+  for (int rt = 0; rt < RT; ++rt)
+#pragma clang loop unroll(full)
+    for (int t = 0; t < NT; ++t) c[rt][t] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+  for (uint g = sg; g < a.k / 64; g += MMVQ_MMA_SG) {
     simdgroup_float8x8 b[RT][8];
 #pragma clang loop unroll(full)
     for (int rt = 0; rt < RT; ++rt)
 #pragma clang loop unroll(full)
       for (int i = 0; i < 2; ++i) {  // packed: larch.h promises x 2-byte alignment only
-        const float4 u = float4(half4(((device const packed_half4*)(xr[2 * rt] + 64 * g))[i]));
-        const float4 v = float4(half4(((device const packed_half4*)(xr[2 * rt + 1] + 64 * g))[i]));
+        const float4 u = float4(half4(((device const packed_half4*)(xr[rt][0] + 64 * g))[i]));
+        const float4 v = float4(half4(((device const packed_half4*)(xr[rt][1] + 64 * g))[i]));
 #pragma clang loop unroll(full)
         for (int s = 0; s < 4; ++s) {
           b[rt][4 * i + s].thread_elements()[0] = u[s];
@@ -631,107 +647,24 @@ static void mma_steps(thread const bytes_in* wr, device const half* thread const
         am.thread_elements()[0] = y[s];
         am.thread_elements()[1] = y[8 + s];
 #pragma clang loop unroll(full)
-        for (int rt = 0; rt < RT; ++rt) simdgroup_multiply_accumulate(c[rt * NT + t], am, b[rt][s], c[rt * NT + t]);
+        for (int rt = 0; rt < RT; ++rt) simdgroup_multiply_accumulate(c[rt][t], am, b[rt][s], c[rt][t]);
       }
     }
   }
-}
-
-// Sums the MMVQ_MMA_SG simdgroups' partial tiles c in red; returns after the barrier, so each thread can then
-// read the totals at red[i] for i = sg * 32 + lane, ... below RT * NT * 64.
-template <int RT>
-static void mma_reduce(thread const simdgroup_float8x8* c, threadgroup float* red, ushort sg, ushort lane) {
-  constexpr int NT = MMVQ_MMA_NT;
 #pragma clang loop unroll(full)
-  for (int i = 0; i < RT * NT; ++i)
+  for (int rt = 0; rt < RT; ++rt)
 #pragma clang loop unroll(full)
-    for (int e = 0; e < 2; ++e) red[(sg * RT * NT + i) * 64 + 2 * lane + e] = c[i].thread_elements()[e];
+    for (int t = 0; t < NT; ++t)
+#pragma clang loop unroll(full)
+      for (int e = 0; e < 2; ++e) red[((sg * RT + rt) * NT + t) * 64 + 2 * lane + e] = c[rt][t].thread_elements()[e];
   threadgroup_barrier(mem_flags::mem_threadgroup);
   for (uint i = sg * 32 + lane; i < RT * NT * 64; i += MMVQ_MMA_SG * 32) {
     float v = 0;
 #pragma clang loop unroll(full)
     for (int s = 0; s < MMVQ_MMA_SG; ++s) v += red[s * RT * NT * 64 + i];
-    red[i] = v;  // slot i of simdgroup 0's tile: only this thread read it
-  }
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-}
-
-template <int BYTES, deq16_fn F, int RT>
-kernel void mmvq_mma(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_in bias [[buffer(2)]],
-                     device uchar* out [[buffer(3)]], constant mm_args& a [[buffer(4)]],
-                     uint tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]],
-                     ushort lane [[thread_index_in_simdgroup]]) {
-  constexpr int NT = MMVQ_MMA_NT;
-  threadgroup float red[MMVQ_MMA_SG * RT * NT * 64];
-  const ushort fm = mma_fm(lane), fn = mma_fn(lane);
-  const uint n0 = tg * 8 * NT;
-  bytes_in wr[NT];
-#pragma clang loop unroll(full)
-  for (int t = 0; t < NT; ++t) wr[t] = w + u64(min(n0 + 8 * t + fm, a.n - 1)) * a.b_rs;  // past n: ignored
-  device const half* xr[RT * 2];
-#pragma clang loop unroll(full)
-  for (int rt = 0; rt < RT; ++rt)
-#pragma clang loop unroll(full)
-    for (int e = 0; e < 2; ++e)
-      xr[2 * rt + e] = (device const half*)(x + u64(min(uint(8 * rt + fn + e), a.m - 1)) * a.a_rs) + 16 * (fm / 2) +
-                       8 * (fm % 2);
-  simdgroup_float8x8 c[RT * NT];
-  mma_steps<BYTES, F, RT>(wr, xr, a.k, sg, fn, c);
-  mma_reduce<RT>(c, red, sg, lane);
-  for (uint i = sg * 32 + lane; i < RT * NT * 64; i += MMVQ_MMA_SG * 32) {
     const ushort l = i % 64 / 2;
     const uint n = n0 + 8 * (i / 64 % NT) + mma_fm(l), r = 8 * (i / (NT * 64)) + mma_fn(l) + i % 2;
-    if (n < a.n && r < a.m) store_c(out, a, bias, r, n, red[i]);
-  }
-}
-
-// mmvq_id grouped by expert at decode and check row counts, on mmvq_mma's tiles: threadgroup (tg.x, tg.y) owns
-// 8 NT columns of expert tg.y and walks the pairs vv_moe_group listed for it, 8 at a time as the x tile, so
-// each expert's weights are decoded once per 8 pairs instead of once per pair. Weighted, out is f32 [pairs, n]
-// scratch that vv_moe_reduce sums.
-template <int BYTES, deq16_fn F>
-kernel void mmvq_id_mma(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], device const uint* g [[buffer(2)]],
-                        bytes_in bias [[buffer(3)]], device uchar* out [[buffer(4)]],
-                        constant id_args& a [[buffer(5)]], uint2 tg [[threadgroup_position_in_grid]],
-                        ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
-  constexpr int NT = MMVQ_MMA_NT;
-  threadgroup float red[MMVQ_MMA_SG * NT * 64];
-  const uint e = tg.y, p0 = g[e], p1 = g[e + 1], n0 = tg.x * 8 * NT;
-  if (p0 == p1) return;  // the whole threadgroup
-  device const uint* order = g + a.experts + 1;
-  const ushort fm = mma_fm(lane), fn = mma_fn(lane);
-  bytes_in wr[NT];
-#pragma clang loop unroll(full)
-  for (int t = 0; t < NT; ++t) wr[t] = w + (u64(e) * a.n + min(n0 + 8 * t + fm, a.n - 1)) * a.w_rs;  // past n: ignored
-  for (uint q0 = p0; q0 < p1; q0 += 8) {
-    device const half* xr[2];
-#pragma clang loop unroll(full)
-    for (int i = 0; i < 2; ++i) {
-      const uint q = order[min(q0 + fn + i, p1 - 1)];  // past p1: ignored
-      xr[i] = (device const half*)(x + u64(q / a.slots) * a.x_rs + u64(q % a.slots) * a.x_slot_rs) + 16 * (fm / 2) +
-              8 * (fm % 2);
-    }
-    simdgroup_float8x8 c[NT];
-    mma_steps<BYTES, F, 1>(wr, xr, a.k, sg, fn, c);
-    mma_reduce<1>(c, red, sg, lane);
-    for (uint i = sg * 32 + lane; i < NT * 64; i += MMVQ_MMA_SG * 32) {
-      const ushort l = i % 64 / 2;
-      const uint n = n0 + 8 * (i / 64) + mma_fm(l), pi = q0 + mma_fn(l) + i % 2;
-      if (n >= a.n || pi >= p1) continue;
-      const uint q = order[pi];
-      float v = red[i];
-      if (a.has_bias) v += at<float>(bias, a.bias_rs, e * a.n + n);
-      if (a.weighted) {
-        ((device float*)out)[u64(q) * a.n + n] = v;
-      } else {
-        device uchar* o = out + (q / a.slots) * a.out_rs + (q % a.slots) * a.out_slot_rs;
-        if (a.out_f32)
-          ((device float*)o)[n] = v;
-        else
-          ((device half*)o)[n] = half(v);
-      }
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);  // red is reused by the next 8 pairs
+    if (n < a.n && r < a.m) store_c(out, a, bias, r, n, v);
   }
 }
 
@@ -1067,10 +1000,6 @@ template [[host_name("vv_mmvq_id1n_q3_k")]] kernel decltype(mmvq_id1n<110>) mmvq
 template [[host_name("vv_mmvq_id1n_q4_k")]] kernel decltype(mmvq_id1n<144>) mmvq_id1n<144>;
 template [[host_name("vv_mmvq_id1n_q5_k")]] kernel decltype(mmvq_id1n<176>) mmvq_id1n<176>;
 template [[host_name("vv_mmvq_id1n_q6_k")]] kernel decltype(mmvq_id1n<210>) mmvq_id1n<210>;
-template [[host_name("vv_mmvq_id_mma_q3_k")]] kernel decltype(mmvq_id_mma<110, deq16p_q3_k>) mmvq_id_mma<110, deq16p_q3_k>;
-template [[host_name("vv_mmvq_id_mma_q4_k")]] kernel decltype(mmvq_id_mma<144, deq16_q4_k>) mmvq_id_mma<144, deq16_q4_k>;
-template [[host_name("vv_mmvq_id_mma_q5_k")]] kernel decltype(mmvq_id_mma<176, deq16_q5_k>) mmvq_id_mma<176, deq16_q5_k>;
-template [[host_name("vv_mmvq_id_mma_q6_k")]] kernel decltype(mmvq_id_mma<210, deq16_q6_k>) mmvq_id_mma<210, deq16_q6_k>;
 template [[host_name("vv_mmvq_mma8_q3_k")]] kernel mmvq_mma_t mmvq_mma<110, deq16p_q3_k, 1>;
 template [[host_name("vv_mmvq_mma16_q3_k")]] kernel mmvq_mma_t mmvq_mma<110, deq16p_q3_k, 2>;
 template [[host_name("vv_mmvq_mma8_q5_k")]] kernel mmvq_mma_t mmvq_mma<176, deq16_q5_k, 1>;
