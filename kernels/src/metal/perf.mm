@@ -778,9 +778,9 @@ void run_repack_id(const arguments& parsed) {
   const bytes w = quant(LARCH_Q3_K, int64_t(experts * n), int64_t(k), g);
   const bytes wr = repack_q3_k(w, experts * n, nb, rs);
   const bytes x = halves(size_t((weighted ? pairs : rows) * k), g);
-  std::vector<int32_t> ids(size_t(pairs));
+  std::vector<int32_t> ids(static_cast<size_t>(pairs));
   for (uint64_t p = 0; p < pairs; ++p) ids[size_t(p)] = int32_t(p % experts);
-  std::vector<float> wts(size_t(pairs));
+  std::vector<float> wts(static_cast<size_t>(pairs));
   for (auto& v : wts) v = std::uniform_real_distribution<float>(0, 1)(g);
   const uint64_t out_elems = (weighted ? rows : pairs) * n;
 
@@ -805,7 +805,7 @@ void run_repack_id(const arguments& parsed) {
                                         : tensor(out_vv, LARCH_F32, 3, {r, m, nn}, {m * nn, nn, 1});
   const larch_tensor* wt = weighted ? &combine : nullptr;
   check(larch_mmvq_id(run.stream, &weight, &activation, &chosen, nullptr, wt, &output), run.device, "repack-id ref");
-  std::vector<float> ref(size_t(out_elems));
+  std::vector<float> ref(static_cast<size_t>(out_elems));
   check(larch_download(run.stream, out_vv, 0, ref.data(), out_elems * 4), run.device, "repack-id ref download");
   run.sync("repack-id reference");
   const uint64_t ref_ns = gpu_elapsed(run, [&] {
