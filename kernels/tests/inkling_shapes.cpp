@@ -190,13 +190,16 @@ static void depth_mix() {
     near_ref("depth_mix", ot, 1e-5);
 }
 
-static void loop_gate() {
+// The gain and forget projections' outputs in f16 and in f32 (larch.h takes either).
+static void loop_gate(larch_dtype gf) {
   constexpr int64_t ROWS = 5, D = 2304;
-  const pair x = f32({ROWS, D}, uniform(ROWS * D, -8, 8)), m = f32({ROWS, D}, uniform(ROWS * D, -8, 8)),
-             gn = f16({ROWS, D}, halves(ROWS * D, g, 2)), fg = f16({ROWS, D}, halves(ROWS * D, g, 2)),
-             ot = out(LARCH_F32, {ROWS, D});
+  const auto proj = [&] {
+    return gf == LARCH_F16 ? f16({ROWS, D}, halves(ROWS * D, g, 2)) : f32({ROWS, D}, uniform(ROWS * D, -4, 4));
+  };
+  const pair x = f32({ROWS, D}, uniform(ROWS * D, -8, 8)), m = f32({ROWS, D}, uniform(ROWS * D, -8, 8)), gn = proj(),
+             fg = proj(), ot = out(LARCH_F32, {ROWS, D});
   if (both([&](int i) { return larch_loop_gate(sides[i].st, &x.t[i], &m.t[i], &gn.t[i], &fg.t[i], &ot.t[i]); }))
-    near_ref("loop_gate", ot, 1e-6);
+    near_ref(gf == LARCH_F16 ? "loop_gate f16" : "loop_gate f32", ot, 1e-6);
 }
 
 // 5 rows of 8 experts of 1,152, f16 gate-up as the grouped expert matmul writes it, with the experts' scales.
@@ -269,10 +272,12 @@ static void attention(uint32_t window, uint32_t splits, bool tree) {
   mask[22] = 0b0011;
   mask[23] = 0b0101;
   mask[24] = 0b1101;
-  const pair q = f16({rows, H, HD}, halves(size_t(rows * H * HD), g)), bt = i32({SEQS, MAXB}, table),
-             sp = i32({SEQS}, start), lp = i32({SEQS}, lens), mp = i32({rows}, mask),
-             rq = f32({rows, H, NREL}, uniform(rows * H * NREL, -1, 1)), rw = f32({EXT, NREL}, uniform(EXT * NREL, -1, 1)),
-             sk = f32({rows, H}, uniform(rows * H, -2, 2)), ot = out(LARCH_F16, {rows, H, HD});
+  const bytes qb = halves(size_t(rows * H * HD), g);
+  const std::vector<float> rqv = uniform(rows * H * NREL, -1, 1), skv = uniform(rows * H, -2, 2);
+  const pair q = f16({rows, H, HD}, qb), bt = i32({SEQS, MAXB}, table), sp = i32({SEQS}, start),
+             lp = i32({SEQS}, lens), mp = i32({rows}, mask), rq = f32({rows, H, NREL}, rqv),
+             rw = f32({EXT, NREL}, uniform(EXT * NREL, -1, 1)), sk = f32({rows, H}, skv),
+             ot = out(LARCH_F16, {rows, H, HD});
   if (!both([&](int i) {
         return larch_attn_rel(sides[i].st, &q.t[i], &pool[i], &bt.t[i], &sp.t[i], &lp.t[i], tree ? &mp.t[i] : nullptr,
                               &rq.t[i], &rw.t[i], &sk.t[i], window, splits, 1 / std::sqrt(128.0f), &ot.t[i]);
@@ -281,6 +286,36 @@ static void attention(uint32_t window, uint32_t splits, bool tree) {
   const std::string what = std::string("attn_rel") + (window ? " window" : " full") + (tree ? " mask" : "") +
                            (splits ? " 64 splits" : "");
   near_ref(what.c_str(), ot, 2e-3);
+  if (tree) return;
+  // larch.h's decode form (q_lens NULL): each sequence's last row as a decode row of seq_len start + len, then a
+  // padding row (seq_len 0). Each must be its span row's bytes on GPU 0, and the padding row zeros.
+  const int64_t last[SEQS] = {0, 20, 24}, drows = SEQS + 1, row_q = H * HD * 2;
+  bytes dq(size_t(drows * row_q), 0);
+  std::vector<float> drq(size_t(drows * H * NREL), 0.5f), dsk(size_t(drows * H), 0.5f);
+  std::vector<int32_t> dtable(size_t(drows * MAXB)), dlens(size_t(drows), 0);
+  for (int64_t s = 0; s < SEQS; ++s) {
+    const int64_t r = last[s];
+    std::copy_n(qb.begin() + r * row_q, row_q, dq.begin() + s * row_q);
+    std::copy_n(rqv.begin() + r * H * NREL, H * NREL, drq.begin() + s * H * NREL);
+    std::copy_n(skv.begin() + r * H, H, dsk.begin() + s * H);
+    std::copy_n(table.begin() + s * MAXB, MAXB, dtable.begin() + s * MAXB);
+    dlens[size_t(s)] = start[size_t(s)] + lens[size_t(s)];
+  }
+  std::copy_n(table.begin(), MAXB, dtable.begin() + SEQS * MAXB);
+  const pair dqt = f16({drows, H, HD}, dq), dbt = i32({drows, MAXB}, dtable), dl = i32({drows}, dlens),
+             drqt = f32({drows, H, NREL}, drq), dskt = f32({drows, H}, dsk), dot = out(LARCH_F16, {drows, H, HD});
+  if (!both([&](int i) {
+        return larch_attn_rel(sides[i].st, &dqt.t[i], &pool[i], &dbt.t[i], &dl.t[i], nullptr, nullptr, &drqt.t[i],
+                              &rw.t[i], &dskt.t[i], window, splits, 1 / std::sqrt(128.0f), &dot.t[i]);
+      }))
+    return;
+  near_ref((what + " decode rows").c_str(), dot, 2e-3);
+  const bytes span = fetch(1, ot.t[1].buf, size_t(rows * row_q)), dec = fetch(1, dot.t[1].buf, size_t(drows * row_q));
+  bool eq = std::all_of(dec.begin() + SEQS * row_q, dec.end(), [](uint8_t b) { return b == 0; });
+  for (int64_t s = 0; s < SEQS; ++s)
+    eq = eq && std::equal(dec.begin() + s * row_q, dec.begin() + (s + 1) * row_q, span.begin() + last[s] * row_q);
+  std::printf("%-28s %s\n", (what + " decode = span").c_str(), eq ? "bit for bit" : "DIFFERS");
+  CHECK(eq);
 }
 
 static void softcap() {
@@ -304,7 +339,8 @@ int main() {
     for (larch_dtype t : {LARCH_F16, LARCH_F32}) short_conv(dyn, t);
   clip_norm();
   depth_mix();
-  loop_gate();
+  loop_gate(LARCH_F16);
+  loop_gate(LARCH_F32);
   situ_mul();
   route();
   for (uint32_t window : {1024u, 0u})

@@ -1853,7 +1853,9 @@ larch_status loop_gate(larch_stream* vs, const larch_tensor* x, const larch_tens
     const view xv = c.x, mv = c.msg, gv = c.gain, fv = c.forget, o = c.out;
     writable(o);
     each(static_cast<mtl_stream*>(vs), ks(vs).loop_gate, {input(xv), input(mv), input(gv), input(fv), at(o)},
-         loop_gate_args{xv.rs, mv.rs, gv.rs, fv.rs, o.rs}, xv.cols, xv.rows);
+         loop_gate_args{xv.rs, mv.rs, gv.rs, fv.rs, o.rs, gv.dtype == LARCH_F32 ? 1u : 0u,
+                        fv.dtype == LARCH_F32 ? 1u : 0u},
+         xv.cols, xv.rows);
   });
 }
 
@@ -1888,7 +1890,8 @@ larch_status moe_route_sigmoid(larch_stream* vs, const larch_tensor* logits, con
 }
 
 // Split-K always, through the stream's attention scratch: splits 0 means 16, and a row takes at most one split per
-// ATTN_SPLIT_POS of its positions (vv_attn_rel), so rows of a span and rows alone run the same bounds.
+// ATTN_SPLIT_POS of its positions (vv_attn_rel), so rows of a span, rows alone and decode rows (q_lens_i32 NULL, the
+// seq_lens in q_start_pos_i32) run the same bounds.
 // ponytail: one lane a position, its head's q . k a serial walk of head_dim; the fused one-pass kernel Splash
 // shows is the speed step, after parity.
 larch_status attn_rel(larch_stream* vs, const larch_tensor* q, const larch_kv_pool* pool,
@@ -1912,10 +1915,20 @@ larch_status attn_rel(larch_stream* vs, const larch_tensor* q, const larch_kv_po
     const attn_args at_args{a.q.rs, a.out.rs, a.table.rs, a.lens.rs, a.start.rs, u32(a.q.shape[1]), pool->n_kv_heads,
                             pool->head_dim, pool->block_tokens, u32(a.table.rows), 1, split_count, stride, scale,
                             u32(a.q.rows)};
-    const attn_rel_args args{at_args, mv.rs, rq.rs, rw.rs, sk.rs, u32(rw.cols), u32(rw.rows), window,
-                             mv.b ? 1u : 0u, rq.dtype == LARCH_F32 ? 1u : 0u, sk.dtype == LARCH_F32 ? 1u : 0u};
+    const attn_rel_args args{at_args,
+                             mv.rs,
+                             rq.rs,
+                             rw.rs,
+                             sk.rs,
+                             u32(rw.cols),
+                             u32(rw.rows),
+                             window,
+                             mv.b ? 1u : 0u,
+                             rq.dtype == LARCH_F32 ? 1u : 0u,
+                             sk.dtype == LARCH_F32 ? 1u : 0u,
+                             q_lens_i32 ? 0u : 1u};
     groups(stream, ks(vs).attn_rel,
-           {input(a.q), input(a.k), input(a.v), input(a.table), input(a.lens), input(a.start),
+           {input(a.q), input(a.k), input(a.v), input(a.table), input(a.lens), input_or(a.start, at(a.lens)),
             input_or(mv, at(a.lens)), input(rq), input(rw), input(sk), {stream->attn_scratch, 0}},
            args, cpu::mul(a.q.shape[1], int64_t(split_count)), 32, a.q.rows);
     groups(stream, ks(vs).attn_rel_reduce, {input(arg{stream->attn_scratch, 0}), at(a.out)}, at_args, a.q.shape[1],

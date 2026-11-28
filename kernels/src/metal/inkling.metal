@@ -38,8 +38,8 @@ kernel void vv_loop_gate(bytes_in x [[buffer(0)]], bytes_in msg [[buffer(1)]], b
                          constant loop_gate_args& a [[buffer(5)]], uint2 g [[thread_position_in_grid]]) {
   const float xi = ((device const float*)(x + u64(g.y) * a.x_rs))[g.x];
   const float m = ((device const float*)(msg + u64(g.y) * a.msg_rs))[g.x];
-  const float gn = float(((device const half*)(gain + u64(g.y) * a.gain_rs))[g.x]);
-  const float fg = float(((device const half*)(forget + u64(g.y) * a.forget_rs))[g.x]);
+  const float gn = load(gain + u64(g.y) * a.gain_rs, g.x, a.f32_gain);
+  const float fg = load(forget + u64(g.y) * a.forget_rs, g.x, a.f32_forget);
   const float kept = xi - precise::tanh(fg) * xi;
   ((device float*)(out + u64(g.y) * a.out_rs))[g.x] = kept + precise::tanh(gn) * m;
 }
@@ -249,9 +249,10 @@ kernel void vv_short_conv(bytes_in x [[buffer(0)]], bytes_in w [[buffer(1)]], by
 }
 
 /// attn_rel, 1 of 2: simdgroup (split, q head hh, row r) over its share of the positions row r attends to, 32 at a
-/// time, one a lane: logit = scale (q . k + b - sink), b = rel_q . rel_w[p - p'] within the extent; an online
+/// time, one a lane: logit = scale (q . k) + (b - sink), b = rel_q . rel_w[p - p'] within the extent; an online
 /// softmax as vv_attn_split's, into the share's max, sum and head_dim accumulators. The split bounds depend only on
-/// the row's own positions and the call's splits, so a row of a span equals that row as its own span, bit for bit.
+/// the row's own positions and the call's splits, so a row of a span equals that row as its own span, and as a
+/// decode row (larch.h's decode form: row r its own sequence of lens[r] positions, 0 a padding row), bit for bit.
 /// A masked-out position counts as absent; a share with none live has sum 0, which the reduce skips. A mask bit past
 /// the row's own position (a negative distance) gets no bias.
 kernel void vv_attn_rel(bytes_in q [[buffer(0)]], device const half* kp [[buffer(1)]], device const half* vp [[buffer(2)]],
@@ -262,11 +263,20 @@ kernel void vv_attn_rel(bytes_in q [[buffer(0)]], device const half* kp [[buffer
                         uint lane [[thread_index_in_simdgroup]]) {
   constant attn_args& a = ra.at;
   const uint split = tg.x / a.heads, hh = tg.x % a.heads, r = tg.y;
-  uint s = 0, first = 0;
-  for (; s + 1 < a.seqs && r >= first + uint(at<int>(lens, a.lens_rs, s)); ++s) first += uint(at<int>(lens, a.lens_rs, s));
-  const uint j = r - first, p0 = uint(at<int>(start, a.start_rs, s)), p = p0 + j;
-  const uint lo = ra.window && p + 1 > ra.window ? p + 1 - ra.window : 0;
-  const uint hi = ra.has_mask ? p0 + uint(at<int>(lens, a.lens_rs, s)) : p + 1;
+  uint s = r, p0, p, hi;
+  if (ra.decode) {  // p0 at the end: no position is a span position
+    hi = p0 = uint(max(at<int>(lens, a.lens_rs, r), 0));
+    p = hi - 1;  // used only when hi > 0
+  } else {
+    uint first = 0;
+    for (s = 0; s + 1 < a.seqs && r >= first + uint(at<int>(lens, a.lens_rs, s)); ++s)
+      first += uint(at<int>(lens, a.lens_rs, s));
+    p0 = uint(at<int>(start, a.start_rs, s));
+    p = p0 + r - first;
+    hi = ra.has_mask ? p0 + uint(at<int>(lens, a.lens_rs, s)) : p + 1;
+  }
+  const uint end = p + 1;  // the row's window ends at its own position (0 for a padding row: p wrapped)
+  const uint lo = ra.window && end > ra.window ? end - ra.window : 0;
   const uint bits = ra.has_mask ? uint(at<int>(mask, ra.mask_rs, r)) : 0;
   const uint n = hi > lo ? hi - lo : 0, used = max(1u, min(a.splits, n / ATTN_SPLIT_POS));
   const uint b0 = split < used ? lo + uint(u64(n) * split / used) : hi;
@@ -303,7 +313,7 @@ kernel void vv_attn_rel(bytes_in q [[buffer(0)]], device const half* kp [[buffer
         device const float* wr = (device const float*)(relw + u64(p - t) * ra.relw_rs);
         for (uint i = 0; i < ra.n_rel; ++i) b += rq[i] * wr[i];
       }
-      logit = a.scale * (dot + b - sk);
+      logit = a.scale * dot + (b - sk);
     }
     const float nmx = max(mx, simd_max(logit));
     if (nmx == -INFINITY) continue;  // the same for the whole simdgroup: nothing live yet

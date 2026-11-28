@@ -252,6 +252,7 @@ struct softcap_args {
 };
 struct loop_gate_args {
   u64 x_rs, msg_rs, gain_rs, forget_rs, out_rs;
+  u32 f32_gain, f32_forget;
 };
 /// situ_mul: thread (k, slot, row) of gu [rows, slots, 2 ff].
 struct situ_args {
@@ -289,11 +290,11 @@ struct short_conv_args {
   float scale;
 };
 /// attn_rel: simdgroup (split, q head, row), up to ATTN_REL_MAX_NREL relative dims; attn_args' strides and geometry,
-/// with mask, rel_q, rel_w and sink. Each row uses at most min(splits, its positions / ATTN_SPLIT_POS) splits, and
+/// with mask, rel_q, rel_w and sink. decode: larch.h's decode form, row r its own sequence at lens[r] - 1. Each row uses at most min(splits, its positions / ATTN_SPLIT_POS) splits, and
 /// never fewer than 1, so a row's bits depend only on its own positions and the call's splits.
 #define ATTN_REL_MAX_NREL 128
 struct attn_rel_args {
   attn_args at;
   u64 mask_rs, relq_rs, relw_rs, sink_rs;
-  u32 n_rel, extent, window, has_mask, f32_relq, f32_sink;
+  u32 n_rel, extent, window, has_mask, f32_relq, f32_sink, decode;
 };
