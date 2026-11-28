@@ -9298,6 +9298,36 @@ mod tests {
         );
     }
 
+    /// A plain load that keeps whole layers (no profile; or a split that does not fit, from a
+    /// profile beside the model) records nothing either: no file appears or changes beside the
+    /// model, so the next load plans as this one did. Only `=1` and `=2` record whole layers.
+    #[test]
+    fn a_plain_whole_layer_load_writes_no_histogram() {
+        let (props, c, bytes, l, slot) = fake_cuda_terms();
+        let need = |beside, seats| {
+            crate::fit::serving_need(&props, &c, tiny::CTX, 0.85, beside, false, seats)
+        };
+        let g = larch_model::gguf::Gguf::parse(&tiny::gguf(Arch::Qwen35Moe, 3)).unwrap();
+        let layer: u64 = (g.tensors.iter())
+            .filter(|t| t.name.starts_with("blk.0.") && t.name.ends_with("_exps.weight"))
+            .map(|t| t.bytes)
+            .sum();
+        let short = bytes - layer + need(reserve_at(&l, slot, 4), 4) + crate::FREE_SWING;
+        let hist = larch_model::Histogram::path(&fake_cuda_path(short, None));
+        let load = |cache| {
+            crate::FAKE_CACHE.set(Some(cache));
+            let (loaded, _, n, _) = fake_cuda_seats(short, |_, _| 1 << 30, None, Some(4), None);
+            crate::FAKE_CACHE.set(None);
+            drop(loaded);
+            n
+        };
+        assert!(load(None) > 0, "whole host layers");
+        assert!(!hist.exists(), "a plain load wrote a histogram");
+        assert!(load(Some("1")) > 0);
+        assert!(hist.exists(), "=1 records whole layers, as before");
+        std::fs::remove_file(&hist).unwrap();
+    }
+
     /// What a split of the tiny hybrid MoE charges past whole layers' room in these tests, in place
     /// of [`crate::first_charge`] (98 MiB and the swing are past all its weights): a quarter of
     /// its first layer's experts (one expert), which [`fake_cuda_seats`] sets.

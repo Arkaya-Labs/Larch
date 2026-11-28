@@ -1830,8 +1830,9 @@ fn model_loader(opts: &EngineOptions) -> Result<(Loader, Option<Weights>), LoadE
                 slots,
             )?;
             // After the check, so plan and check stay whole-layer ones. A placement hint: losing
-            // it costs the next load its plan, never this load.
-            if let Some(h) = &start
+            // it costs the next load its plan, never this load. Only a cache asked for records
+            // here: a plain load's next plan stays this one's.
+            if let Some(h) = start.as_ref().filter(|_| env.is_some())
                 && let Err(e) = m.record_routes(s, hist_path.clone(), h.clone())
             {
                 eprintln!("larch_expert_histogram_record,{e:?}");
@@ -3341,7 +3342,7 @@ mod tests {
         })
     }
 
-    /// No histogram plans as the cache off does, compared as the plan itself; recorded counts do not.
+    /// LARCH_EXPERT_CACHE's values mean what they did; unset is static where it reads in place.
     #[test]
     fn expert_cache_is_static_by_default_where_it_reads_in_place() {
         use super::expert_cache;
@@ -3372,6 +3373,7 @@ mod tests {
         std::fs::remove_file(&p).unwrap();
     }
 
+    /// No histogram plans as the cache off does, compared as the plan itself; recorded counts do not.
     #[test]
     fn no_histogram_plans_what_the_cache_off_plans() {
         let zeros = Histogram::uniform(1, 40, 128);
