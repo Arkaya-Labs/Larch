@@ -255,6 +255,46 @@ fn every_op_once() {
         Some(KError::InvalidArg)
     );
 
+    // Q8_0 pages: one position of 32 values, k = v = 0..31. ggml's q8_0 of it is d = 31 / 127 and
+    // q = round(x / d), so attention returns v as those values decode, within q8_0's step.
+    let x: Vec<u16> = (0..32).map(|i| h(i as f32)).collect();
+    let (k8, v8) = (
+        Buffer::alloc(&dev, 2 * 34).unwrap(),
+        Buffer::alloc(&dev, 2 * 34).unwrap(),
+    );
+    let pool8 = KvPool {
+        k: &k8,
+        v: &v8,
+        head_dim: 32,
+        dtype: DType::Q8_0,
+        ..pool
+    };
+    let xb = up(&dev, &s, &x);
+    let xt = t(&xb, F16, &[1, 1, 32]);
+    ops::kv_write(&s, &xt, &xt, &z, &pool8, 0).unwrap();
+    let mut page = [0u8; 34];
+    s.download(&k8, 0, &mut page).unwrap();
+    assert_eq!(page[2..].iter().map(|&b| b as i8).collect::<Vec<_>>(), {
+        let d = 31.0f32 / 127.0;
+        (0..32)
+            .map(|i| (i as f32 / d).round() as i8)
+            .collect::<Vec<_>>()
+    });
+    let out8 = Buffer::alloc(&dev, 64).unwrap();
+    let o8 = t(&out8, F16, &[1, 1, 32]);
+    ops::attn_decode(&s, &xt, &pool8, 0, &table, &o, 0, 1.0, &o8).unwrap();
+    let want: Vec<f32> = (0..32).map(|i| i as f32).collect();
+    close(&halves(&s, &out8, 32), &want, 0.13);
+    // A pool of another dtype (here BF16) is refused before any backend sees it.
+    let bf = KvPool {
+        dtype: DType::BF16,
+        ..pool8
+    };
+    assert_eq!(
+        ops::kv_write(&s, &xt, &xt, &z, &bf, 0).err(),
+        Some(KError::InvalidArg)
+    );
+
     // The top 2 of [0, 3, 1, 2], then -inf and id -1; the LSE is over all four.
     let logits = up(&dev, &s, &[0.0f32, 3.0, 1.0, 2.0]);
     let out = Buffer::alloc(&dev, 129 * 4).unwrap();

@@ -7,7 +7,7 @@
 //! current free memory and credit for the old buffers. Weights or scratch that do not fit at all
 //! fail before this, in the loader, with the same error.
 
-use larch_kernels::{Backend, DeviceProps, KError};
+use larch_kernels::{Backend, DType, DeviceProps, KError};
 use larch_model::{Arch, DraftShape, ModelConfig, MoeCfg, MtpDrafter};
 use larch_records::LoadError;
 
@@ -142,13 +142,11 @@ pub(crate) struct FitPlan {
     pub(crate) graph_floor: bool,
 }
 
-/// Bytes of one 16-token block, K and V, every layer that keeps KV, f16.
-fn kv_block_bytes(c: &ModelConfig) -> u64 {
-    2 * u64::from(c.kv_layers)
-        * BLOCK_TOKENS as u64
-        * u64::from(c.n_kv_heads)
-        * u64::from(c.head_dim)
-        * 2
+/// Bytes of one 16-token block, K and V, every layer that keeps KV, in `kv` pages: F16, or Q8_0
+/// (34 bytes a 32 values; the engine picks it only for a head_dim that is a multiple of 32).
+fn kv_block_bytes(c: &ModelConfig, kv: DType) -> u64 {
+    let values = BLOCK_TOKENS as u64 * u64::from(c.n_kv_heads) * u64::from(c.head_dim);
+    2 * u64::from(c.kv_layers) * kv.bytes(values)
 }
 
 /// Memory left to the OS and other apps: a fifth of a unified device's, less for any MoE on a
@@ -191,6 +189,7 @@ fn pool_min(
     max_context: u32,
     kv_pool_fraction: f32,
     seats: u32,
+    kv: DType,
 ) -> u64 {
     let blocks = u64::from(max_context).div_ceil(BLOCK_TOKENS as u64);
     let floor = if before.backend == Backend::Cuda && matches!(c.arch, Arch::Qwen35Moe) {
@@ -198,7 +197,7 @@ fn pool_min(
     } else {
         0
     };
-    let full = blocks.max(floor) * kv_block_bytes(c);
+    let full = blocks.max(floor) * kv_block_bytes(c, kv);
     let mut pool_min = (full as f64 / f64::from(kv_pool_fraction)).ceil() as u64;
     pool_min += u64::from(((pool_min as f64 * f64::from(kv_pool_fraction)) as u64) < full);
     pool_min
@@ -207,6 +206,7 @@ fn pool_min(
 /// What the fit after a load needs free beside the model: the headroom, `scratch` and the KV
 /// floor for `seats` (one full `max_context` at least). A planned host-expert load checks it, so a
 /// plan short of the model's real allocations moves one more layer instead of failing that fit.
+#[allow(clippy::too_many_arguments)] // the fit's inputs and the KV page dtype that prices a block
 pub(crate) fn serving_need(
     before: &DeviceProps,
     c: &ModelConfig,
@@ -215,6 +215,7 @@ pub(crate) fn serving_need(
     scratch: u64,
     mapped: bool,
     seats: u32,
+    kv: DType,
 ) -> u64 {
     headroom(before, c, mapped)
         + scratch
@@ -224,6 +225,7 @@ pub(crate) fn serving_need(
             max_context.min(c.ctx_train),
             kv_pool_fraction,
             seats,
+            kv,
         )
 }
 
@@ -292,11 +294,19 @@ fn weights_room(
     (max_context, kv_pool_fraction, seats): (u32, f32, u32),
     reserve: u64,
     mapped: bool,
+    kv: DType,
 ) -> u64 {
     before
         .vram_free
         .saturating_sub(headroom(before, c, mapped))
-        .saturating_sub(pool_min(before, c, max_context, kv_pool_fraction, seats))
+        .saturating_sub(pool_min(
+            before,
+            c,
+            max_context,
+            kv_pool_fraction,
+            seats,
+            kv,
+        ))
         .saturating_sub(reserve)
 }
 
@@ -394,6 +404,7 @@ pub(crate) fn host_expert_layers(
     kv_pool_fraction: f32,
     reserve: u64,
     seats: u32,
+    kv: DType,
 ) -> u32 {
     // The fit clamps the context to the model's; so does the plan.
     let max_context = max_context.min(c.ctx_train);
@@ -401,7 +412,7 @@ pub(crate) fn host_expert_layers(
         return 0;
     }
     let budget = (max_context, kv_pool_fraction, seats);
-    let room = |mapped| weights_room(before, c, budget, reserve, mapped);
+    let room = |mapped| weights_room(before, c, budget, reserve, mapped, kv);
     // With no host layer the load maps the file, which earns the smaller headroom.
     if weights <= room(true) {
         return 0;
@@ -430,13 +441,14 @@ pub(crate) fn host_expert_layers_that_fit(
     kv_pool_fraction: f32,
     reserve: u64,
     seats: u32,
+    kv: DType,
 ) -> Option<u32> {
     let (ctx, f) = (max_context, kv_pool_fraction);
-    let n = host_expert_layers(before, weights, experts, c, ctx, f, reserve, seats);
+    let n = host_expert_layers(before, weights, experts, c, ctx, f, reserve, seats, kv);
     let left = weights.saturating_sub(experts[..n as usize].iter().sum());
     let budget = (max_context.min(c.ctx_train), kv_pool_fraction, seats);
     let fits =
-        (n as usize) < experts.len() || left <= weights_room(before, c, budget, reserve, false);
+        (n as usize) < experts.len() || left <= weights_room(before, c, budget, reserve, false, kv);
     fits.then_some(n)
 }
 
@@ -455,14 +467,15 @@ pub(crate) fn host_expert_layers_with_pool(
     reserve: u64,
     seats: u32,
     pool: u64,
+    kv: DType,
 ) -> u32 {
     let (ctx, f) = (max_context, kv_pool_fraction);
-    let n = host_expert_layers(before, weights, experts, c, ctx, f, reserve, seats);
+    let n = host_expert_layers(before, weights, experts, c, ctx, f, reserve, seats, kv);
     if n == 0 || pool == 0 {
         return n;
     }
     let with = reserve + pool;
-    host_expert_layers_that_fit(before, weights, experts, c, ctx, f, with, seats).unwrap_or(n)
+    host_expert_layers_that_fit(before, weights, experts, c, ctx, f, with, seats, kv).unwrap_or(n)
 }
 
 /// A hybrid's recurrent state slots for a placement of `n` host layers: the most up to `cap` for
@@ -496,13 +509,22 @@ pub(crate) fn expert_residency(
     reserve: u64,
     charge: u64,
     seats: u32,
+    kv: DType,
 ) -> Option<Vec<Vec<u32>>> {
     let max_context = max_context.min(c.ctx_train);
     if before.backend == Backend::Cpu || max_context == 0 {
         return None;
     }
-    let room =
-        |mapped, r| weights_room(before, c, (max_context, kv_pool_fraction, seats), r, mapped);
+    let room = |mapped, r| {
+        weights_room(
+            before,
+            c,
+            (max_context, kv_pool_fraction, seats),
+            r,
+            mapped,
+            kv,
+        )
+    };
     if weights <= room(true, reserve) {
         return None;
     }
@@ -593,10 +615,11 @@ pub(crate) fn document_fit(
     max_seats: u32,
     most_host_layers: Option<u32>,
     tokens: u32,
+    kv: DType,
 ) -> crate::DocFit {
     let f = DOC_POOL_FRACTION;
     let fits = |ctx, s| {
-        host_expert_layers_that_fit(before, weights, experts, c, ctx, f, reserve(ctx, s), s)
+        host_expert_layers_that_fit(before, weights, experts, c, ctx, f, reserve(ctx, s), s, kv)
             .is_some_and(|n| most_host_layers.is_none_or(|most| n <= most))
     };
     // The steps up to the largest context a load could take, which the last of them is.
@@ -617,6 +640,7 @@ pub(crate) fn document_fit(
             reserve(ctx, s),
             s,
             pool,
+            kv,
         )
     };
     let base = layers(DOC_SLOTS);
@@ -661,11 +685,12 @@ pub(crate) fn fit(
     mapped: bool,
     stream_want: u64,
     checks: u32,
+    kv: DType,
 ) -> Result<FitPlan, LoadError> {
     let (ctx, f, s) = (max_context, kv_pool_fraction, scratch_bytes);
     let (held, w) = (arena_held, stream_want);
     fit_seats(
-        before, free, c, ctx, f, s, max_seqs, max_seqs, graphs, held, mapped, w, checks,
+        before, free, c, ctx, f, s, max_seqs, max_seqs, graphs, held, mapped, w, checks, kv,
     )
 }
 
@@ -686,15 +711,16 @@ pub(crate) fn fit_seats(
     mapped: bool,
     stream_want: u64,
     checks: u32,
+    kv: DType,
 ) -> Result<FitPlan, LoadError> {
     if max_context == 0 {
         return Err(LoadError::Backend(KError::InvalidArg.code()));
     }
     let headroom = headroom(before, c, mapped);
-    let block = kv_block_bytes(c);
+    let block = kv_block_bytes(c, kv);
     let per_ctx = u64::from(max_context).div_ceil(BLOCK_TOKENS as u64);
     // Preserve one full context and headroom before admitting optional graphs.
-    let pool_min = pool_min(before, c, max_context, kv_pool_fraction, max_seqs);
+    let pool_min = pool_min(before, c, max_context, kv_pool_fraction, max_seqs, kv);
     // When decode_graphs is on at load; switching it on live reserves them from what is then free.
     // Buckets past the startup seats run eager if max_batch_seqs rises live.
     // ponytail: graph slots sized at load; graph_bucket_max knob if users raise max_batch_seqs live
@@ -752,7 +778,7 @@ pub(crate) fn fit_seats(
 
 #[cfg(test)]
 mod tests {
-    use larch_kernels::{Backend, DeviceProps};
+    use larch_kernels::{Backend, DType, DeviceProps};
     use larch_model::{DraftShape, FakeModel, Model, ModelConfig, MoeCfg};
     use larch_records::LoadError;
     use proptest::prelude::*;
@@ -858,11 +884,23 @@ mod tests {
         let c = m8b();
         let (ctx, fraction, weights) = (8192, 0.85, 8u64 << 30);
         let mut before = card(Backend::Cuda, 0, 0);
-        let room = super::serving_need(&before, &c, ctx, fraction, 0, true, 1) + weights;
+        let room =
+            super::serving_need(&before, &c, ctx, fraction, 0, true, 1, DType::F16) + weights;
         before.vram_free = room;
         let experts = [1u64 << 30; 4];
-        let layers =
-            |reserve| host_expert_layers(&before, weights, &experts, &c, ctx, fraction, reserve, 1);
+        let layers = |reserve| {
+            host_expert_layers(
+                &before,
+                weights,
+                &experts,
+                &c,
+                ctx,
+                fraction,
+                reserve,
+                1,
+                DType::F16,
+            )
+        };
         let n = DRAFT_SEATS;
         assert_eq!(layers(super::guess_bytes(0, None, None, &c, 64, ctx, n)), 0);
         assert!(layers(super::guess_bytes(0, Some(&shape), None, &c, 64, ctx, n)) > 0);
@@ -888,14 +926,25 @@ mod tests {
                 + super::guess_bytes(0, Some(&shape), None, &c, rows, ctx, seats as usize)
         };
         let mut before = card(Backend::Cuda, 0, 0);
-        let need = super::serving_need(&before, &c, ctx, fraction, 0, true, 1) + weights;
+        let need =
+            super::serving_need(&before, &c, ctx, fraction, 0, true, 1, DType::F16) + weights;
         // Short by half of what the smaller chunk saves.
         let short = (reserve(big, 4) - reserve(small, 4)) / 2;
         before.vram_free = need + reserve(big, 4) - short;
         let experts = [1u64 << 30; 4];
         let layers = |(rows, seats)| {
             let reserve = reserve(rows, seats);
-            host_expert_layers(&before, weights, &experts, &c, ctx, fraction, reserve, 1)
+            host_expert_layers(
+                &before,
+                weights,
+                &experts,
+                &c,
+                ctx,
+                fraction,
+                reserve,
+                1,
+                DType::F16,
+            )
         };
         let pick = |drafting| draft_fits(drafting, big, Some(small), 4).find(|&t| layers(t) == 0);
         assert!(layers((big, 4)) > 0);
@@ -961,7 +1010,7 @@ mod tests {
         let c = m8b();
         for flags in [0, DeviceProps::CAP_UNIFIED] {
             let before = card(Backend::Metal, 8 << 30, flags);
-            let need = super::serving_need(&before, &c, 8192, 0.85, 1 << 20, false, 1);
+            let need = super::serving_need(&before, &c, 8192, 0.85, 1 << 20, false, 1, DType::F16);
             let at = |free| {
                 fit(
                     &before,
@@ -976,6 +1025,7 @@ mod tests {
                     false,
                     0,
                     0,
+                    DType::F16,
                 )
             };
             assert!(at(need).is_ok(), "{flags}");
@@ -1007,6 +1057,7 @@ mod tests {
                 false,
                 0,
                 0,
+                DType::F16,
             )
         };
         let (d, h) = (plan(&dense).unwrap(), plan(&hybrid).unwrap());
@@ -1089,7 +1140,17 @@ mod tests {
         let layers = |slots| {
             let (before, weights, experts, reserve) = target(slots);
             let reserve = reserve + crate::FREE_SWING;
-            host_expert_layers(&before, weights, &experts, &c, 2304, 0.85, reserve, slots)
+            host_expert_layers(
+                &before,
+                weights,
+                &experts,
+                &c,
+                2304,
+                0.85,
+                reserve,
+                slots,
+                DType::F16,
+            )
         };
         assert_eq!((layers(1), layers(8)), (4, 6));
         assert_eq!(super::most_state_slots(8, 4, layers), 3);
@@ -1106,8 +1167,8 @@ mod tests {
         let c = m35b();
         let (before, ..) = target(1);
         let blocks = |b: &DeviceProps, c: &ModelConfig, ctx, seats| {
-            (super::pool_min(b, c, ctx, 0.85, seats) as f64 * f64::from(0.85f32)) as u64
-                / super::kv_block_bytes(c)
+            (super::pool_min(b, c, ctx, 0.85, seats, DType::F16) as f64 * f64::from(0.85f32)) as u64
+                / super::kv_block_bytes(c, DType::F16)
         };
         assert_eq!(blocks(&before, &c, 2304, 1), 144);
         assert_eq!(blocks(&before, &c, 2304, 4), 300);
@@ -1130,12 +1191,23 @@ mod tests {
         let plan = |b: Backend, free: u64, counts: &[u64]| {
             let d = card(b, free, 0);
             expert_residency(
-                &d, weights, &experts, counts, e as u32, &c, 8192, 0.85, reserve, 0, 1,
+                &d,
+                weights,
+                &experts,
+                counts,
+                e as u32,
+                &c,
+                8192,
+                0.85,
+                reserve,
+                0,
+                1,
+                DType::F16,
             )
         };
         let room = free
             - (512 << 20)
-            - super::pool_min(&card(Backend::Cuda, 0, 0), &c, 8192, 0.85, 1)
+            - super::pool_min(&card(Backend::Cuda, 0, 0), &c, 8192, 0.85, 1, DType::F16)
             - reserve;
         let fixed = weights - 48 * each + 3 * 256 * 48;
         let held = |r: &[Vec<u32>]| r.iter().map(|l| l.len() as u64).sum::<u64>() * (each / 256);
@@ -1168,6 +1240,7 @@ mod tests {
             0.85,
             reserve,
             1,
+            DType::F16,
         );
         assert!(held(&r) >= (48 - u64::from(whole)) * each);
         // A model that fits whole, one whose non-expert weights do not, and the CPU reference
@@ -1196,7 +1269,18 @@ mod tests {
                 d.arch_code = 120;
                 let charge = super::expert_cache_bytes(&d, log, tensors, dynamic);
                 let r = expert_residency(
-                    &d, weights, &experts, &skew, e as u32, &c, 8192, 0.85, reserve, charge, 1,
+                    &d,
+                    weights,
+                    &experts,
+                    &skew,
+                    e as u32,
+                    &c,
+                    8192,
+                    0.85,
+                    reserve,
+                    charge,
+                    1,
+                    DType::F16,
                 )
                 .unwrap();
                 let held = r.iter().map(|l| l.len() as u64).sum::<u64>() * (each / e);
@@ -1205,7 +1289,7 @@ mod tests {
                 let gaps = tensors * 31 + (16 << 10);
                 let taken = weights - 48 * each + gaps + 3 * 256 * 48 + held;
                 let free = d.vram_free - taken - reserve - log - stream;
-                let need = super::serving_need(&d, &c, 8192, 0.85, 0, false, 1);
+                let need = super::serving_need(&d, &c, 8192, 0.85, 0, false, 1, DType::F16);
                 assert!(free >= need, "{dynamic} {step}: {free} < {need}");
             }
         }
@@ -1224,15 +1308,36 @@ mod tests {
         let headroom = super::headroom(&card(Backend::Cuda, 0, 0), &c, true);
         let free = weights
             + headroom
-            + super::pool_min(&card(Backend::Cuda, 0, 0), &c, 8192, 0.85, 1)
+            + super::pool_min(&card(Backend::Cuda, 0, 0), &c, 8192, 0.85, 1, DType::F16)
             + reserve;
         let d = card(Backend::Cuda, free, 0);
         assert_eq!(
-            host_expert_layers(&d, weights, &experts, &c, 8192, 0.85, reserve, 1),
+            host_expert_layers(
+                &d,
+                weights,
+                &experts,
+                &c,
+                8192,
+                0.85,
+                reserve,
+                1,
+                DType::F16
+            ),
             0
         );
         let plan = expert_residency(
-            &d, weights, &experts, &counts, 256, &c, 8192, 0.85, reserve, charge, 1,
+            &d,
+            weights,
+            &experts,
+            &counts,
+            256,
+            &c,
+            8192,
+            0.85,
+            reserve,
+            charge,
+            1,
+            DType::F16,
         );
         assert_eq!(plan, None);
     }
@@ -1251,11 +1356,22 @@ mod tests {
         let reserve = 1 << 30;
         let plan = |free: u64, pool: u64| {
             let d = card(Backend::Cuda, free, 0);
-            host_expert_layers_with_pool(&d, weights, &experts, &c, 8192, 0.85, reserve, 1, pool)
+            host_expert_layers_with_pool(
+                &d,
+                weights,
+                &experts,
+                &c,
+                8192,
+                0.85,
+                reserve,
+                1,
+                pool,
+                DType::F16,
+            )
         };
         let resident = weights
             + super::DISCRETE_HEADROOM
-            + super::pool_min(&card(Backend::Cuda, 0, 0), &c, 8192, 0.85, 1)
+            + super::pool_min(&card(Backend::Cuda, 0, 0), &c, 8192, 0.85, 1, DType::F16)
             + reserve;
         assert_eq!(plan(resident, 0), 0);
         assert_eq!(plan(resident, POOL), 0, "resident: no pool");
@@ -1291,6 +1407,7 @@ mod tests {
                 8,
                 None,
                 tokens,
+                DType::F16,
             )
         };
         // 131,072 tokens of context, 16,384 of them a turn's: the longest document.
@@ -1342,6 +1459,7 @@ mod tests {
                 8,
                 most,
                 tokens,
+                DType::F16,
             )
         };
         let roomy = plan(80 << 30, None, 100_000);
@@ -1378,6 +1496,7 @@ mod tests {
                 cap,
                 None,
                 100_000,
+                DType::F16,
             )
         };
         let roomy = plan(80 << 30, 8);
@@ -1409,6 +1528,7 @@ mod tests {
                 8,
                 None,
                 100_000,
+                DType::F16,
             )
         };
         let (offloaded, resident) = (plan(16, 1 << 30), plan(80, 1 << 30));
@@ -1437,6 +1557,7 @@ mod tests {
                 0.85,
                 reserve,
                 1,
+                DType::F16,
             )
         };
         // A 16 GiB card with 15.5 GB free: the rest of the model fits once n layers move, not n - 1.
@@ -1444,7 +1565,7 @@ mod tests {
         let n = plan(Backend::Cuda, free) as usize;
         let room = free
             - (512 << 20)
-            - super::pool_min(&card(Backend::Cuda, 0, 0), &c, 8192, 0.85, 1)
+            - super::pool_min(&card(Backend::Cuda, 0, 0), &c, 8192, 0.85, 1, DType::F16)
             - reserve;
         let left = |n: usize| weights - experts[..n].iter().sum::<u64>();
         assert!(n > 0 && left(n) <= room && left(n - 1) > room, "{n}");
@@ -1458,7 +1579,17 @@ mod tests {
         let m5 = |free| {
             let mut d = card(Backend::Metal, free, DeviceProps::CAP_UNIFIED);
             d.vram_total = 20_000_000_000;
-            host_expert_layers(&d, weights, &experts, &moe, 8192, 0.85, reserve, 1)
+            host_expert_layers(
+                &d,
+                weights,
+                &experts,
+                &moe,
+                8192,
+                0.85,
+                reserve,
+                1,
+                DType::F16,
+            )
         };
         let fits = weights
             + 1_000_000_000
@@ -1468,6 +1599,7 @@ mod tests {
                 8192,
                 0.85,
                 1,
+                DType::F16,
             )
             + reserve;
         assert_eq!(m5(fits), 0);
@@ -1486,6 +1618,7 @@ mod tests {
                 0.85,
                 reserve,
                 1,
+                DType::F16,
             )
         };
         assert!(
@@ -1505,7 +1638,8 @@ mod tests {
                 8192,
                 0.85,
                 0,
-                1
+                1,
+                DType::F16
             ),
             0
         );
@@ -1548,6 +1682,7 @@ mod tests {
                 mapped,
                 0,
                 0,
+                DType::F16,
             );
             p.unwrap().graph_bytes
         };
@@ -1606,6 +1741,7 @@ mod tests {
                     false,
                     0,
                     0,
+                    DType::F16,
                 )
                 .unwrap();
                 let expected = if !capable {
@@ -1683,6 +1819,7 @@ mod tests {
             false,
             0,
             0,
+            DType::F16,
         )
         .unwrap();
         let metadata = graph_reserve(Backend::Cuda, 16, 0)
@@ -1690,6 +1827,50 @@ mod tests {
         let available = before.vram_free - (512 << 20) - (34 << 20) - metadata - (64 << 20);
         let expected = (available as f64 * f64::from(0.85_f32)) as u64 / p.kv_block_bytes;
         assert_eq!(u64::from(p.kv_blocks), expected);
+    }
+
+    /// Q8_0 pages price a block at 34 bytes a 32 values: the 8B row's 128 KiB a token of f16 is 68 KiB,
+    /// so the same free memory holds 32 / 17 as many blocks, and a fraction 17 / 32 of the f16 one
+    /// holds the same blocks in 17 / 32 of the bytes (an A/B at a fixed block count).
+    #[test]
+    fn q8_0_pages_price_a_block_by_their_bytes() {
+        let c = m8b();
+        let (f16, q8) = (
+            super::kv_block_bytes(&c, DType::F16),
+            super::kv_block_bytes(&c, DType::Q8_0),
+        );
+        assert_eq!((f16, q8), (16 * (128 << 10), 16 * (68 << 10)));
+        let before = card(Backend::Metal, 24 << 30, DeviceProps::CAP_UNIFIED);
+        let plan = |kv, fraction| {
+            let free = before.vram_free - 5_027_783_488;
+            fit(
+                &before,
+                free,
+                &c,
+                8192,
+                fraction,
+                34 << 20,
+                4,
+                false,
+                false,
+                true,
+                0,
+                0,
+                kv,
+            )
+            .unwrap()
+        };
+        let (a, b) = (plan(DType::F16, 0.85), plan(DType::Q8_0, 0.85));
+        assert_eq!(b.kv_block_bytes, q8);
+        assert!(u64::from(b.kv_blocks) * 17 / 32 <= u64::from(a.kv_blocks) + 1);
+        assert!(u64::from(b.kv_blocks) * 17 / 32 + 1 >= u64::from(a.kv_blocks));
+        let same = plan(DType::Q8_0, 0.85 * 17.0 / 32.0);
+        assert!(
+            same.kv_blocks.abs_diff(a.kv_blocks) <= 1,
+            "{} vs {}",
+            same.kv_blocks,
+            a.kv_blocks
+        );
     }
 
     /// A held arena is outside `free` already (a reload after a capture): the refit keeps the same
@@ -1711,6 +1892,7 @@ mod tests {
             false,
             0,
             0,
+            DType::F16,
         )
         .unwrap();
         let held = fit(
@@ -1726,6 +1908,7 @@ mod tests {
             false,
             0,
             0,
+            DType::F16,
         )
         .unwrap();
         assert_eq!(
@@ -1762,6 +1945,7 @@ mod tests {
             false,
             0,
             0,
+            DType::F16,
         )
         .unwrap();
         assert_eq!(p.graph_bytes, 5 * GRAPH_BYTES);
@@ -1796,6 +1980,7 @@ mod tests {
             false,
             0,
             0,
+            DType::F16,
         )
         .unwrap();
         assert_eq!(p.graph_bytes, 0);
@@ -1814,6 +1999,7 @@ mod tests {
             false,
             0,
             0,
+            DType::F16,
         )
         .unwrap();
         assert_eq!(p.graph_bytes, GRAPH_BYTES);
@@ -1832,6 +2018,7 @@ mod tests {
             false,
             0,
             0,
+            DType::F16,
         ) {
             Err(LoadError::DoesNotFit { need, have }) => assert_eq!(need, have + 1),
             other => panic!("even the eager context must fit its real budget: {other:?}"),
@@ -1858,6 +2045,7 @@ mod tests {
                 false,
                 want,
                 0,
+                DType::F16,
             )
             .unwrap()
         };
@@ -1898,6 +2086,7 @@ mod tests {
             false,
             0,
             0,
+            DType::F16,
         )
         .unwrap();
         assert_eq!(p.graph_bytes, 12 * GRAPH_BYTES);
@@ -1925,6 +2114,7 @@ mod tests {
             false,
             0,
             0,
+            DType::F16,
         ) {
             Err(LoadError::DoesNotFit { need, have }) => {
                 assert!(need > have && have == before.vram_free, "{need} {have}")
@@ -1955,6 +2145,7 @@ mod tests {
             false,
             0,
             0,
+            DType::F16,
         ) {
             Err(LoadError::DoesNotFit { need, have }) => assert!(need > have, "{need} {have}"),
             r => panic!("{r:?}"),
@@ -1977,7 +2168,7 @@ mod tests {
         ) {
             let backend = if cpu { Backend::Cpu } else { Backend::Cuda };
             let d = card(backend, before, flags);
-            match fit(&d, before.saturating_sub(took), &m8b(), ctx, fraction, scratch, 16, true, false, false, pool, 0) {
+            match fit(&d, before.saturating_sub(took), &m8b(), ctx, fraction, scratch, 16, true, false, false, pool, 0, DType::F16) {
                 Ok(p) => {
                     if flags & DeviceProps::CAP_GRAPHS == 0 {
                         prop_assert_eq!(p.graph_bytes, 0);

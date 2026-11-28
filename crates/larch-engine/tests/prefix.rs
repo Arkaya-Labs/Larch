@@ -8,7 +8,7 @@ use larch_engine::{
     EngineEvent, EngineHandle, EngineOptions, Forced, ReloadChange, Request, RequestHandle, start,
     start_with,
 };
-use larch_kernels::CPU;
+use larch_kernels::{CPU, DType};
 use larch_model::{Arch, FakeModel, tiny};
 use larch_records::{Read, ReadFrom, Record, knob_id};
 
@@ -222,4 +222,53 @@ fn automatic_custom_loaders_require_explicit_compatibility() {
         );
         e.shutdown();
     }
+}
+
+/// Q8_0 KV pages through the executor: one-shot and chunked prefill, a prefix hit and a forked
+/// prefix group on the device match the CPU reference reading the same Q8_0 page format, within
+/// the same 1e-2 logprob tolerance. (Block counts by real bytes: fit.rs's unit test; this pool is
+/// capped by `max_context`.)
+#[test]
+fn automatic_q8_0_pages_match_cpu_reference() {
+    let q8 = |device, blocks, chunk: f64| {
+        let mut o = options(device, blocks);
+        o.kv_dtype = DType::Q8_0;
+        o.knob_overrides
+            .push((knob_id::PREFILL_CHUNK_TOKENS, chunk));
+        o
+    };
+    let oracle = start(q8(CPU, 0, 512.0)).unwrap();
+    let f16 = start(options(CPU, 0)).unwrap();
+    let mut max_delta = 0f32;
+    // 64-token chunks split a 150-token prompt three ways; 512 takes it in one batch.
+    for chunk in [512.0, 64.0] {
+        let e = start(q8(device(), 128, chunk)).unwrap();
+        let p = prompt(150);
+        let (cold, cached) = collect(e.submit(request(p.clone(), 20)).unwrap());
+        assert_eq!(cached, 0);
+        max_delta = max_delta.max(cpu_reference(&oracle, &p, &cold));
+        // The F16 reference reads other pages: a zero delta would mean the request ran on F16.
+        assert!(cpu_reference(&f16, &p, &cold) > 0.0);
+        let (hit, cached) = collect(e.submit(request(p.clone(), 20)).unwrap());
+        assert_eq!(cached, 144);
+        max_delta = max_delta.max(cpu_reference(&oracle, &p, &hit));
+        // Forked: four prompts share the first nine blocks and differ from token 144 on.
+        let group: Vec<_> = (0..4)
+            .map(|i| {
+                let mut p = p.clone();
+                p[144] = 20 + i;
+                request(p, 17 + i)
+            })
+            .collect();
+        let handles = e.submit_group(group.clone()).unwrap();
+        for (r, h) in group.iter().zip(handles) {
+            let (tokens, cached) = collect(h);
+            assert_eq!(cached, 144);
+            max_delta = max_delta.max(cpu_reference(&oracle, &r.prompt, &tokens));
+        }
+        e.shutdown();
+    }
+    oracle.shutdown();
+    f16.shutdown();
+    eprintln!("q8_0 CPU-oracle max logprob delta={max_delta}");
 }

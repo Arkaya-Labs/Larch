@@ -767,6 +767,226 @@ static void attn_prefill_flash() {
         "attn_prefill with q_lens past q's rows writes past out");
 }
 
+// q8_0 pages (larch.h larch_kv_pool): a pool of n_blocks blocks of 16 slots over 2 layers, used at layer 1, of
+// random blocks (each an f16 scale and 32 random int8), the same bytes on both sides.
+static pool2 make_pool_q8(uint32_t n_blocks, uint32_t kv_heads, uint32_t hd) {
+  const int64_t n = 2 * int64_t(n_blocks) * 16 * kv_heads * hd;
+  pool2 pl{up(make(LARCH_Q8_0, {n / 32, 32}), 0), up(make(LARCH_Q8_0, {n / 32, 32}), 0), {}};
+  for (int i = 0; i < 2; ++i) pl.p[i] = {pl.k.t[i].buf, pl.v.t[i].buf, n_blocks, 16, 2, kv_heads, hd, LARCH_Q8_0, 1};
+  return pl;
+}
+
+// A q8_0 pool on both sides holds the same bytes: kv_write rounds as the reference does, bit for bit.
+static void same_pages(const std::string& what, const both& pages) {
+  const std::vector<uint8_t> c = down(0, pages), g = down(1, pages);
+  size_t bad = 0, first = 0;
+  for (size_t i = 0; i < c.size(); ++i)
+    if (c[i] != g[i] && !bad++) first = i;
+  CHECK(!bad, "%s: %zu bytes differ, first [%zu] cpu %u metal %u", what.c_str(), bad, first, unsigned(bad ? c[first] : 0),
+        unsigned(bad ? g[first] : 0));
+  if (!bad) std::printf("ok   %s\n", what.c_str());
+}
+
+// Rows `lens.size()` of a decode over pool, row r's table `tables[r]` (padded with -1 to the widest), at splits.
+static void decode_q8(const std::string& name, const pool2& pool, int64_t heads,
+                      const std::vector<std::vector<int32_t>>& tables, const std::vector<int32_t>& lens,
+                      uint32_t splits) {
+  const uint32_t hd = pool.p[0].head_dim;
+  const int64_t rows = int64_t(lens.size());
+  size_t width = 1;
+  for (const auto& t : tables) width = std::max(width, t.size());
+  std::vector<int32_t> flat;
+  for (const auto& t : tables) {
+    flat.insert(flat.end(), t.begin(), t.end());
+    flat.insert(flat.end(), width - t.size(), -1);
+  }
+  const both q = up(make(LARCH_F16, {rows, heads, hd}, 3)), out = up(make(LARCH_F16, {rows, heads, hd}, 5));
+  const both tb = up(ints({rows, int64_t(width)}, flat, 2)), ln = up(ints({rows}, lens, 3));
+  run(name, [&](int i) {
+    return larch_attn_decode(sides[i].s, &q.t[i], &pool.p[i], &tb.t[i], &ln.t[i], splits,
+                               1.0f / std::sqrt(float(hd)), &out.t[i]);
+  });
+  same(name, out, 2e-3, 5e-4);
+}
+
+// The q8_0 pages' kernels against the reference, under the f16 pages' tolerances (ops.cpp TOLERANCES): kv_write bit
+// for bit; decode at the block edges 15-17 and 31-33, every split path, head_dim 64, 128 and 256 (Qwen3's and Qwen
+// 3.5's full attention), long rows, and two rows forking one prefix's blocks; prefill flash in tiles over cached
+// prefixes, one chunk against the same rows in two; larch_attn's check rows bit for bit against decode; and a
+// kv_write then decode chain with no sync between.
+static void kv_q8() {
+  // kv_write: 37 rows at shuffled slots, every fifth skipped, an all-zero row (scale 0), layer 1 and 0.
+  struct geo {
+    uint32_t kv_heads, hd;
+  };
+  for (const geo g : {geo{2, 64}, geo{8, 128}, geo{2, 256}}) {
+    constexpr uint32_t blocks = 4;
+    const pool2 pool = make_pool_q8(blocks, g.kv_heads, g.hd);
+    std::vector<int32_t> slots(blocks * 16);
+    std::iota(slots.begin(), slots.end(), 0);
+    std::shuffle(slots.begin(), slots.end(), rng);
+    slots.resize(37);
+    for (size_t r = 3; r < slots.size(); r += 5) slots[r] = -1;
+    host k = make(LARCH_F16, {37, g.kv_heads, g.hd}, 0, 2), v = make(LARCH_F16, {37, g.kv_heads, g.hd}, 0, 2);
+    std::fill_n(k.data.begin(), size_t(g.kv_heads * g.hd * 2), uint8_t(0));
+    const both kb = up(k), vb = up(v), sl = up(ints({37}, slots, 1));
+    for (const uint32_t layer : {1u, 0u})
+      run("kv_write q8_0", [&](int i) {
+        larch_kv_pool p = pool.p[i];
+        p.layer = layer;
+        return larch_kv_write(sides[i].s, &kb.t[i], &vb.t[i], &sl.t[i], &p);
+      });
+    const std::string name = "kv_write q8_0, 37 rows of " + std::to_string(g.kv_heads) + " x " + std::to_string(g.hd);
+    same_pages(name + ": k pages", pool.k);
+    same_pages(name + ": v pages", pool.v);
+  }
+
+  // Decode: GQA 4 over 2 kv heads of 128 (Qwen3 8B's ratio), lengths at the block edges, every split path.
+  {
+    const pool2 pool = make_pool_q8(12, 2, 128);
+    const std::vector<int32_t> lens{15, 16, 17, 31, 32, 33, 0};
+    std::vector<std::vector<int32_t>> tables;
+    for (size_t r = 0; r < lens.size(); ++r) tables.push_back({int32_t(r), int32_t((r + 5) % 12), int32_t((r + 9) % 12)});
+    for (const uint32_t splits : {0u, 1u, 2u, 3u, 16u})
+      decode_q8("attn_decode q8_0 8 heads over 2 x 128, lengths 15-17 and 31-33, splits " + std::to_string(splits),
+                pool, 8, tables, lens, splits);
+    // Two chats forking one prefix: blocks 0-1 shared, each its own third block.
+    decode_q8("attn_decode q8_0, two rows forking one 32-token prefix", pool, 8, {{0, 1, 7}, {0, 1, 8}}, {45, 40}, 0);
+  }
+  for (const uint32_t hd : {64u, 256u}) {
+    const pool2 pool = make_pool_q8(3, 1, hd);
+    for (const uint32_t splits : {0u, 1u, 2u})
+      decode_q8("attn_decode q8_0 4 heads over 1 x " + std::to_string(hd) + ", 45 positions, splits " +
+                    std::to_string(splits),
+                pool, 4, {{1, 2, 0}}, {45}, splits);
+  }
+  {  // The 35B's full attention at length: 16 q heads over 2 kv heads of 256, 8200 positions (64 splits) and 300.
+    constexpr int32_t n = 520;
+    const pool2 pool = make_pool_q8(n, 2, 256);
+    std::vector<int32_t> a(n), b(n);
+    for (int32_t i = 0; i < n; ++i) a[size_t(i)] = (i * 7 + 3) % n, b[size_t(i)] = n - 1 - i;
+    decode_q8("attn_decode q8_0 16 q / 2 kv heads of 256, 8200 and 300 positions, automatic splits", pool, 16, {a, b},
+              {8200, 300}, 0);
+  }
+
+  // Prefill: tiles across sequences, cached prefixes, mid-block starts, an empty chunk, GQA 7.
+  struct shape {
+    uint32_t kv_heads, hd;
+    int64_t heads;
+    std::vector<std::pair<int32_t, int32_t>> chunks;
+  };
+  constexpr uint32_t blocks = 16;
+  const shape shapes[] = {
+      {2, 64, 14, {{0, 70}, {37, 45}, {5, 0}, {130, 33}}},
+      {2, 128, 8, {{0, 70}, {37, 45}, {5, 0}, {130, 33}}},
+      {1, 96, 4, {{3, 40}}},
+      {2, 256, 16, {{0, 40}, {15, 33}}},
+  };
+  for (const shape& c : shapes) {
+    std::vector<int32_t> start, len, table;
+    int64_t rows = 0, width = 0;
+    std::string name = "attn_prefill q8_0 " + std::to_string(c.heads) + " heads over " + std::to_string(c.kv_heads) +
+                       " x " + std::to_string(c.hd) + ", chunks";
+    for (const auto& [st, n] : c.chunks) {
+      start.push_back(st);
+      len.push_back(n);
+      rows += n;
+      width = std::max<int64_t>(width, (st + n + 15) / 16);
+      name += " " + std::to_string(st) + "+" + std::to_string(n);
+    }
+    for (size_t seq = 0; seq < c.chunks.size(); ++seq) {
+      std::vector<int32_t> ids(blocks);
+      std::iota(ids.begin(), ids.end(), 0);
+      std::shuffle(ids.begin(), ids.end(), rng);
+      table.insert(table.end(), ids.begin(), ids.begin() + width);
+    }
+    const int64_t seqs = int64_t(c.chunks.size());
+    const pool2 pool = make_pool_q8(blocks, c.kv_heads, c.hd);
+    const both q = up(make(LARCH_F16, {rows, c.heads, c.hd}, 8)), out = up(make(LARCH_F16, {rows, c.heads, c.hd}, 8));
+    const both tb = up(ints({seqs, width}, table)), st = up(ints({seqs}, start)), ln = up(ints({seqs}, len));
+    run(name, [&](int i) {
+      return larch_attn_prefill(sides[i].s, &q.t[i], &pool.p[i], &tb.t[i], &st.t[i], &ln.t[i],
+                                 1.0f / std::sqrt(float(c.hd)), &out.t[i]);
+    });
+    same(name, out, 2e-3, 5e-4);
+  }
+
+  // One chunk of 70 rows on the reference against the same rows as 40 then 30 on Metal: a chunked prompt reads the
+  // pages as one read would.
+  {
+    const pool2 pool = make_pool_q8(blocks, 2, 128);
+    const both q = up(make(LARCH_F16, {70, 8, 128})), out = up(make(LARCH_F16, {70, 8, 128}));
+    const both tb = up(ints({1, 5}, {9, 2, 14, 0, 6}));
+    const both st = up(ints({1}, {0})), ln = up(ints({1}, {70})), st2 = up(ints({2}, {0, 40})),
+               ln2 = up(ints({2}, {40, 30}));
+    CHECK(larch_attn_prefill(sides[0].s, &q.t[0], &pool.p[0], &tb.t[0], &st.t[0], &ln.t[0], 0.0883883f, &out.t[0]) ==
+              LARCH_OK,
+          "attn_prefill q8_0 one chunk on the CPU");
+    for (int part = 0; part < 2; ++part) {
+      larch_tensor qp = q.t[1], op = out.t[1], sp = st2.t[1], lp = ln2.t[1];
+      const int64_t first = part ? 40 : 0;
+      qp.offset += uint64_t(first * qp.stride[0] * 2), qp.shape[0] = part ? 30 : 40;
+      op.offset += uint64_t(first * op.stride[0] * 2), op.shape[0] = qp.shape[0];
+      sp.offset += uint64_t(part * 4), sp.shape[0] = 1, lp.offset += uint64_t(part * 4), lp.shape[0] = 1;
+      CHECK(larch_attn_prefill(sides[1].s, &qp, &pool.p[1], &tb.t[1], &sp, &lp, 0.0883883f, &op) == LARCH_OK,
+            "attn_prefill q8_0 chunk %d on Metal", part);
+    }
+    same("attn_prefill q8_0: one 70-row chunk against 40 then 30", out, 2e-3, 5e-4);
+  }
+
+  // larch_attn's causal check rows (speculative decoding) are decode's rows bit for bit at the same splits, here at a
+  // prefix hit: 4 rows after 29 cached positions against decodes of lengths 30-33.
+  {
+    const pool2 pool = make_pool_q8(4, 2, 128);
+    const both q = up(make(LARCH_F16, {4, 8, 128})), span = up(make(LARCH_F16, {4, 8, 128}));
+    const both one = up(make(LARCH_F16, {1, 8, 128}));
+    const both tb = up(ints({1, 3}, {3, 1, 2})), st = up(ints({1}, {29})), ln = up(ints({1}, {4}));
+    const float scale = 0.0883883f;
+    for (const uint32_t splits : {1u, 16u}) {
+      CHECK(larch_attn(sides[1].s, &q.t[1], &pool.p[1], &tb.t[1], &st.t[1], &ln.t[1], nullptr, nullptr, 0, splits,
+                       scale, &span.t[1]) == LARCH_OK,
+            "attn q8_0 check rows");
+      const std::vector<uint8_t> rows = down(1, span);
+      bool equal = true;
+      for (int32_t j = 0; j < 4; ++j) {
+        larch_tensor qj = q.t[1];
+        qj.offset += uint64_t(j * qj.stride[0] * 2), qj.shape[0] = 1;
+        const both len = up(ints({1}, {30 + j}));
+        CHECK(larch_attn_decode(sides[1].s, &qj, &pool.p[1], &tb.t[1], &len.t[1], splits, scale, &one.t[1]) == LARCH_OK,
+              "attn_decode q8_0 row %d", j);
+        const std::vector<uint8_t> alone = down(1, one);
+        equal = equal && std::equal(alone.begin(), alone.end(), rows.begin() + j * int64_t(alone.size()));
+      }
+      CHECK(equal, "attn q8_0 check rows differ from decode at splits %u", splits);
+      if (equal) std::printf("ok   attn q8_0 check rows equal decode, splits %u\n", splits);
+    }
+  }
+
+  // kv_write then decode, no sync between: what a decode step does to a layer.
+  {
+    const pool2 pool = make_pool_q8(4, 2, 128);
+    const both k = up(make(LARCH_F16, {2, 2, 128})), v = up(make(LARCH_F16, {2, 2, 128}));
+    const both slots = up(ints({2}, {20, 47})), q = up(make(LARCH_F16, {2, 8, 128})), out = up(make(LARCH_F16, {2, 8, 128}));
+    const both tb = up(ints({2, 3}, {0, 1, -1, 3, 2, 0})), ln = up(ints({2}, {21, 33}));
+    run("kv_write then attn_decode q8_0", [&](int i) {
+      const larch_status s = larch_kv_write(sides[i].s, &k.t[i], &v.t[i], &slots.t[i], &pool.p[i]);
+      return s != LARCH_OK ? s
+                           : larch_attn_decode(sides[i].s, &q.t[i], &pool.p[i], &tb.t[i], &ln.t[i], 0, 0.0883883f,
+                                                 &out.t[i]);
+    });
+    same_pages("kv_write then attn_decode q8_0: k pages", pool.k);
+    same("kv_write then attn_decode q8_0", out, 2e-3, 5e-4);
+  }
+
+  // fp8_e4m3 pages stay the reference's: Metal refuses them.
+  const pool2 pool = make_pool_q8(1, 1, 32);
+  larch_kv_pool fp8 = pool.p[1];
+  fp8.dtype = LARCH_FP8_E4M3;
+  const both k = up(make(LARCH_F16, {1, 1, 32})), sl = up(ints({1}, {0}));
+  CHECK(larch_kv_write(sides[1].s, &k.t[1], &k.t[1], &sl.t[1], &fp8) == LARCH_ERR_UNSUPPORTED,
+        "kv_write into fp8_e4m3 pages on Metal: want UNSUPPORTED");
+}
+
 // Mandatory metadata errors take priority over Metal's head-dimension limit; rejected calls write nothing.
 static void wide_heads() {
   const pool2 pl = make_pool(1, 1, 512);
@@ -1151,6 +1371,7 @@ static void run_compare() {
   mmvq_zero_rows();
   attn_decode_splits();
   attn_prefill_flash();
+  kv_q8();
   wide_heads();
   gdn_chunks();
   feed_chain();

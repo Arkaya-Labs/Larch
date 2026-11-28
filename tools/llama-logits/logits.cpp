@@ -1,6 +1,6 @@
 // The model oracle's reference (architecture 15): llama.cpp's teacher-forced log-probabilities.
 //   llama-logits <gguf> <prompts.jsonl> [--first N] [--ngl N] [--threads N] [--batch N] [--ubatch N]
-//                [--fa auto|on|off] [--date S] [--mmproj F --embd-dir D]
+//                [--fa auto|on|off] [--kv f16|q8_0] [--date S] [--mmproj F --embd-dir D]
 //                [--image-min-tokens N] [--image-max-tokens N] > dump.jsonl
 // Each prompts line is {"prompt": "..."} (tokenised as is) or {"messages": [{"role", "content"}...]}
 // (a trailing assistant message without content, a bench workload's timed turn, is dropped; the rest is
@@ -25,6 +25,8 @@
 // its merged grid from the image's first position p0, and the rows after it going on from p0 +
 // max(nx, ny); such an image also carries "grid": [nx, ny] and "n_pos" (the positions it takes).
 // --image-min-tokens and --image-max-tokens bound a dynamic-resolution image's rows (mtmd's).
+// --kv q8_0 keeps llama.cpp's K and V cache in q8_0 (the default is f16), the reference for larch's q8_0
+// KV pages (the same block format); the header's type_k and type_v say which ran.
 #include "build-info.h"
 #include "chat.h"
 #include "common.h"
@@ -91,7 +93,7 @@ static std::string sha256_str(const std::string & s) {
 }
 
 struct Args {
-    std::string gguf, prompts, fa = "auto", date = "26 Jul 2024", mmproj, embd_dir;
+    std::string gguf, prompts, fa = "auto", kv = "f16", date = "26 Jul 2024", mmproj, embd_dir;
     int first = 0, ngl = 0, threads = 0, batch = 512, ubatch = 512;
     int image_min_tokens = -1, image_max_tokens = -1;  // -1: the projector's own
 };
@@ -121,6 +123,8 @@ static Args parse_args(int argc, char ** argv) {
             a.ubatch = std::stoi(v);
         } else if (k == "--fa" && (v == "auto" || v == "on" || v == "off")) {
             a.fa = v;
+        } else if (k == "--kv" && (v == "f16" || v == "q8_0")) {
+            a.kv = v;
         } else if (k == "--date") {
             a.date = v;
         } else if (k == "--mmproj") {
@@ -180,7 +184,7 @@ static int run(int argc, char ** argv) {
     } catch (const std::exception &) {
         fprintf(stderr,
                 "usage: llama-logits <gguf> <prompts.jsonl> [--first N] [--ngl N] [--threads N] [--batch N]\n"
-                "                    [--ubatch N] [--fa auto|on|off] [--date S] [--mmproj F --embd-dir D]\n"
+                "                    [--ubatch N] [--fa auto|on|off] [--kv f16|q8_0] [--date S] [--mmproj F --embd-dir D]\n"
                 "                    [--image-min-tokens N] [--image-max-tokens N]\n");
         return 2;
     }
@@ -344,6 +348,7 @@ static int run(int argc, char ** argv) {
     cp.n_seq_max            = 1;
     cp.n_threads = cp.n_threads_batch = threads;
     cp.flash_attn_type = fa_type;
+    cp.type_k = cp.type_v = a.kv == "q8_0" ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
     cp.op_offload      = a.ngl > 0;
     cp.no_perf         = true;
     llama_context * ctx = llama_init_from_model(model, cp);

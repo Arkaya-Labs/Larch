@@ -56,9 +56,9 @@ void usage() {
   std::puts("  metal_perf add --device ORDINAL --d WIDTH --iterations COUNT");
   std::puts("  metal_perf linear --device ORDINAL --format FORMAT --m ROWS --n COLS --k WIDTH --iterations COUNT");
   std::puts("  metal_perf attn-decode --device ORDINAL --rows ROWS --seq-len TOKENS --heads HEADS --kv-heads HEADS "
-            "--head-dim DIM --splits 0..16 --scale SCALE --iterations COUNT");
+            "--head-dim DIM --splits 0..16 --scale SCALE --iterations COUNT [--kv f16|q8_0]");
   std::puts("  metal_perf attn-prefill --device ORDINAL --rows CHUNK --seq-len TOKENS --heads HEADS --kv-heads HEADS "
-            "--head-dim DIM --scale SCALE --iterations COUNT");
+            "--head-dim DIM --scale SCALE --iterations COUNT [--kv f16|q8_0]");
   std::puts("  metal_perf sample --device ORDINAL --rows ROWS --vocab IDS --top-k 0..64 --iterations COUNT");
   std::puts("formats: q3_k q4_k q5_k q6_k q8_0 q4_0 q5_0");
   std::puts("All shape and timing inputs are required. Run timing commands under flock ~/src/gpu.lock.");
@@ -111,6 +111,18 @@ uint64_t bounded(const arguments& parsed, const char* name, uint64_t minimum, ui
     fail(std::string(name) + " must be in [" + std::to_string(minimum) + ", " + std::to_string(maximum) + "]");
   return value;
 }
+
+// --kv, the pool's page dtype: f16 (the default) or q8_0, whose head_dim must be a multiple of 32.
+larch_dtype parse_kv(const arguments& parsed, uint64_t head_dim) {
+  const auto found = parsed.values.find("--kv");
+  if (found == parsed.values.end() || found->second == "f16") return LARCH_F16;
+  if (found->second != "q8_0") fail("--kv must be f16 or q8_0");
+  if (head_dim % 32) fail("--kv q8_0 needs --head-dim a multiple of 32");
+  return LARCH_Q8_0;
+}
+
+// Bytes of `elements` pool values of dtype kv.
+uint64_t kv_bytes(larch_dtype kv, uint64_t elements) { return kv == LARCH_Q8_0 ? elements / 32 * 34 : elements * 2; }
 
 float parse_scale(const arguments& parsed) {
   const std::string& text = required(parsed, "--scale");
@@ -1007,7 +1019,7 @@ void run_linear(const arguments& parsed) {
 
 void run_attention(const arguments& parsed) {
   require_only(parsed, {"--device", "--rows", "--seq-len", "--heads", "--kv-heads", "--head-dim", "--splits",
-                        "--scale", "--iterations"});
+                        "--scale", "--iterations", "--kv"});
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
   const uint64_t rows = bounded(parsed, "--rows", 1, 16);
   const uint64_t sequence_length = bounded(parsed, "--seq-len", 1, 65536);
@@ -1018,6 +1030,7 @@ void run_attention(const arguments& parsed) {
   const float scale = parse_scale(parsed);
   const uint64_t iterations = bounded(parsed, "--iterations", 1, kMaxIterations);
   if (heads % kv_heads) fail("--heads must be divisible by --kv-heads");
+  const larch_dtype kv = parse_kv(parsed, head_dim);
 
   constexpr uint64_t block_tokens = 16;
   const uint64_t blocks = (sequence_length + block_tokens - 1) / block_tokens;
@@ -1026,7 +1039,7 @@ void run_attention(const arguments& parsed) {
   const uint64_t pool_elements =
       product(product(product(rows, blocks, "attention pool blocks") * block_tokens, kv_heads, "attention pool slots"),
               head_dim, "attention pool elements");
-  const uint64_t pool_bytes = product(pool_elements, 2, "attention pool bytes");
+  const uint64_t pool_bytes = kv == LARCH_Q8_0 ? kv_bytes(kv, pool_elements) : product(pool_elements, 2, "attention pool bytes");
   const uint64_t table_elements = product(rows, blocks, "attention block table elements");
   const uint64_t table_bytes = product(table_elements, sizeof(int32_t), "attention block table bytes");
   const uint64_t lens_bytes = product(rows, sizeof(int32_t), "attention sequence length bytes");
@@ -1061,7 +1074,7 @@ void run_attention(const arguments& parsed) {
                                             {dimension(blocks, "attention blocks"), 1});
   const larch_tensor seq_lens = tensor(lens_buffer, LARCH_I32, 1, {dimension(rows, "--rows")}, {1});
   const larch_kv_pool pool = {key_buffer, value_buffer, static_cast<uint32_t>(rows * blocks), static_cast<uint32_t>(block_tokens),
-                               1, static_cast<uint32_t>(kv_heads), static_cast<uint32_t>(head_dim), LARCH_F16, 0};
+                               1, static_cast<uint32_t>(kv_heads), static_cast<uint32_t>(head_dim), kv, 0};
   check(larch_attn_decode(run.stream, &q, &pool, &block_table, &seq_lens, static_cast<uint32_t>(splits), scale, &out),
         run.device, "attn-decode warmup");
   run.sync("attn-decode warmup");
@@ -1077,9 +1090,9 @@ void run_attention(const arguments& parsed) {
   const uint64_t logical_kv_bytes = product(kv_bytes_per_iteration, iterations, "attention logical key/value bytes");
   const uint64_t decoded_rows = product(rows, iterations, "attention decoded rows");
   const double rows_per_second = static_cast<double>(decoded_rows) * 1e9 / static_cast<double>(elapsed_ns);
-  std::printf("mode=attn-decode device=%llu rows=%llu seq_len=%llu heads=%llu kv_heads=%llu head_dim=%llu splits=%llu "
-              "iterations=%llu gpu_ns=%llu logical_kv_gbps=%.6f decoded_rows_per_s=%.6f\n",
-              static_cast<unsigned long long>(ordinal), static_cast<unsigned long long>(rows),
+  std::printf("mode=attn-decode kv=%s device=%llu rows=%llu seq_len=%llu heads=%llu kv_heads=%llu head_dim=%llu "
+              "splits=%llu iterations=%llu gpu_ns=%llu logical_kv_gbps=%.6f decoded_rows_per_s=%.6f\n",
+              kv == LARCH_Q8_0 ? "q8_0" : "f16", static_cast<unsigned long long>(ordinal), static_cast<unsigned long long>(rows),
               static_cast<unsigned long long>(sequence_length), static_cast<unsigned long long>(heads),
               static_cast<unsigned long long>(kv_heads), static_cast<unsigned long long>(head_dim),
               static_cast<unsigned long long>(splits), static_cast<unsigned long long>(iterations),
@@ -1090,7 +1103,7 @@ void run_attention(const arguments& parsed) {
 // seq_len - rows + j), the shape a chunked prompt's attention has.
 void run_attention_prefill(const arguments& parsed) {
   require_only(parsed, {"--device", "--rows", "--seq-len", "--heads", "--kv-heads", "--head-dim", "--scale",
-                        "--iterations"});
+                        "--iterations", "--kv"});
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
   const uint64_t sequence_length = bounded(parsed, "--seq-len", 1, 65536);
   const uint64_t rows = bounded(parsed, "--rows", 1, sequence_length);
@@ -1100,9 +1113,10 @@ void run_attention_prefill(const arguments& parsed) {
   const float scale = parse_scale(parsed);
   const uint64_t iterations = bounded(parsed, "--iterations", 1, kMaxIterations);
   if (heads % kv_heads) fail("--heads must be divisible by --kv-heads");
+  const larch_dtype kv = parse_kv(parsed, head_dim);
   constexpr uint64_t block_tokens = 16;
   const uint64_t blocks = (sequence_length + block_tokens - 1) / block_tokens;
-  const uint64_t q_bytes = rows * heads * head_dim * 2, pool_bytes = blocks * block_tokens * kv_heads * head_dim * 2;
+  const uint64_t q_bytes = rows * heads * head_dim * 2, pool_bytes = kv_bytes(kv, blocks * block_tokens * kv_heads * head_dim);
   session run(ordinal);
   larch_buffer* q_buffer = run.allocate(q_bytes, "prefill q");
   larch_buffer* out_buffer = run.allocate(q_bytes, "prefill output");
@@ -1127,7 +1141,7 @@ void run_attention_prefill(const arguments& parsed) {
   larch_tensor start = tensor(meta_buffer, LARCH_I32, 1, {1}, {1}), lengths = start;
   lengths.offset = sizeof(int32_t);
   const larch_kv_pool pool = {key_buffer, value_buffer, static_cast<uint32_t>(blocks), static_cast<uint32_t>(block_tokens),
-                               1, static_cast<uint32_t>(kv_heads), static_cast<uint32_t>(head_dim), LARCH_F16, 0};
+                               1, static_cast<uint32_t>(kv_heads), static_cast<uint32_t>(head_dim), kv, 0};
   check(larch_attn_prefill(run.stream, &q, &pool, &block_table, &start, &lengths, scale, &out), run.device,
         "attn-prefill warmup");
   run.sync("attn-prefill warmup");
@@ -1136,9 +1150,9 @@ void run_attention_prefill(const arguments& parsed) {
       check(larch_attn_prefill(run.stream, &q, &pool, &block_table, &start, &lengths, scale, &out), run.device,
             "larch_attn_prefill");
   });
-  std::printf("mode=attn-prefill device=%llu rows=%llu seq_len=%llu heads=%llu kv_heads=%llu head_dim=%llu "
+  std::printf("mode=attn-prefill kv=%s device=%llu rows=%llu seq_len=%llu heads=%llu kv_heads=%llu head_dim=%llu "
               "iterations=%llu gpu_ns=%llu\n",
-              static_cast<unsigned long long>(ordinal), static_cast<unsigned long long>(rows),
+              kv == LARCH_Q8_0 ? "q8_0" : "f16", static_cast<unsigned long long>(ordinal), static_cast<unsigned long long>(rows),
               static_cast<unsigned long long>(sequence_length), static_cast<unsigned long long>(heads),
               static_cast<unsigned long long>(kv_heads), static_cast<unsigned long long>(head_dim),
               static_cast<unsigned long long>(iterations), static_cast<unsigned long long>(elapsed_ns));
