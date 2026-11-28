@@ -51,7 +51,7 @@ struct kernels {
   id<MTLComputePipelineState> attn_flash_sg[3];  // head_dim up to 64, 128 and 256
   id<MTLComputePipelineState> gemm, gemv, gemm_tensor, gemm_tensor_deep, rmsnorm, qk_norm, rope, silu_mul, add, kv_write, attn, attn_split,
       attn_split_reduce, sp_copy, sp_penalty, sp_part, sp_merge, moe_route, moe_group, moe_gather, moe_reduce,
-      sigmoid_mul, gdn_conv, gdn, gdn1, layernorm, gelu, rope_multi, draft_conv;
+      sigmoid_mul, gdn_conv, gdn, gdn1, layernorm, gelu, rope_multi, draft_conv, attn_in;
   id<MTLComputePipelineState> attn_full_sg[2], attn_full_nax;  // head_dim 64 and 72; NAX 64, nil without the tensor API
   // Paged prefill attention on NAX fragments, head_dim exactly 64, 128 and 256 (attn_full_nax.metal); nil without
   // macOS 26.2 and the tensor API, or with LARCH_METAL_ATTN_NAX=0
@@ -466,6 +466,7 @@ static larch_status device_open(int32_t ordinal, larch_device** out) {
     k.gelu = pipe("vv_gelu", 256);  // each
     k.rope_multi = pipe("vv_rope_multi", 256);  // each
     k.draft_conv = pipe("vv_draft_conv", 256);  // each
+    k.attn_in = pipe("vv_attn_in", 256);
     // MLX attention's constants: no mask, causal, sinks, window or lse; unaligned, so the last query and key
     // blocks always take the bounds-checked loads (a uniform branch per block, nothing on whole blocks).
     MTLFunctionConstantValues* dense = [MTLFunctionConstantValues new];
@@ -1029,25 +1030,30 @@ larch_status rmsnorm(larch_stream* vs, const larch_tensor* x, const larch_tensor
   });
 }
 
+// vv_rope's arguments: ggml's rope_yarn constants, computed as the CPU reference computes them.
+rope_args rope_arguments(const cpu::rope_checked& c, const larch_rope_params* p) {
+  const view q = c.qk, pos = c.pos, ff = c.freq_factors;
+  const int64_t nd = p->n_dims;
+  const auto corr_dim = [&](float n_rot) {
+    return float(nd) * logf(float(p->n_ctx_orig) / (n_rot * 2 * float(M_PI))) / (2 * logf(p->freq_base));
+  };
+  const float lo = std::max(0.0f, floorf(corr_dim(p->beta_fast)));
+  const float hi = std::min(float(nd - 1), ceilf(corr_dim(p->beta_slow)));
+  float mscale = p->attn_factor;
+  if (p->ext_factor != 0.0f) mscale *= 1.0f + 0.1f * logf(1.0f / p->freq_scale);
+  return rope_args{q.rs, pos.rs, ff.rs, u32(q.shape[1]), u32(q.shape[2]), u32(nd), p->neox ? 1u : 0u,
+                   p->freq_factors ? 1u : 0u, powf(p->freq_base, -2.0f / float(nd)), p->freq_scale,
+                   p->ext_factor, mscale, lo, hi};
+}
+
 larch_status rope(larch_stream* vs, const larch_tensor* qk, const larch_tensor* pos_i32,
                    const larch_rope_params* p) {
   return run("rope", [&] {
     const auto checked = cpu::check_rope(sizer(vs), qk, pos_i32, p);
     const view q = checked.qk, pos = checked.pos, ff = checked.freq_factors;
-    const int64_t nd = p->n_dims;
     writable(q);
-    // ggml's rope_yarn constants, computed as the CPU reference computes them.
-    const auto corr_dim = [&](float n_rot) {
-      return float(nd) * logf(float(p->n_ctx_orig) / (n_rot * 2 * float(M_PI))) / (2 * logf(p->freq_base));
-    };
-    const float lo = std::max(0.0f, floorf(corr_dim(p->beta_fast)));
-    const float hi = std::min(float(nd - 1), ceilf(corr_dim(p->beta_slow)));
-    float mscale = p->attn_factor;
-    if (p->ext_factor != 0.0f) mscale *= 1.0f + 0.1f * logf(1.0f / p->freq_scale);
-    const rope_args a{q.rs, pos.rs, ff.rs, u32(q.shape[1]), u32(q.shape[2]), u32(nd), p->neox ? 1u : 0u,
-                      p->freq_factors ? 1u : 0u, powf(p->freq_base, -2.0f / float(nd)), p->freq_scale,
-                      p->ext_factor, mscale, lo, hi};
-    each(static_cast<mtl_stream*>(vs), ks(vs).rope, {at(q), input(pos), input_or(ff, at(pos))}, a, nd / 2, q.shape[1], q.rows);
+    each(static_cast<mtl_stream*>(vs), ks(vs).rope, {at(q), input(pos), input_or(ff, at(pos))},
+         rope_arguments(checked, p), p->n_dims / 2, q.shape[1], q.rows);
   });
 }
 
@@ -1570,6 +1576,32 @@ larch_status kv_write(larch_stream* vs, const larch_tensor* k, const larch_tenso
   });
 }
 
+// The gated split, both norms, rope and the KV write in one vv_attn_in, which takes each step's arithmetic, so its
+// bytes are the sequence's. Head dims past ATTN_IN_HD answer UNSUPPORTED.
+larch_status fused_attn_in(larch_stream* vs, const larch_tensor* q_in, const larch_tensor* k, const larch_tensor* v,
+                            const larch_tensor* q_norm, const larch_tensor* k_norm, float eps,
+                            const larch_tensor* pos, const larch_rope_params* p, const larch_tensor* slots,
+                            const larch_kv_pool* pool, const larch_tensor* q, const larch_tensor* gate) {
+  return run("fused_attn_in", [&] {
+    const auto c = cpu::check_fused_attn_in(sizer(vs), q_in, k, v, q_norm, k_norm, pos, p, slots, pool, q, gate);
+    const view qi = c.q_in, qo = c.q_rope.qk, g = c.gate, kv = c.kv.k, vv = c.kv.v, sl = c.kv.slots, pk = c.kv.pool_k,
+               pv = c.kv.pool_v, ps = c.q_rope.pos, ff = c.q_rope.freq_factors, qn = c.q_norm.w, kn = c.k_norm.w;
+    writable(qo);
+    if (gate) writable(g);
+    need(!pk.b->readonly && !pv.b->readonly, "the pool is a read-only wrapped buffer");
+    const int64_t heads = qo.shape[1], kv_heads = kv.shape[1], hd = qo.shape[2];
+    if (hd > ATTN_IN_HD) throw unsupported("head_dim past " + std::to_string(ATTN_IN_HD));
+    const attn_in_args a{qi.rs, qo.rs, g.rs, kv.rs, vv.rs, sl.rs, qn.rs, kn.rs, u32(heads), u32(kv_heads), u32(hd),
+                         gate ? 1u : 0u, q_norm ? 1u : 0u, eps, rope_arguments(c.q_rope, p)};
+    // As qk_norm: a simdgroup a head, one a threadgroup under 16 rows, up to 8 from 16.
+    const int64_t total = heads + kv_heads, per = qo.rows < 16 ? 1 : std::min<int64_t>(total, 8);
+    groups(static_cast<mtl_stream*>(vs), ks(vs).attn_in,
+           {input(qi), at(qo), at_or(g, at(qo)), input(kv), input(vv), input(sl), input(ps), input_or(ff, at(ps)),
+            input_or(qn, at(ps)), input_or(kn, at(ps)), at(pk), at(pv)},
+           a, qo.rows * ((total + per - 1) / per), NSUInteger(per * 32));
+  });
+}
+
 // Both attention ops use the same Metal views of the shared checker's result.
 struct attn_view {
   view q, out, table, k, v, start, lens;
@@ -1837,6 +1869,7 @@ static const vv_ops table = {
     .gelu = gelu,
     .attn_full = attn_full,
     .rope_multi = rope_multi,
+    .fused_attn_in = fused_attn_in,
     .draft_conv = draft_conv,
 };
 

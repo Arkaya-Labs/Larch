@@ -69,7 +69,8 @@ const FUSED_ID_ROWS: i64 = 33;
 // 11.1/5.3 (2.08x); off at 1.0x or less: gdn_in 35.0/43.8, gdn 8.4/9.9, proj_add 7.6/10.7 (Q3_K) and 7.2/24.5 gated.
 // The off ones repeat work in every block (gdn_in's norm, the gated proj_add's sigmoid) and decode a column a warp
 // (mmvq_col) where mmvq_k shares x over several; re-measure when either changes, on another arch, or another backend
-// (the defaults apply on CUDA only).
+// (these defaults apply on CUDA only; Metal's are [`METAL_FUSED`]).
+#[derive(Clone, Copy)]
 struct Fused {
     /// `fused_moe_gate_up` and `fused_moe_down`.
     moe: bool,
@@ -90,6 +91,20 @@ const FUSED: Fused = Fused {
     gdn_in: false,
     proj_add: false,
     attn_in: true,
+    gdn: false,
+};
+/// Metal's fused entries on by default: attn_in alone, the only one Metal runs (the others answer UNSUPPORTED). It
+/// gives the sequence's bytes (kernels/tests/fused.cpp) and drops the gated split's two selector gemms.
+const METAL_FUSED: Fused = Fused {
+    attn_in: true,
+    ..NO_FUSED
+};
+const NO_FUSED: Fused = Fused {
+    moe: false,
+    moe_in: false,
+    gdn_in: false,
+    proj_add: false,
+    attn_in: false,
     gdn: false,
 };
 
@@ -117,12 +132,16 @@ fn quant_gemm_device(backend: Backend, arch_code: u32, profiled: bool) -> bool {
     backend == Backend::Cuda && (arch_code == 120 || profiled)
 }
 
-/// Where the fused entries' defaults ([`FUSED`]) apply with `LARCH_FUSED` unset: where they were measured.
+/// The fused entries on by default with `LARCH_FUSED` unset: [`FUSED`] where they were measured, Metal's [`METAL_FUSED`].
 // ponytail: sm_120 only, like quant_gemm_device: on sm_86/89 the H2 decoder refuses fused_moe_in and the shared
 // fused_moe_down, so those MoE steps would run fallback placements no GPU run has covered. Add 86 and 89 when the
 // 3050 and 4060 pass the fused ctest, `larch parity --mode all` and a fused-on vs off bench there.
-fn fused_defaults(backend: Backend, arch_code: u32) -> bool {
-    backend == Backend::Cuda && arch_code == 120
+fn fused_defaults(backend: Backend, arch_code: u32) -> Fused {
+    match backend {
+        Backend::Cuda if arch_code == 120 => FUSED,
+        Backend::Metal => METAL_FUSED,
+        _ => NO_FUSED,
+    }
 }
 
 /// The CUDA archs where activation INT8 defaults on: its parity passed and serving gained there.
@@ -1035,6 +1054,8 @@ pub struct Transformer {
     /// `LARCH_FUSED` at load ([`larch_kernels::Routes::fused`]): which fused entries a step takes
     /// ([`Transformer::fusing`]).
     fused: Option<bool>,
+    /// The fused entries on by default on this device ([`fused_defaults`]), where `fused` is `None`.
+    fused_on: Fused,
     /// [`Transformer::refuse_fused`]: every fused entry answers UNSUPPORTED without running.
     refuse_fused: bool,
 }
@@ -2466,11 +2487,8 @@ impl Transformer {
                 _ => ID_ROWS,
             },
             checks_ran: false,
-            fused: (larch_kernels::routes().fused).or((!fused_defaults(
-                device_backend,
-                props.arch_code,
-            ))
-            .then_some(false)),
+            fused: larch_kernels::routes().fused,
+            fused_on: fused_defaults(device_backend, props.arch_code),
             refuse_fused: false,
         };
         t.refuse_unsupported(dev, s)?;
@@ -2826,7 +2844,7 @@ impl Transformer {
         gate: Option<&Tensor>,
         x: &Tensor,
     ) -> Result<bool, KError> {
-        if !self.fusing(FUSED.proj_add) || !self.takes_mmvq(w, input.shape()[0]) {
+        if !self.fusing(self.fused_on.proj_add) || !self.takes_mmvq(w, input.shape()[0]) {
             return Ok(false);
         }
         let w = self.t(w)?;
@@ -3027,7 +3045,7 @@ impl Transformer {
     /// without router deltas, with the shared expert's gate and up on mmvq and its activation fitting t (and its down
     /// projection's output gate, where `fused_moe_down` does not run).
     fn moe_in_fusable(&self, layer: usize, shared: Option<&qwen35::Shared>, rows: i64) -> bool {
-        self.fusing(FUSED.moe_in)
+        self.fusing(self.fused_on.moe_in)
             && !self.check.get()
             && self.router_deltas.get(layer).is_none_or(Option::is_none)
             && shared.is_none_or(|sh| self.shared_fits(sh, rows))
@@ -3053,7 +3071,7 @@ impl Transformer {
     }
 
     /// Whether a fused entry runs: never under `LARCH_FUSED=0`, always under `1`, else `default`
-    /// (each entry's measured default, see [`FUSED`]).
+    /// (each entry's default on this device, see [`fused_defaults`]).
     fn fusing(&self, default: bool) -> bool {
         self.fused.unwrap_or(default)
     }
@@ -3158,7 +3176,7 @@ impl Transformer {
     ) -> bool {
         let shared_ok =
             shared.is_none_or(|sh| self.shared_fits(sh, rows) && self.takes_mmvq(sh.down, rows));
-        self.fusing(FUSED.moe)
+        self.fusing(self.fused_on.moe)
             && !host
             && !self.check.get()
             && rows < FUSED_ID_ROWS
@@ -4116,7 +4134,7 @@ impl Transformer {
             .sections
             .filter(|_| b.positions.shape().len() == 2);
         // fused_attn_in takes the split, the norms, rope and the KV write in one call where it runs.
-        let fused = multi.is_none() && self.fusing(FUSED.attn_in) && {
+        let fused = multi.is_none() && self.fusing(self.fused_on.attn_in) && {
             let gate = pairs
                 .as_ref()
                 .map(|_| self.attn_gate_of(attn))

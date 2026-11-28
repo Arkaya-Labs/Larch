@@ -1693,6 +1693,70 @@ kernel void vv_rope(device uchar* qk [[buffer(0)]], bytes_in pos [[buffer(1)]], 
   x[p1] = half(x0 * s + x1 * c);
 }
 
+// fused_attn_in: simdgroup s of threadgroup g takes head (g % per_row) * simdgroups + s of row g / per_row, counting
+// q's heads then k's. A q head: its half of q_in (the other half to gate), vv_qk_norm, vv_rope, to q. A k head, where
+// the row's slot is not negative: the same from k (left as it was) to the pool, and v's head to the pool. Each step
+// is its own kernel's arithmetic, rounded to half where that kernel stores, so the result is the sequence's bytes.
+kernel void vv_attn_in(bytes_in q_in [[buffer(0)]], device uchar* q [[buffer(1)]], device uchar* gate [[buffer(2)]],
+                       bytes_in k [[buffer(3)]], bytes_in v [[buffer(4)]], bytes_in slots [[buffer(5)]],
+                       bytes_in pos [[buffer(6)]], bytes_in ff [[buffer(7)]], bytes_in qn [[buffer(8)]],
+                       bytes_in kn [[buffer(9)]], device half* kp [[buffer(10)]], device half* vp [[buffer(11)]],
+                       constant attn_in_args& a [[buffer(12)]], uint g [[threadgroup_position_in_grid]],
+                       ushort sg [[simdgroup_index_in_threadgroup]], ushort nsg [[simdgroups_per_threadgroup]],
+                       ushort lane [[thread_index_in_simdgroup]]) {
+  threadgroup half heads[8 * ATTN_IN_HD];
+  const uint total = a.heads + a.kv_heads, per_row = (total + nsg - 1) / nsg, r = g / per_row,
+             hh = g % per_row * nsg + sg, n = a.hd;
+  if (hh >= total) return;  // the whole simdgroup
+  const bool is_q = hh < a.heads;
+  const uint kh = hh - a.heads;
+  const int slot = at<int>(slots, a.slots_rs, r);
+  if (!is_q && slot < 0) return;
+  device const half* src = is_q ? (device const half*)(q_in + r * a.q_in_rs) + hh * (a.gated ? 2 * n : n)
+                                : (device const half*)(k + r * a.k_rs) + kh * n;
+  threadgroup half* x = heads + sg * ATTN_IN_HD;
+  float ss = 0;
+  for (uint i = lane; i < n; i += 32) {
+    x[i] = src[i];
+    ss += float(x[i]) * float(x[i]);
+  }
+  if (is_q && a.gated) {
+    device half* gr = (device half*)(gate + r * a.gate_rs) + hh * n;
+    for (uint i = lane; i < n; i += 32) gr[i] = src[n + i];
+  }
+  if (a.norm) {
+    bytes_in w = is_q ? qn : kn;
+    const u64 w_rs = is_q ? a.qn_rs : a.kn_rs;
+    const float scale = 1.0f / precise::sqrt(simd_sum(ss) / float(n) + a.eps);
+    for (uint i = lane; i < n; i += 32) x[i] = half(float(x[i]) * scale * at<float>(w, w_rs, i));
+  }
+  simdgroup_barrier(mem_flags::mem_threadgroup);  // every lane's x, before rope pairs them across lanes
+  device half* o = is_q ? (device half*)(q + r * a.q_rs) + hh * n : kp + u64(slot) * a.kv_heads * n + kh * n;
+  const constant rope_args& p = a.rope;
+  for (uint i = lane; i < p.n_dims / 2; i += 32) {
+    float theta = float(at<int>(pos, p.pos_rs, r));
+    for (uint j = 0; j < i; ++j) theta *= p.theta_scale;
+    const float extrap = theta / (p.has_ff ? at<float>(ff, p.ff_rs, i) : 1.0f), interp = p.freq_scale * extrap;
+    float t = interp;
+    if (p.ext_factor != 0.0f) {
+      const float y = (float(i) - p.lo) / max(0.001f, p.hi - p.lo);
+      const float mix = (1 - min(1.0f, max(0.0f, y))) * p.ext_factor;
+      t = interp * (1 - mix) + extrap * mix;
+    }
+    const float c = precise::cos(t) * p.mscale, s = precise::sin(t) * p.mscale;
+    const uint p0 = p.neox ? i : 2 * i, p1 = p.neox ? i + p.n_dims / 2 : p0 + 1;
+    const float x0 = x[p0], x1 = x[p1];
+    o[p0] = half(x0 * c - x1 * s);
+    o[p1] = half(x0 * s + x1 * c);
+  }
+  for (uint i = p.n_dims + lane; i < n; i += 32) o[i] = x[i];  // past rope's dims
+  if (!is_q) {
+    device const half* vr = (device const half*)(v + r * a.v_rs) + kh * n;
+    device half* vo = vp + u64(slot) * a.kv_heads * n + kh * n;
+    for (uint i = lane; i < n; i += 32) vo[i] = vr[i];
+  }
+}
+
 // layernorm: threadgroup r normalises row r as vv_rmsnorm, around its mean: out = (x - mean) / sqrt(var + eps) * w
 // + b, the mean and var each a sum of its own pass (the reference's order of ggml_norm).
 kernel void vv_layernorm(bytes_in x [[buffer(0)]], bytes_in w [[buffer(1)]], bytes_in b [[buffer(2)]],
