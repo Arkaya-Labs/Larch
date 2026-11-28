@@ -49,7 +49,7 @@ void usage() {
   std::puts("  metal_perf st --device ORDINAL --format FORMAT|all --n COLS --k WIDTH --iterations COUNT");
   std::puts("  metal_perf dequant --device ORDINAL --format FORMAT --n ROWS --k WIDTH --iterations COUNT");
   std::puts("  metal_perf mmvq-id --device ORDINAL --format FORMAT --experts COUNT --rows ROWS --slots USED --n COLS "
-            "--k WIDTH --weighted 0|1 --iterations COUNT");
+            "--k WIDTH --weighted 0|1 --iterations COUNT [--seed S]   (seed: each row picks USED random experts)");
   std::puts("  metal_perf repack-id --device ORDINAL --experts COUNT --rows ROWS --slots USED --n COLS --k WIDTH "
             "--weighted 0|1 --iterations COUNT   (Q3_K, k a multiple of 512: the repacked-expert prototype)");
   std::puts("  metal_perf gemm --device ORDINAL --m ROWS --n COLS --k WIDTH --iterations COUNT");
@@ -683,10 +683,12 @@ void run_st(const arguments& parsed) {
 }
 
 // An MoE layer's expert matmul at decode or a small prefill: row r, slot j picks expert (r * slots + j) % experts,
-// so up to rows * slots experts are read. Weighted is the down projection: x per slot, out their weighted sum.
+// so up to rows * slots experts are read. With --seed each row picks slots different experts at random instead,
+// as even routing does, so experts repeat across rows. Weighted is the down projection: x per slot, out their
+// weighted sum.
 void run_mmvq_id(const arguments& parsed) {
   require_only(parsed, {"--device", "--format", "--experts", "--rows", "--slots", "--n", "--k", "--weighted",
-                        "--iterations"});
+                        "--iterations", "--seed"});
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
   const quant_format quant = format(required(parsed, "--format"));
   const uint64_t experts = bounded(parsed, "--experts", 1, 512);
@@ -704,8 +706,23 @@ void run_mmvq_id(const arguments& parsed) {
   const uint64_t pairs = product(rows, slots, "mmvq-id pairs");
   const uint64_t x_bytes = product(product(weighted ? pairs : rows, k, "mmvq-id x elements"), 2, "mmvq-id x bytes");
   const uint64_t out_bytes = product(product(weighted ? rows : pairs, n, "mmvq-id output elements"), 2, "out bytes");
+  const bool seeded = parsed.values.count("--seed") != 0;
   std::vector<int32_t> ids(static_cast<size_t>(pairs));
   for (uint64_t p = 0; p < pairs; ++p) ids[size_t(p)] = int32_t(p % experts);
+  if (seeded) {
+    rng g(static_cast<rng::result_type>(bounded(parsed, "--seed", 0, std::numeric_limits<uint32_t>::max())));
+    std::vector<int32_t> deck(static_cast<size_t>(experts));
+    for (uint64_t e = 0; e < experts; ++e) deck[size_t(e)] = int32_t(e);
+    for (uint64_t row = 0; row < rows; ++row)
+      for (uint64_t j = 0; j < slots; ++j) {  // a partial Fisher-Yates shuffle: slots different experts a row
+        const uint64_t pick = j + std::uniform_int_distribution<uint64_t>(0, experts - 1 - j)(g);
+        std::swap(deck[size_t(j)], deck[size_t(pick)]);
+        ids[size_t(row * slots + j)] = deck[size_t(j)];
+      }
+  }
+  std::vector<bool> used(static_cast<size_t>(experts), false);
+  for (const int32_t id : ids) used[size_t(id)] = true;
+  const uint64_t distinct = uint64_t(std::count(used.begin(), used.end(), true));
   const std::vector<float> weights(static_cast<size_t>(pairs), 1.0f / float(slots));
   session run(ordinal);
   larch_buffer* w_buffer = run.allocate(weight_bytes, "mmvq-id weights");
@@ -738,13 +755,14 @@ void run_mmvq_id(const arguments& parsed) {
       check(larch_mmvq_id(run.stream, &weight, &activation, &chosen, nullptr, wt, &output), run.device,
             "larch_mmvq_id");
   });
-  const uint64_t read = product(product(std::min(pairs, experts), expert_bytes, "read bytes"), iterations, "traffic");
+  const uint64_t read = product(product(distinct, expert_bytes, "read bytes"), iterations, "traffic");
   std::printf("mode=mmvq-id device=%llu format=%s experts=%llu rows=%llu slots=%llu n=%llu k=%llu weighted=%d "
-              "iterations=%llu gpu_ns=%llu us_per_call=%.3f expert_gbps=%.6f\n",
+              "route=%s distinct=%llu iterations=%llu gpu_ns=%llu us_per_call=%.3f expert_gbps=%.6f\n",
               static_cast<unsigned long long>(ordinal), required(parsed, "--format").c_str(),
               static_cast<unsigned long long>(experts), static_cast<unsigned long long>(rows),
               static_cast<unsigned long long>(slots), static_cast<unsigned long long>(n),
-              static_cast<unsigned long long>(k), int(weighted), static_cast<unsigned long long>(iterations),
+              static_cast<unsigned long long>(k), int(weighted), seeded ? "random" : "modulo",
+              static_cast<unsigned long long>(distinct), static_cast<unsigned long long>(iterations),
               static_cast<unsigned long long>(elapsed_ns), double(elapsed_ns) / 1e3 / double(iterations),
               bytes_per_ns(read, elapsed_ns));
 }
@@ -1021,7 +1039,7 @@ void run_attention(const arguments& parsed) {
   require_only(parsed, {"--device", "--rows", "--seq-len", "--heads", "--kv-heads", "--head-dim", "--splits",
                         "--scale", "--iterations", "--kv"});
   const uint64_t ordinal = bounded(parsed, "--device", 0, std::numeric_limits<int32_t>::max());
-  const uint64_t rows = bounded(parsed, "--rows", 1, 16);
+  const uint64_t rows = bounded(parsed, "--rows", 1, 64);
   const uint64_t sequence_length = bounded(parsed, "--seq-len", 1, 65536);
   const uint64_t heads = bounded(parsed, "--heads", 1, 128);
   const uint64_t kv_heads = bounded(parsed, "--kv-heads", 1, heads);

@@ -726,7 +726,9 @@ kernel void mmvq_id1(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_i
                      ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
   const uint n0 = (tg.x * MMVQ1_SG + sg) * MMVQ1_NR;
   if (n0 >= a.n) return;  // the whole simdgroup
-  const uint r = a.weighted ? tg.y : tg.y / a.slots, first = a.weighted ? 0 : tg.y % a.slots;
+  // Sorted (LARCH_METAL_MOE_SORT, unweighted only): row y of the grid runs pair order[y], which wt's binding holds.
+  const uint q = a.sorted ? ((device const uint*)wt)[tg.y] : tg.y;
+  const uint r = a.weighted ? q : q / a.slots, first = a.weighted ? 0 : q % a.slots;
   const uint last = a.weighted ? a.slots : first + 1;
   float acc[MMVQ1_NR] = {};
   for (uint j = first; j < last; ++j) {
@@ -855,7 +857,9 @@ kernel void mmvq_id1n(bytes_in w [[buffer(0)]], bytes_in x [[buffer(1)]], bytes_
   const ushort vl = BYTES == 110 || BYTES == 144 ? lane % 8 : lane & ~ushort(G - 1);
   const uint n0 = (tg.x * MMVQ1_SG + sg) * C;
   if (n0 >= a.n) return;  // the whole simdgroup
-  const uint r = a.weighted ? tg.y : tg.y / a.slots, first = a.weighted ? 0 : tg.y % a.slots;
+  // Sorted (LARCH_METAL_MOE_SORT, unweighted only): row y of the grid runs pair order[y], which wt's binding holds.
+  const uint q = a.sorted ? ((device const uint*)wt)[tg.y] : tg.y;
+  const uint r = a.weighted ? q : q / a.slots, first = a.weighted ? 0 : q % a.slots;
   const uint last = a.weighted ? a.slots : first + 1, nb = a.k / 256;
   float acc[C] = {};
   for (uint j = first; j < last; ++j) {

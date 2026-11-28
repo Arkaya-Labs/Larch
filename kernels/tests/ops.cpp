@@ -1289,6 +1289,10 @@ static void mmvq_id() {
     mmvq_id_case(q, 4, 3, 2, 33, k, false, false, true, LARCH_F16, true);
     mmvq_id_case(q, 4, 2, 3, 67, k, true, true, true, LARCH_F32, true);
     mmvq_id_case(q, 2, 1, 1, 1, block_of(q), false, false, false, LARCH_F32);  // one block per row, one column
+    // 72 pairs over 32 experts: Metal's per-pair kernels, which LARCH_METAL_MOE_SORT runs in expert order from 64.
+    mmvq_id_case(q, 32, 9, 8, 67, k, false, false, true, LARCH_F16);
+    mmvq_id_case(q, 32, 9, 8, 33, k, true, true, false, LARCH_F32);
+    mmvq_id_case(q, 32, 9, 8, 33, 2 * k, true, true, true, LARCH_F16, true);
     // Prefills: enough pairs per expert that Metal groups them by expert.
     mmvq_id_case(q, 4, 19, 2, 67, k, false, false, true, LARCH_F32);
     mmvq_id_case(q, 4, 19, 3, 33, k, true, true, true, LARCH_F16);

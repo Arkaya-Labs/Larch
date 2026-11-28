@@ -86,13 +86,18 @@ struct kernels {
 // LARCH_METAL_MOE_SPLIT (default 1): weighted mmvq_id at decode and check row counts runs each (row, slot) pair in
 //   its own threadgroups into f32 partials, then vv_moe_reduce, as MLX's gather_qmv and its separate sum do; 0 keeps
 //   one threadgroup walking a row's slots in turn, for A/B timing. Both sum the slots in the same order.
+// LARCH_METAL_MOE_SORT (default 0): from MOE_SORT_PAIRS (row, slot) pairs, the per-pair mmvq_id kernels (vv_mmvq_id1
+//   and id1n, unweighted or split) run the pairs in expert order, as mlx_lm's SwitchGLU sorts its indices from 64
+//   and runs gather_qmv in that order: pairs on one expert then read its rows back to back. Each pair still writes
+//   its own (row, slot) place, so the bytes are the same; 1 turns it on, for A/B timing.
 // LARCH_METAL_ATTN_NAX (default 1): flash prefill at head_dim 64, 128 or 256 takes vv_attn_paged_nax (MLX's NAX
 //   attention over the paged pool, macOS 26.2 and the tensor API); 0 keeps vv_attn_flash, for A/B timing.
 // LARCH_METAL_ATTN_NAX_HM (default 0): 1 launches vv_attn_paged_nax with the q head as grid x (the _hm kernels),
 //   for A/B timing at long contexts.
 struct feed {
   bool concurrent = true, commit = true, profile = false, simd_kernels = true, moe_prefetch = true, gdn_wide = true,
-       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false, moe_split = true;
+       moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false, moe_split = true,
+       moe_sort = false;
 };
 static constexpr uint32_t first_commit = 32, commit_every = 128;
 struct mtl_device : larch_device {
@@ -174,7 +179,8 @@ static larch_status read_feed(feed* f) {
                                  std::pair{"LARCH_METAL_GDN_CHUNK", &f->gdn_chunk},
                                  std::pair{"LARCH_METAL_ATTN_NAX", &f->attn_nax},
                                  std::pair{"LARCH_METAL_ATTN_NAX_HM", &f->attn_nax_hm},
-                                 std::pair{"LARCH_METAL_MOE_SPLIT", &f->moe_split}}) {
+                                 std::pair{"LARCH_METAL_MOE_SPLIT", &f->moe_split},
+                                 std::pair{"LARCH_METAL_MOE_SORT", &f->moe_sort}}) {
     const char* c = std::getenv(name);
     if (c && std::strcmp(c, "0") && std::strcmp(c, "1"))
       return vv_fail(LARCH_ERR_INVALID_ARG, std::string(name) + " must be 0 or 1");
@@ -1292,7 +1298,7 @@ larch_status mmvq_id(larch_stream* vs, const larch_tensor* w_quant, const larch_
     const int64_t experts = w.rows / n, pairs = x.rows * slots;
     const id_args a{x.rs, x.ndim == 3 ? uint64_t(w.cols) * 2 : 0, w.rs, ids.rs, weighted ? wt.rs : 0, o.rs,
                     weighted ? 0 : uint64_t(n) * elem, b.rs, u32(n), u32(w.cols), u32(slots), b.b ? 1u : 0u,
-                    o.dtype == LARCH_F32 ? 1u : 0u, weighted ? 1u : 0u, u32(experts), u32(x.rows)};
+                    o.dtype == LARCH_F32 ? 1u : 0u, weighted ? 1u : 0u, u32(experts), u32(x.rows), 0u};
     mtl_stream* s = static_cast<mtl_stream*>(vs);
     // ponytail: grouped only up to k = 1024 MOE_GROUP_T (qwen3moe's 2048); raise MOE_GROUP_T when a model's k does.
     // Drafter mode runs per pair at any row count, 1-row decode included, so a row's bits never depend on the rows
@@ -1302,26 +1308,38 @@ larch_status mmvq_id(larch_stream* vs, const larch_tensor* w_quant, const larch_
       const int64_t cols = MMVQ1_SG * (narrow ? MMVQ1N_C : MMVQ1_NR);
       id<MTLComputePipelineState> one = narrow ? narrow : ks(vs).mmvq_id1[w.dtype];
       const uint64_t parts = uint64_t(pairs * n) * 4;
-      if (one && weighted && s->dev->fed.moe_split && parts <= MOE_PARTIAL_BYTES) {
+      const bool split = one && weighted && s->dev->fed.moe_split && parts <= MOE_PARTIAL_BYTES;
+      // LARCH_METAL_MOE_SORT: the pairs in expert order (vv_moe_group's list), read by the kernel from the weights'
+      // binding, which a pair-wise call does not use. Weighted rows without the split walk their own slots.
+      const bool sorted = one && (split || !weighted) && s->dev->fed.moe_sort && pairs >= MOE_SORT_PAIRS &&
+                          experts <= MOE_ROUTE_MAX;
+      const uint64_t lists = sorted ? (uint64_t(experts + 1 + pairs) * 4 + 15) / 16 * 16 : 0;
+      const uint64_t scratch = lists + (split ? parts : 0);
+      if (scratch && s->moe_scratch.length < scratch) {  // work queued with the old one keeps it alive
+        if (scratch > s->dev->dev.maxBufferLength) throw std::bad_alloc();
+        s->moe_scratch = [s->dev->dev newBufferWithLength:scratch options:MTLResourceStorageModePrivate];
+        if (!s->moe_scratch) throw std::bad_alloc();
+      }
+      id_args ap = a;
+      ap.sorted = sorted ? 1u : 0u;
+      const arg order{s->moe_scratch, uint64_t(experts + 1) * 4, uint64_t(pairs) * 4};
+      if (sorted) groups(s, ks(vs).moe_group, {input(ids), arg{s->moe_scratch, 0, lists}}, a, 1, 256);
+      if (split) {
         // A pair's sum to f32 partial (row, slot), then each row's slots summed in ascending order by their weights.
-        if (s->moe_scratch.length < parts) {  // work queued with the old one keeps it alive
-          s->moe_scratch = [s->dev->dev newBufferWithLength:parts options:MTLResourceStorageModePrivate];
-          if (!s->moe_scratch) throw std::bad_alloc();
-        }
-        const arg part{s->moe_scratch, 0, parts};
-        id_args ap = a;
+        const arg part{s->moe_scratch, lists, parts};
         ap.weighted = 0;
         ap.out_f32 = 1;
         ap.out_rs = uint64_t(slots * n) * 4;
         ap.out_slot_rs = uint64_t(n) * 4;
-        groups(s, one, {input(w), input(x), input(ids), input_or(b, at(w)), input(wt), part}, ap, (n + cols - 1) / cols,
-               32 * MMVQ1_SG, pairs);
+        groups(s, one, {input(w), input(x), input(ids), input_or(b, at(w)), sorted ? input(order) : input(wt), part}, ap,
+               (n + cols - 1) / cols, 32 * MMVQ1_SG, pairs);
         each(s, ks(vs).moe_reduce, {input(part), input(wt), at(o)}, a, n, x.rows);
         return;
       }
       if (one)
-        groups(s, one, {input(w), input(x), input(ids), input_or(b, at(w)), input_or(wt, at(w)), at(o)}, a, (n + cols - 1) / cols,
-               32 * MMVQ1_SG, weighted ? x.rows : pairs);
+        groups(s, one,
+               {input(w), input(x), input(ids), input_or(b, at(w)), sorted ? input(order) : input_or(wt, at(w)), at(o)},
+               ap, (n + cols - 1) / cols, 32 * MMVQ1_SG, weighted ? x.rows : pairs);
       else
         groups(s, ks(vs).mmvq_id[w.dtype], {input(w), input(x), input(ids), input_or(b, at(w)), input_or(wt, at(w)), at(o)}, a,
                (n + 3) / 4, 128, weighted ? x.rows : pairs);
