@@ -1,0 +1,45 @@
+# fused_bench --rows 1,4,8 (A's kernels, 2e456f5), 27 Nov 21:43 CT
+| entry (target shapes) | unfused us | fused us | speedup |
+|---|---|---|---|
+| 1 moe_gate_up (q3_k/q3_k, shared q5_k) rows 1 | 25.70 | 21.36 | 1.20x |
+| 2 moe_down (q3_k/q3_k, shared q5_k) rows 1 | 23.49 | 15.85 | 1.48x |
+| 3 moe_in (q3_k/q3_k, shared q5_k) rows 1 | 20.38 | 12.80 | 1.59x |
+| 1 moe_gate_up (q3_k/q4_k, shared q8_0) rows 1 | 25.82 | 21.26 | 1.21x |
+| 2 moe_down (q3_k/q4_k, shared q8_0) rows 1 | 23.11 | 15.25 | 1.52x |
+| 3 moe_in (q3_k/q4_k, shared q8_0) rows 1 | 20.03 | 13.59 | 1.47x |
+| 4 gdn_in (q5_k/q3_k, f16 alpha/beta) rows 1 | 34.88 | 43.65 | 0.80x |
+| 5 gdn (hd 128, 32 v heads) rows 1 | 8.17 | 8.87 | 0.92x |
+| 6 proj_add (q3_k) rows 1 | 8.48 | 10.90 | 0.78x |
+| 6 proj_add (q8_0) rows 1 | 12.89 | 15.97 | 0.81x |
+| 8 proj_add, gated (q4_k) rows 1 | 7.20 | 24.44 | 0.29x |
+| 7 attn_in (gated, normed, rope 64 of 256) rows 1 | 11.07 | 5.30 | 2.09x |
+| 1 moe_gate_up (q3_k/q3_k, shared q5_k) rows 4 | 78.19 | 70.09 | 1.12x |
+| 2 moe_down (q3_k/q3_k, shared q5_k) rows 4 | 52.57 | 48.04 | 1.09x |
+| 3 moe_in (q3_k/q3_k, shared q5_k) rows 4 | 33.31 | 26.64 | 1.25x |
+| 1 moe_gate_up (q3_k/q4_k, shared q8_0) rows 4 | 78.79 | 70.34 | 1.12x |
+| 2 moe_down (q3_k/q4_k, shared q8_0) rows 4 | 52.68 | 44.94 | 1.17x |
+| 3 moe_in (q3_k/q4_k, shared q8_0) rows 4 | 34.09 | 26.33 | 1.29x |
+| 4 gdn_in (q5_k/q3_k, f16 alpha/beta) rows 4 | 51.57 | 148.84 | 0.35x |
+| 5 gdn (hd 128, 32 v heads) rows 4 | 18.39 | 18.20 | 1.01x |
+| 6 proj_add (q3_k) rows 4 | 8.98 | 30.51 | 0.29x |
+| 6 proj_add (q8_0) rows 4 | 13.63 | 27.68 | 0.49x |
+| 8 proj_add, gated (q4_k) rows 4 | 8.34 | 119.75 | 0.07x |
+| 7 attn_in (gated, normed, rope 64 of 256) rows 4 | 10.23 | 5.67 | 1.80x |
+| 1 moe_gate_up (q3_k/q3_k, shared q5_k) rows 8 | 147.18 | 136.89 | 1.08x |
+| 2 moe_down (q3_k/q3_k, shared q5_k) rows 8 | 92.58 | 90.94 | 1.02x |
+| 3 moe_in (q3_k/q3_k, shared q5_k) rows 8 | 51.80 | 46.58 | 1.11x |
+| 1 moe_gate_up (q3_k/q4_k, shared q8_0) rows 8 | 147.20 | 136.82 | 1.08x |
+| 2 moe_down (q3_k/q4_k, shared q8_0) rows 8 | 93.77 | 84.86 | 1.11x |
+| 3 moe_in (q3_k/q4_k, shared q8_0) rows 8 | 51.54 | 45.71 | 1.13x |
+| 4 gdn_in (q5_k/q3_k, f16 alpha/beta) rows 8 | 87.64 | 409.79 | 0.21x |
+| 5 gdn (hd 128, 32 v heads) rows 8 | 30.69 | 34.91 | 0.88x |
+| 6 proj_add (q3_k) rows 8 | 13.19 | 59.32 | 0.22x |
+| 6 proj_add (q8_0) rows 8 | 16.80 | 54.01 | 0.31x |
+| 8 proj_add, gated (q4_k) rows 8 | failed: fused_proj_add: the gated input past a block's shared memory, or rows not 16-byte aligned | | |
+| 7 attn_in (gated, normed, rope 64 of 256) rows 8 | 14.15 | 5.72 | 2.47x |
+bytes (q3_k/q3_k, shared q5_k) rows 1: 8.00 distinct experts a call, gate_up 7208960 B, down 3604480 B
+bytes (q3_k/q4_k, shared q8_0) rows 1: 8.00 distinct experts a call, gate_up 7208960 B, down 4718592 B
+bytes (q3_k/q3_k, shared q5_k) rows 4: 30.57 distinct experts a call, gate_up 27551040 B, down 13775520 B
+bytes (q3_k/q4_k, shared q8_0) rows 4: 30.48 distinct experts a call, gate_up 27464800 B, down 17976960 B
+bytes (q3_k/q3_k, shared q5_k) rows 8: 57.36 distinct experts a call, gate_up 51685920 B, down 25842960 B
+bytes (q3_k/q4_k, shared q8_0) rows 8: 57.38 distinct experts a call, gate_up 51703520 B, down 33842304 B

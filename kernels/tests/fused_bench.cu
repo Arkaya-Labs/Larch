@@ -10,6 +10,7 @@
      flock ~/src/gpu.lock <build>/fused_bench [--rows 1,4] */
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -105,6 +106,18 @@ static void moe(larch_dtype gate_up, larch_dtype down, larch_dtype shared, int64
   bytes idb(idv.size() * 4);
   std::memcpy(idb.data(), idv.data(), idb.size());
   larch_buffer* ids = buffer(idb);
+  {  // what a call reads of the routed experts: each id set's distinct experts, gate and up, then down
+    double distinct = 0;
+    for (int64_t i = 0; i < IDSETS; ++i) {
+      std::vector<int32_t> set(idv.begin() + i * rows * SLOTS, idv.begin() + (i + 1) * rows * SLOTS);
+      std::sort(set.begin(), set.end());
+      distinct += double(std::unique(set.begin(), set.end()) - set.begin());
+    }
+    distinct /= double(IDSETS);
+    const double gu = 2.0 * double(nbytes(gate_up, {EF, D})), dn = double(nbytes(down, {D, EF}));
+    std::fprintf(stderr, "bytes%s: %.2f distinct experts a call, gate_up %.0f B, down %.0f B\n", tag.c_str(), distinct,
+                 distinct * gu, distinct * dn);
+  }
   larch_buffer* wts = buffer(f32s(size_t(rows * SLOTS), 0, 0.3f));
   larch_buffer* h = buffer(halves(size_t(rows * D), g));
   larch_buffer* act = buffer(halves(size_t(rows * SLOTS * EF), g));

@@ -2049,6 +2049,88 @@ static int mixed_wrapped(const side& x) {
   return wrong;
 }
 
+// Each (row, slot) pair of mmvq_id below MOE_GROUPED_ROWS (decode and check steps) gives the bytes of its row alone:
+// a pair's sum depends only on its own x row and expert, so a check step keeps decode's bytes (exact speculation). At
+// m13's gate (n 64 of k 2048, out per slot) and down (k 512, weighted over the slots in ascending order) shapes, an odd
+// n too (a warp's last column group), every row count from 2 to 32; and the same call captured in a graph gives the
+// eager call's bytes (no host sync in it).
+static int pairs_alone(const side& x) {
+  int wrong = 0;
+  const int64_t experts = 16, slots = 8;
+  struct shape { int64_t n, k; bool weighted; };
+  for (const larch_dtype q : {LARCH_Q3_K, LARCH_Q4_K, LARCH_Q6_K, LARCH_Q8_0})
+    for (const shape sh : {shape{64, 2048, false}, shape{67, 512, true}}) {
+      const std::string name = std::string("pairs alone ") + DTYPE[q] + " k " + std::to_string(sh.k);
+      rng g = seeded(name);
+      const int64_t rows = 32, xs = sh.weighted ? slots : 1;
+      const bytes w = quant(q, experts * sh.n, sh.k, g), xb = halves(size_t(rows * xs * sh.k), g),
+                  wb = floats(size_t(rows * slots), g, 0, 1);
+      std::vector<int32_t> ids(size_t(rows * slots));
+      for (int32_t& e : ids) e = int32_t(g() % uint32_t(experts));
+      const bytes ib = raw(ids);
+      const larch_dtype ot = sh.weighted ? LARCH_F32 : LARCH_F16;
+      const uint64_t orow = nbytes(ot, sh.weighted ? std::vector<int64_t>{1, sh.n} : std::vector<int64_t>{1, slots, sh.n});
+      const std::vector<const bytes*> parts = {&w, &xb, &ib, &wb};
+      std::vector<uint64_t> off;
+      uint64_t end = 0;
+      for (const bytes* b : parts) off.push_back(end), end += (b->size() + 255) / 256 * 256;
+      const uint64_t o1 = end, o2 = end + (rows * orow + 255) / 256 * 256, o3 = o2 + (rows * orow + 255) / 256 * 256;
+      larch_buffer* d = nullptr;
+      bool ok = larch_buffer_alloc(x.dev, o3 + rows * orow, &d) == LARCH_OK;
+      for (size_t i = 0; i < parts.size() && ok; ++i)
+        ok = larch_upload(x.s, d, off[i], parts[i]->data(), parts[i]->size()) == LARCH_OK;
+      const auto t = [&](uint64_t o, larch_dtype dt, std::vector<int64_t> shape) {
+        larch_tensor r = {d, o, dt, uint32_t(shape.size()), {}, {}};
+        for (int64_t i = int64_t(shape.size()) - 1, stride = 1; i >= 0; --i) {
+          r.shape[i] = shape[size_t(i)];
+          r.stride[i] = stride;
+          stride *= i + 1 == int64_t(shape.size()) ? shape[size_t(i)] / block_of(dt) : shape[size_t(i)];
+        }
+        return r;
+      };
+      // rows `count` from row r0 of x, ids and weights into out at o.
+      const auto call = [&](int64_t r0, int64_t count, uint64_t o) {
+        const larch_tensor wt = t(off[0], q, {experts * sh.n, sh.k});
+        const larch_tensor xt = t(off[1] + uint64_t(r0 * xs * sh.k * 2), LARCH_F16,
+                                  sh.weighted ? std::vector<int64_t>{count, slots, sh.k} : std::vector<int64_t>{count, sh.k});
+        const larch_tensor it = t(off[2] + uint64_t(r0 * slots * 4), LARCH_I32, {count, slots});
+        const larch_tensor ww = t(off[3] + uint64_t(r0 * slots * 4), LARCH_F32, {count, slots});
+        const larch_tensor ou = t(o + uint64_t(r0) * orow, ot,
+                                  sh.weighted ? std::vector<int64_t>{count, sh.n} : std::vector<int64_t>{count, slots, sh.n});
+        return larch_mmvq_id(x.s, &wt, &xt, &it, nullptr, sh.weighted ? &ww : nullptr, &ou);
+      };
+      for (int64_t r = 0; r < rows && ok; ++r) ok = call(r, 1, o1) == LARCH_OK;
+      bytes alone(size_t(rows * orow)), many(alone.size()), graphed(alone.size());
+      ok = ok && larch_download(x.s, d, o1, alone.data(), alone.size()) == LARCH_OK && larch_stream_sync(x.s) == LARCH_OK;
+      for (int64_t count = 2; count <= rows && ok; ++count) {
+        ok = call(0, count, o2) == LARCH_OK &&
+             larch_download(x.s, d, o2, many.data(), size_t(count * orow)) == LARCH_OK && larch_stream_sync(x.s) == LARCH_OK;
+        if (ok && std::memcmp(many.data(), alone.data(), size_t(count * orow)) != 0) {
+          std::fprintf(stderr, "%s: %lld rows differ from each row alone\n", name.c_str(), (long long)count);
+          ++wrong;
+        }
+      }
+      larch_graph* gr = nullptr;
+      ok = ok && larch_graph_begin(x.s) == LARCH_OK;
+      const larch_status in = ok ? call(0, rows, o3) : LARCH_OK;
+      ok = ok && larch_graph_end(x.s, &gr) == LARCH_OK && in == LARCH_OK && larch_graph_launch(gr, x.s) == LARCH_OK &&
+           larch_download(x.s, d, o3, graphed.data(), graphed.size()) == LARCH_OK && larch_stream_sync(x.s) == LARCH_OK;
+      if (gr) larch_graph_destroy(gr);
+      if (!ok) {
+        std::fprintf(stderr, "%s: a call failed: %s\n", name.c_str(), larch_last_error(x.dev));
+        ++wrong;
+      } else if (graphed != many) {
+        std::fprintf(stderr, "%s: the captured call differs from the eager one\n", name.c_str());
+        ++wrong;
+      } else if (alone == bytes(alone.size())) {
+        std::fprintf(stderr, "%s: all zeros\n", name.c_str());
+        ++wrong;
+      }
+      larch_buffer_free(d);
+    }
+  return wrong;
+}
+
 // A valid one-block Q2_K dequant answers UNSUPPORTED on this device: no Q2_K kernels (vv_ops::no_weights).
 static bool lacks_q2(const side& dut) {
   larch_buffer *w = nullptr, *o = nullptr;
@@ -2136,7 +2218,7 @@ int main() {
   for (const test& c : tests) wrong += check(ref, dut, c);
   wrong += mixed_bytes(ref);
   if (props.backend == LARCH_BACKEND_CUDA)
-    wrong += mixed_bytes(dut) + mixed_wrapped(dut);
+    wrong += mixed_bytes(dut) + mixed_wrapped(dut) + pairs_alone(dut);
   else
     std::printf("ops: mixed bytes against mmvq_id not run on this device (%s): NOT RUN\n", props.name);
   // Row equality is CUDA's (and wave32 HIP's) gemm_rows_k promise and the CPU's; wave64 HIP stays on hipBLAS. Metal
