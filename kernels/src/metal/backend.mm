@@ -84,7 +84,11 @@ struct kernels {
 //   attention over the paged pool, macOS 26.2 and the tensor API); 0 keeps vv_attn_flash, for A/B timing.
 // LARCH_METAL_ATTN_NAX_HM (default 0): 1 launches vv_attn_paged_nax with the q head as grid x (the _hm kernels),
 //   for A/B timing at long contexts.
+// LARCH_METAL_MMVQ_PER_ROW (default 0, at most 16): mmvq at 2 to that many rows runs each row as its own one-row
+//   dispatch, which the concurrent encoder overlaps, as MLX's qmv runs a row per threadgroup row of its grid (the
+//   rows read the same weight bytes at about the same time, so the cache serves all but the first). For A/B timing.
 struct feed {
+  uint32_t mmvq_per_row = 0;
   bool concurrent = true, commit = true, profile = false, simd_kernels = true, moe_prefetch = true, gdn_wide = true,
        moe_narrow = true, gdn_chunk = true, attn_nax = true, attn_nax_hm = false;
 };
@@ -172,6 +176,13 @@ static larch_status read_feed(feed* f) {
     if (c && std::strcmp(c, "0") && std::strcmp(c, "1"))
       return vv_fail(LARCH_ERR_INVALID_ARG, std::string(name) + " must be 0 or 1");
     if (c) *on = *c == '1';
+  }
+  if (const char* c = std::getenv("LARCH_METAL_MMVQ_PER_ROW")) {
+    char* end = nullptr;
+    const long v = std::strtol(c, &end, 10);
+    if (!*c || *end || v < 0 || v > 16)
+      return vv_fail(LARCH_ERR_INVALID_ARG, "LARCH_METAL_MMVQ_PER_ROW must be a whole number from 0 to 16");
+    f->mmvq_per_row = uint32_t(v);
   }
   return LARCH_OK;
 }
@@ -1135,6 +1146,16 @@ void mmvq_rows(larch_stream* vs, const view& w, const view& x, const view& b, co
   const mm_args a{x.rs, w.rs, o.rs, b.rs, u32(x.rows), u32(w.rows), u32(w.cols), b.b ? 1u : 0u,
                   o.dtype == LARCH_F32 ? 1u : 0u, 1.0f, 0.0f, 0};
   auto* stream = static_cast<mtl_stream*>(vs);
+  if (x.rows > 1 && x.rows <= int64_t(stream->dev->fed.mmvq_per_row)) {
+    for (int64_t r = 0; r < x.rows; ++r) {
+      view xr = x, orow = o;
+      xr.rows = orow.rows = 1;
+      xr.off += uint64_t(r) * x.rs;
+      orow.off += uint64_t(r) * o.rs;
+      mmvq_rows(vs, w, xr, b, orow);
+    }
+    return;
+  }
   if (x.rows == 1 && ks(vs).mmvq1[w.dtype]) {  // m1 decode 24.6 to 26.0 tok/s (M5, 10 Oct)
     const int64_t cols = MMVQ1_SG * MMVQ1_NR;
     groups(stream, ks(vs).mmvq1[w.dtype], {input(w), input(x), input_or(b, at(w)), at(o)}, a, (w.rows + cols - 1) / cols,
